@@ -1,0 +1,245 @@
+.settings {
+  display: flex;
+  flex-direction: column;
+}
+.section {
+  display: grid;
+  grid-template-columns: 184px minmax(0, 1fr);
+  gap: 40px;
+  padding: 30px 0 34px;
+  border-top: 1px solid var(--alter-border);
+}
+.section:first-child {
+  padding-top: 24px;
+  border-top: 0;
+}
+.sectionIntro {
+  align-self: start;
+}
+.sectionTitle {
+  margin: 0;
+  font-size: var(--alter-font-title-sm);
+  font-weight: 600;
+  line-height: var(--alter-line-display);
+}
+.sectionNote {
+  max-width: 24em;
+  margin: 8px 0 0;
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-body);
+}
+.sectionBody {
+  min-width: 0;
+  max-width: 680px;
+}
+.fields {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.saveBar {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 4px;
+  padding: 16px 0;
+  border-top: 1px solid var(--alter-border);
+  background: var(--alter-surface);
+}
+.saveNote {
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+}
+.saveBar[data-dirty] .saveNote {
+  color: var(--alter-text-secondary);
+}
+.saveActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.confirmBody {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.confirmText {
+  margin: 0;
+  font-size: var(--alter-font-body-sm);
+  line-height: var(--alter-line-body);
+}
+.link {
+  display: inline-block;
+  margin-top: 10px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--alter-text-muted);
+  font: inherit;
+  font-size: var(--alter-font-caption);
+  text-align: left;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.link:hover {
+  color: var(--alter-text);
+}
+.link:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: 2px;
+}
+.optionList {
+  border-top: 1px solid var(--alter-border);
+}
+.collaborator {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: calc(100% + 20px);
+  min-height: 56px;
+  margin-inline: -10px;
+  padding: 8px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--alter-border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--alter-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.collaborator:hover {
+  background: var(--alter-surface-hover);
+}
+.collaborator[data-selected] {
+  background: var(--alter-surface-hover);
+}
+.collaborator:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: -2px;
+}
+.avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--alter-surface-raised);
+  color: var(--alter-text-secondary);
+  font-size: var(--alter-font-caption);
+  font-weight: 600;
+}
+.optionText {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.optionText > span:first-child {
+  font-size: var(--alter-font-body-sm);
+  font-weight: 500;
+}
+.optionMeta {
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+}
+.check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--alter-control-border);
+  border-radius: 50%;
+  color: var(--alter-accent-strong);
+}
+.collaborator[data-selected] .check {
+  border-color: var(--alter-accent);
+  background: var(--alter-accent-soft);
+}
+.note {
+  margin: 0;
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-body-sm);
+  line-height: var(--alter-line-body);
+}
+.management {
+  border-top: 1px solid var(--alter-border);
+}
+.managementRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  min-height: 66px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--alter-border);
+}
+.managementText {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.managementTitle {
+  font-size: var(--alter-font-body-sm);
+  font-weight: 500;
+}
+.managementNote {
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+}
+.defaultNote {
+  margin: 12px 0 0;
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-body);
+}
+.error {
+  margin: 16px 0 0;
+  color: var(--alter-danger);
+  font-size: var(--alter-font-body-sm);
+  line-height: var(--alter-line-body);
+}
+@container (max-width: 860px) {
+  .section {
+    grid-template-columns: 1fr;
+    gap: 16px;
+    padding: 26px 0 30px;
+  }
+  .sectionNote {
+    max-width: 34em;
+  }
+  .sectionBody {
+    max-width: none;
+  }
+}
+@container (max-width: 560px) {
+  .saveBar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .saveActions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+  .managementRow {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .managementRow > button {
+    align-self: flex-start;
+  }
+}

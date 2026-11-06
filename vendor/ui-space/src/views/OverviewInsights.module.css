@@ -1,0 +1,188 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid var(--alter-border);
+  border-radius: 12px;
+  background: var(--alter-surface-raised);
+}
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.kicker {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: var(--alter-text-muted);
+}
+.kicker > svg {
+  flex-shrink: 0;
+}
+.kicker h2 {
+  margin: 0;
+  color: var(--alter-text);
+  font-size: var(--alter-font-body-sm);
+  font-weight: 600;
+  line-height: var(--alter-line-ui);
+}
+.note {
+  flex-shrink: 0;
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+  font-variant-numeric: tabular-nums;
+}
+button.action {
+  height: 24px;
+  min-height: 24px;
+  padding: 0 6px;
+  color: var(--alter-text-secondary);
+  font-size: var(--alter-font-caption);
+}
+button.action[data-variant='ghost']:hover:not(:disabled) {
+  background: none;
+  color: var(--alter-text);
+}
+.summary {
+  max-width: 72ch;
+  margin: 14px 0 0;
+  color: var(--alter-text-secondary);
+  font-size: var(--alter-font-body);
+  line-height: var(--alter-line-body);
+  letter-spacing: var(--alter-tracking-body);
+  overflow-wrap: anywhere;
+}
+.panel > .note {
+  margin: 12px 0 0;
+  color: var(--alter-text-faint);
+}
+.usageBody {
+  display: grid;
+  grid-template-columns: minmax(0, 360px) minmax(0, 1fr);
+  align-items: start;
+  gap: 28px;
+  margin-top: 18px;
+}
+.usage .metrics {
+  margin-top: 0;
+}
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin: 18px 0 0;
+}
+.metrics > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.metrics dt {
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+}
+.metrics dd {
+  margin: 0;
+  color: var(--alter-text);
+  font-family: var(--alter-font-mono);
+  font-size: var(--alter-font-title-sm);
+  font-weight: 500;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+.sub {
+  margin: 8px 0 0;
+  color: var(--alter-text-muted);
+  font-family: var(--alter-font-mono);
+  font-size: var(--alter-font-micro);
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+.models {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--alter-border);
+}
+.usage .models {
+  margin-top: 0;
+  padding-top: 0;
+  padding-inline-start: 28px;
+  border-top: 0;
+  border-inline-start: 1px solid var(--alter-border);
+}
+.models h3 {
+  margin: 0 0 8px;
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+  font-weight: 500;
+  line-height: var(--alter-line-ui);
+}
+.models ul {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.models li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  font-size: var(--alter-font-body-sm);
+  line-height: var(--alter-line-ui);
+}
+.models li > span:first-child {
+  min-width: 0;
+  color: var(--alter-text);
+  overflow-wrap: anywhere;
+}
+.models li > span:last-child {
+  flex-shrink: 0;
+  color: var(--alter-text-muted);
+  font-family: var(--alter-font-mono);
+  font-size: var(--alter-font-micro);
+  font-variant-numeric: tabular-nums;
+}
+.empty {
+  margin: 14px 0 0;
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-body-sm);
+  line-height: var(--alter-line-ui);
+}
+.error {
+  margin: 10px 0 0;
+  color: var(--alter-danger);
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+}
+
+@container (max-width: 760px) {
+  .usageBody {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+  .usage .models {
+    padding-inline-start: 0;
+    border-inline-start: 0;
+    border-top: 1px solid var(--alter-border);
+    padding-top: 12px;
+  }
+}
+@container (max-width: 480px) {
+  .panel {
+    padding: 16px;
+  }
+  .metrics {
+    gap: 12px;
+  }
+}

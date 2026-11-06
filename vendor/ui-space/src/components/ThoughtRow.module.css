@@ -1,0 +1,70 @@
+.row {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: start;
+  margin: 0 -8px;
+  padding: 14px 8px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.row:hover {
+  background: var(--alter-surface-hover);
+}
+.time {
+  padding-top: 4px;
+  color: var(--alter-text-muted);
+  font-family: var(--alter-font-mono);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: var(--alter-line-ui);
+}
+.text {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--alter-text);
+  font-size: 15px;
+  line-height: 1.85;
+  overflow-wrap: anywhere;
+}
+.text p {
+  margin: 0 0 6px;
+}
+.text p:last-child {
+  margin-bottom: 0;
+}
+.text ul,
+.text ol {
+  margin: 4px 0;
+  padding-left: 20px;
+}
+.text blockquote {
+  margin: 6px 0;
+  padding-left: 11px;
+  border-left: 1px solid var(--alter-control-border);
+  color: var(--alter-text-muted);
+}
+.text code {
+  padding: 1px 3px;
+  border-radius: 4px;
+  background: var(--alter-code-surface);
+  font-family: var(--alter-font-mono);
+  font-size: var(--alter-font-body-sm);
+}
+.actions {
+  display: flex;
+  align-self: start;
+  gap: 1px;
+  opacity: 0;
+}
+.row:hover .actions,
+.row:focus-within .actions {
+  opacity: 1;
+}
+@media (max-width: 700px) {
+  .row {
+    grid-template-columns: 44px minmax(0, 1fr) auto;
+  }
+}

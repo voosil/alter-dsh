@@ -1,0 +1,28 @@
+.panel {
+  z-index: 40;
+  max-height: min(70vh, 520px);
+  overflow: auto;
+  padding: 5px;
+  border: 1px solid var(--alter-border);
+  border-radius: var(--alter-radius-panel);
+  background: var(--alter-surface-raised);
+  box-shadow: var(--alter-shadow-popover);
+  animation: pop-in 120ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.panel[data-layer='modal'] {
+  z-index: 60;
+}
+.panel[data-flush='true'] {
+  padding: 0;
+}
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .panel {
+    animation: none;
+  }
+}

@@ -1,0 +1,153 @@
+.composer {
+  --composer-content-max-height: 320px;
+
+  padding: 18px 20px 14px;
+  border: 1px solid var(--alter-border);
+  border-radius: 12px;
+  background: var(--alter-surface-raised);
+  transition: border-color var(--alter-duration-fast);
+}
+.composer:focus-within {
+  border-color: var(--alter-focus-ring);
+}
+.content {
+  position: relative;
+  min-height: 96px;
+  max-height: var(--composer-content-max-height);
+  overflow-y: auto;
+  outline: none;
+  color: var(--alter-text);
+  font-size: 15px;
+  line-height: 1.85;
+  overflow-wrap: anywhere;
+}
+/* 绝对定位让占位符脱离行内流，否则光标会停在它后面。 */
+.content:is(:empty, :has(> br:only-child))::before {
+  position: absolute;
+  inset: 0 0 auto 0;
+  content: attr(data-placeholder);
+  color: var(--alter-text-muted);
+  pointer-events: none;
+}
+.content ul,
+.content ol {
+  margin: 4px 0;
+  padding-left: 22px;
+}
+.content code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--alter-code-surface);
+  font-family: var(--alter-font-mono);
+  font-size: var(--alter-font-body-sm);
+}
+.content a {
+  color: var(--alter-accent-strong);
+  text-decoration-color: var(--alter-accent);
+  text-underline-offset: 3px;
+}
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 6px;
+}
+.tools {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+.voice:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: 1px;
+}
+.toolDivider {
+  width: 1px;
+  height: 14px;
+  margin: 0 4px;
+  background: var(--alter-border);
+}
+.voice {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 25px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--alter-text-muted);
+  font: inherit;
+  font-size: var(--alter-font-caption);
+  cursor: pointer;
+}
+.voice:hover {
+  background: var(--alter-surface-hover);
+  color: var(--alter-text);
+}
+.voice[data-listening] {
+  background: var(--alter-danger-soft);
+  color: var(--alter-danger);
+}
+.voiceLabel {
+  font-size: var(--alter-font-caption);
+}
+.wave {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 12px;
+}
+.wave i {
+  width: 2px;
+  height: 6px;
+  border-radius: 1px;
+  background: currentColor;
+  animation: voice-bar 0.9s ease-in-out infinite;
+}
+.wave i:nth-child(2) {
+  animation-delay: 0.12s;
+}
+.wave i:nth-child(3) {
+  animation-delay: 0.24s;
+}
+.wave i:nth-child(4) {
+  animation-delay: 0.36s;
+}
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+.error {
+  margin: 7px 0 0;
+  color: var(--alter-danger);
+  font-size: var(--alter-font-caption);
+}
+.composer[data-compact] {
+  --composer-content-max-height: 168px;
+}
+.composer[data-compact] .content {
+  min-height: 46px;
+}
+@keyframes voice-bar {
+  0%,
+  100% {
+    height: 5px;
+  }
+  50% {
+    height: 12px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer {
+    transition: none;
+  }
+  .wave i {
+    animation: none;
+  }
+}

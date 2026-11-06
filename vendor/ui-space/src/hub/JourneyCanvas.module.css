@@ -1,0 +1,203 @@
+.frame {
+  position: relative;
+  min-width: 0;
+  height: 560px;
+  background: var(--alter-surface-rail);
+  border-radius: var(--alter-radius-panel);
+  overflow: hidden;
+  isolation: isolate;
+}
+.canvas {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: pan-y;
+}
+.canvas[data-dragging] {
+  cursor: grabbing;
+}
+.canvas:focus-visible {
+  outline: 2px solid var(--alter-focus-ring);
+  outline-offset: -3px;
+}
+.scene {
+  position: absolute;
+  height: 500px;
+  transform-origin: 0 0;
+  user-select: none;
+}
+.paths {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+.paths path {
+  fill: none;
+  stroke: var(--alter-heat-2);
+  stroke-width: 2;
+}
+.paths [data-future] {
+  stroke: var(--alter-heat-1);
+  stroke-dasharray: 5 7;
+}
+.paths .branch {
+  stroke: var(--alter-heat-1);
+  stroke-width: 1.5;
+}
+.node.node {
+  position: absolute;
+  transform: translate(-50%, -17px);
+  width: 200px;
+  height: auto;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  white-space: normal;
+  text-align: center;
+  background: transparent;
+}
+.node.node:hover {
+  background: transparent;
+}
+.date {
+  position: absolute;
+  top: -27px;
+  font-size: var(--alter-font-caption);
+  color: var(--alter-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.marker {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--alter-surface-rail);
+}
+.marker::after {
+  content: '';
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1px solid var(--alter-text-muted);
+  background: var(--alter-surface-rail);
+  transition: background-color var(--alter-duration-fast);
+}
+.node[data-state='past'] .marker::after {
+  background: var(--alter-text-muted);
+}
+.node[data-state='current'] .marker {
+  background: var(--alter-accent-soft);
+}
+.node[data-state='current'] .marker::after {
+  background: var(--alter-accent);
+  border-color: var(--alter-accent);
+}
+.node[data-state='failed'] .marker::after {
+  width: 7px;
+  height: 7px;
+}
+.node[aria-expanded='true'] .nodeTitle {
+  color: var(--alter-text);
+}
+.node:hover .nodeTitle {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+.nodeTitle {
+  margin-top: 10px;
+  font-size: var(--alter-font-body-sm);
+  font-weight: 500;
+  color: var(--alter-text-secondary);
+  line-height: 1.6;
+  max-width: 190px;
+  overflow-wrap: anywhere;
+}
+.phase {
+  margin-top: 4px;
+  font-size: var(--alter-font-caption);
+  color: var(--alter-text-muted);
+}
+.node[data-state='current'] .phase {
+  color: var(--alter-accent-strong);
+}
+.help {
+  position: absolute;
+  top: 18px;
+  left: 24px;
+  margin: 0;
+  pointer-events: none;
+  font-size: var(--alter-font-caption);
+  color: var(--alter-text-muted);
+}
+.detail {
+  position: absolute;
+  bottom: 68px;
+  left: 24px;
+  width: min(380px, calc(100% - 48px));
+  padding: 16px 18px;
+  border-radius: var(--alter-radius-panel);
+  background: var(--alter-surface);
+  box-shadow: var(--alter-shadow-popover);
+}
+.detailHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.detailHead strong {
+  font-size: var(--alter-font-body-sm);
+  font-weight: 600;
+}
+.detail p {
+  font-size: var(--alter-font-body-sm);
+  line-height: 1.8;
+  color: var(--alter-text-secondary);
+  margin: 8px 0;
+  max-height: 120px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.detail button {
+  margin-left: -8px;
+}
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  padding: 4px;
+  border-radius: var(--alter-radius-control);
+  background: var(--alter-surface);
+}
+.controls span {
+  min-width: 40px;
+  text-align: center;
+  font-size: var(--alter-font-caption);
+  font-variant-numeric: tabular-nums;
+  color: var(--alter-text-muted);
+}
+@media (prefers-reduced-motion: reduce) {
+  .marker::after {
+    transition: none;
+  }
+}
+@container (max-width: 700px) {
+  .frame {
+    height: clamp(360px, calc(100svh - 400px), 480px);
+  }
+  .help {
+    left: 16px;
+  }
+  .detail {
+    left: 16px;
+    width: calc(100% - 32px);
+  }
+}

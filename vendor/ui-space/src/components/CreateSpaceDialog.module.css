@@ -1,0 +1,126 @@
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+}
+.optionList,
+.collaborators {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 240px;
+  overflow: auto;
+  padding: 3px;
+  border: 1px solid var(--alter-border);
+  border-radius: var(--alter-radius-panel);
+}
+.collaborator {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 38px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--alter-text);
+  font: inherit;
+  font-size: var(--alter-font-body-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.collaborator:hover {
+  background: var(--alter-surface-hover);
+}
+.collaborator[data-selected] {
+  background: var(--alter-surface-selected);
+}
+.collaborator:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: -2px;
+}
+.check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+  border: 1px solid var(--alter-control-border);
+  border-radius: 4px;
+  background: var(--alter-surface);
+  color: var(--alter-surface);
+}
+.collaborator[data-selected] .check {
+  border-color: var(--alter-action-background);
+  background: var(--alter-action-background);
+}
+.avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--alter-surface-hover);
+  color: var(--alter-text);
+  font-size: var(--alter-font-caption);
+  font-weight: 500;
+}
+.optionText {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+.optionMeta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+}
+.hint {
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+}
+.settingsLink {
+  align-self: flex-start;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--alter-text-muted);
+  font: inherit;
+  font-size: var(--alter-font-caption);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.settingsLink:hover {
+  color: var(--alter-text);
+}
+.settingsLink:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: 2px;
+}
+.error {
+  margin: 0;
+  color: var(--alter-danger);
+  font-size: var(--alter-font-caption);
+}

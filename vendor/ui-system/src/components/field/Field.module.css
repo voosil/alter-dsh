@@ -1,0 +1,25 @@
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+}
+.hint,
+.error {
+  margin: 0;
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+}
+.hint {
+  color: var(--alter-text-muted);
+}
+.error {
+  color: var(--alter-danger);
+}

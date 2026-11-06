@@ -1,0 +1,8 @@
+# Bundle patch for the self-contained Space client plugin.
+#
+# One host row carries the browser roster: the Client module system scans every
+# enabled Loader entry with a `dsh.client` declaration, so this row also puts
+# the Space panel into the Web boot graph.
+- insert:
+    - id: alter-dsh-space
+      name: '@alter-dsh/space'

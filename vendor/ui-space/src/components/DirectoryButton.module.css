@@ -1,0 +1,27 @@
+.button {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-right: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--alter-text-muted);
+  cursor: pointer;
+}
+.button:hover {
+  background: var(--alter-surface-hover);
+  color: var(--alter-text);
+}
+.button:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: 1px;
+}
+@media (max-width: 700px) {
+  .button {
+    display: flex;
+  }
+}

@@ -1,0 +1,323 @@
+.directory {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding-top: 2px;
+}
+.pinnedSection {
+  margin: 2px 0 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--alter-border);
+}
+.row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 34px;
+  padding-right: 4px;
+  border-radius: 7px;
+}
+.row:hover {
+  background: var(--alter-surface-hover);
+}
+.row[data-active] {
+  background: var(--alter-surface-selected);
+}
+.row[data-dragging] {
+  opacity: 0.35;
+}
+.row[data-archived] {
+  opacity: 0.55;
+}
+.row[data-drop='before']::before,
+.row[data-drop='after']::after {
+  content: '';
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--alter-focus-ring);
+  z-index: 1;
+}
+.row[data-drop='before']::before {
+  top: -1px;
+}
+.row[data-drop='after']::after {
+  bottom: -1px;
+}
+.row[data-drop='inside'] {
+  background: var(--alter-surface-selected);
+  box-shadow: inset 0 0 0 1px var(--alter-focus-ring);
+}
+.disclosure {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 30px;
+  padding: 0 5px 0 2px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--alter-text-muted);
+  cursor: pointer;
+}
+.disclosure:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: -3px;
+}
+.row[data-active] .disclosure,
+.row:hover .disclosure,
+.disclosure:focus-visible {
+  color: var(--alter-text);
+}
+.disclosureSlot {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+}
+.disclosureIcon {
+  display: flex;
+  transition: opacity var(--alter-duration-fast);
+}
+.disclosureChevron {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  opacity: 0;
+  transition:
+    opacity var(--alter-duration-fast),
+    transform var(--alter-duration-fast);
+}
+.disclosureChevron[data-collapsed] {
+  transform: rotate(0deg);
+}
+.disclosureChevron:not([data-collapsed]) {
+  transform: rotate(90deg);
+}
+.row:hover .disclosureIcon,
+.disclosure:focus-visible .disclosureIcon {
+  opacity: 0;
+}
+.row:hover .disclosureChevron,
+.disclosure:focus-visible .disclosureChevron {
+  opacity: 1;
+}
+.main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: var(--alter-text-secondary);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.row[data-active] .main {
+  color: var(--alter-text);
+}
+.main:hover {
+  color: var(--alter-text);
+}
+.mainEditing {
+  cursor: default;
+}
+.renameInput {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--alter-focus-ring);
+  border-radius: 6px;
+  background: var(--alter-surface);
+  color: var(--alter-text);
+  font: inherit;
+  font-size: var(--alter-font-body-sm);
+  outline: none;
+}
+.renameInput[aria-invalid='true'] {
+  border-color: var(--alter-danger);
+}
+.main:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: -2px;
+}
+.icon {
+  display: flex;
+  flex-shrink: 0;
+  color: var(--alter-text-muted);
+}
+.row[data-active] .icon {
+  color: var(--alter-text-secondary);
+}
+.title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.unreadDot {
+  flex-shrink: 0;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--alter-action-background);
+}
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.marks {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 1px;
+  margin-left: 2px;
+  margin-right: 2px;
+}
+.marker {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--alter-text-muted);
+  cursor: pointer;
+}
+.marker:hover,
+.marker:focus-visible {
+  background: var(--alter-surface-selected);
+  color: var(--alter-text);
+}
+.marker:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: -2px;
+}
+.markerHoverIcon {
+  display: none;
+}
+.marker:hover .markerIcon,
+.marker:focus-visible .markerIcon {
+  display: none;
+}
+.marker:hover .markerHoverIcon,
+.marker:focus-visible .markerHoverIcon {
+  display: block;
+}
+.markerTooltip {
+  position: fixed;
+  z-index: 70;
+  padding: 3px 7px;
+  border-radius: 8px;
+  background: var(--alter-action-background);
+  color: var(--alter-action-text);
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+  white-space: nowrap;
+  pointer-events: none;
+  animation: marker-tooltip-in var(--alter-duration-fast) ease-out;
+}
+@keyframes marker-tooltip-in {
+  from {
+    opacity: 0;
+  }
+}
+.rowActions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  width: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+.row:hover .rowActions,
+.row:focus-within .rowActions {
+  width: 48px;
+  opacity: 1;
+  pointer-events: auto;
+}
+.row[data-actions='one']:hover .rowActions,
+.row[data-actions='one']:focus-within .rowActions {
+  width: 24px;
+}
+.more,
+.quickAdd {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--alter-text-muted);
+  cursor: pointer;
+}
+.more:hover,
+.quickAdd:hover {
+  background: var(--alter-surface-selected);
+  color: var(--alter-text);
+}
+.more:focus-visible,
+.quickAdd:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: -2px;
+}
+.emptyHint {
+  margin: 0;
+  padding: 16px 10px;
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+}
+.confirmText {
+  margin: 0;
+  font-size: var(--alter-font-body-sm);
+  line-height: var(--alter-line-ui);
+}
+.confirmNote {
+  margin: 8px 0 0;
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+}
+@media (hover: none) {
+  .disclosureIcon {
+    display: none;
+  }
+  .disclosureChevron {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .disclosureIcon,
+  .disclosureChevron {
+    transition: none;
+  }
+  .markerTooltip {
+    animation: none;
+  }
+}

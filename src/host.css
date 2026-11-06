@@ -1,0 +1,37 @@
+/* Host fit for the vendored Space app.
+ *
+ * The vendored `SpaceApp` was authored as a full-window app (`height: 100dvh`).
+ * The DSH main panel is a flex column item, so this wrapper claims the
+ * available height and the attribute-selector rule below outranks the vendored
+ * `.space` module class without editing the original stylesheet. */
+.alter-space-host {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--alter-surface);
+  color: var(--alter-text);
+  font-family: var(--alter-font-family);
+  font-size: var(--alter-font-body-sm);
+  line-height: var(--alter-line-ui);
+  /* The vendored design is light-only; scope that to the panel instead of the
+   * document root, where tokens.css would otherwise force the host app light. */
+  color-scheme: light;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.alter-space-host > div[class] {
+  flex: 1 1 auto;
+  height: 100%;
+  min-height: 0;
+}
+
+.alter-space-host,
+.alter-space-host *,
+.alter-space-host *::before,
+.alter-space-host *::after {
+  box-sizing: border-box;
+}

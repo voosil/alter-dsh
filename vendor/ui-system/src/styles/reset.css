@@ -1,0 +1,28 @@
+* {
+  box-sizing: border-box;
+}
+html {
+  font-family: var(--alter-font-family);
+  font-synthesis: none;
+  color: var(--alter-text);
+  background: var(--alter-surface);
+  caret-color: var(--alter-action-background);
+  scrollbar-color: var(--alter-control-border) var(--alter-surface);
+}
+body {
+  margin: 0;
+}
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+::selection {
+  background: var(--alter-surface-selected);
+  color: var(--alter-text);
+}

@@ -1,0 +1,285 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 680px;
+}
+.selected {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 3px;
+  list-style: none;
+  border: 1px solid var(--alter-border);
+  border-radius: var(--alter-radius-panel);
+}
+.selectedItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 4px 4px 4px 9px;
+  border-radius: var(--alter-radius-control);
+}
+.folderIcon {
+  flex-shrink: 0;
+  color: var(--alter-text-muted);
+}
+.selectedText {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.selectedName,
+.selectedPath {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.selectedName {
+  color: var(--alter-text);
+  font-size: var(--alter-font-body-sm);
+}
+.selectedPath {
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+}
+.remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--alter-text-muted);
+  cursor: pointer;
+}
+.remove:hover {
+  background: var(--alter-surface-hover);
+  color: var(--alter-text);
+}
+.remove:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: 0;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.add {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px dashed var(--alter-control-border);
+  border-radius: var(--alter-radius-control);
+  background: transparent;
+  color: var(--alter-text-muted);
+  font: inherit;
+  font-size: var(--alter-font-body-sm);
+  cursor: pointer;
+  transition:
+    color var(--alter-duration-fast),
+    border-color var(--alter-duration-fast),
+    background-color var(--alter-duration-fast);
+}
+.add:hover,
+.add[aria-expanded='true'] {
+  border-color: var(--alter-text-muted);
+  color: var(--alter-text);
+}
+.add[aria-expanded='true'] {
+  border-style: solid;
+  background: var(--alter-surface-nav);
+}
+.add:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: 2px;
+}
+.hint {
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+}
+.picker {
+  display: flex;
+  flex-direction: column;
+  max-width: calc(100vw - 16px);
+}
+.pickerBody {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  margin: 0;
+  padding: 7px 7px 6px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--alter-border);
+  scrollbar-width: none;
+  white-space: nowrap;
+}
+.crumbs::-webkit-scrollbar {
+  display: none;
+}
+.crumb {
+  flex-shrink: 0;
+  max-width: 160px;
+  overflow: hidden;
+  padding: 3px 5px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--alter-text-muted);
+  font: inherit;
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.crumb:hover {
+  background: var(--alter-surface-hover);
+  color: var(--alter-text);
+}
+.crumb[aria-current='page'] {
+  color: var(--alter-text);
+  font-weight: 500;
+}
+.crumb:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: -1px;
+}
+.separator {
+  flex-shrink: 0;
+  color: var(--alter-text-faint);
+  font-size: var(--alter-font-caption);
+}
+.entries {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 224px;
+  padding: 5px;
+  overflow-y: auto;
+}
+.entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 4px 6px 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--alter-text);
+  font: inherit;
+  font-size: var(--alter-font-body-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.entry:hover {
+  background: var(--alter-surface-hover);
+}
+.entry:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: -2px;
+}
+.entryName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.entryCheck {
+  flex-shrink: 0;
+  color: var(--alter-text);
+}
+.chevron {
+  flex-shrink: 0;
+  color: var(--alter-text-faint);
+}
+.state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 72px;
+  margin: 0;
+  padding: 10px;
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+  text-align: center;
+}
+.retry {
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--alter-text);
+  font: inherit;
+  font-size: var(--alter-font-caption);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.retry:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: 2px;
+}
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 7px 8px 10px;
+  border-top: 1px solid var(--alter-border);
+}
+.footerPath {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.choose {
+  flex-shrink: 0;
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--alter-radius-control);
+  background: var(--alter-action-background);
+  color: var(--alter-action-text);
+  font: inherit;
+  font-size: var(--alter-font-body-sm);
+  cursor: pointer;
+  transition: background-color var(--alter-duration-fast);
+}
+.choose:hover:not(:disabled) {
+  background: var(--alter-action-hover);
+}
+.choose:disabled {
+  background: var(--alter-surface-hover);
+  color: var(--alter-text-muted);
+  cursor: default;
+}
+.choose:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: 2px;
+}

@@ -1,0 +1,274 @@
+export type Creator = 'me' | 'alter';
+export type NodeKind = 'folder' | 'note';
+export type ArchiveSource = 'agent' | 'user';
+
+export interface Space {
+  id: string;
+  name: string;
+  goal: string;
+  directories: string[];
+  collaboratorIds: string[];
+  icon?: string;
+  color?: string;
+  isDefault: boolean;
+  order: number;
+  createdAt: string;
+  archivedAt: string | null;
+}
+
+export interface Agent {
+  id: string;
+  name: string;
+  role: string;
+  createdAt: string;
+}
+
+export interface SpaceNode {
+  id: string;
+  spaceId: string;
+  kind: NodeKind;
+  title: string;
+  parentId: string | null;
+  creator: Creator;
+  pinned: boolean;
+  archived: boolean;
+  archivedBy: ArchiveSource | null;
+  archivedAt: string | null;
+  deletedAt: string | null;
+  deletedRoot: boolean;
+  originalParentId: string | null;
+  unread: boolean;
+  content: string;
+  activity: number;
+  activityAt: string;
+  lastOpenCreditAt: string | null;
+  lastEditCreditAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  order: number;
+}
+
+export interface Thought {
+  id: string;
+  spaceId: string;
+  content: string;
+  createdAt: string;
+  updatedAt: string;
+  archived: boolean;
+  archivedAt: string | null;
+  deletedAt: string | null;
+  convertedDocId: string | null;
+}
+
+export interface CommentSupplement {
+  id: string;
+  author: Creator;
+  body: string;
+  createdAt: string;
+}
+
+export interface Comment {
+  id: string;
+  docId: string;
+  author: Creator;
+  body: string;
+  quote: string | null;
+  status: 'open' | 'resolved';
+  createdAt: string;
+  resolvedAt: string | null;
+  editedAt: string | null;
+  supplements: CommentSupplement[];
+}
+
+export interface DocVersion {
+  id: string;
+  docId: string;
+  title: string;
+  content: string;
+  author: Creator;
+  at: string;
+}
+
+export interface AgentEvent {
+  id: string;
+  spaceId: string;
+  title: string;
+  detail: string;
+  at: string;
+  docId: string | null;
+  taskId: string | null;
+}
+
+export interface SpaceTask {
+  id: string;
+  spaceId: string;
+  title: string;
+  detail: string;
+  status: 'pending' | 'in_progress';
+  owner: Creator;
+  docId: string | null;
+  createdAt: string;
+}
+
+export interface Milestone {
+  id: string;
+  spaceId: string;
+  title: string;
+  detail: string;
+  status: 'done' | 'current' | 'next';
+  period: string;
+}
+
+export interface SearchResult {
+  id: string;
+  type: 'doc' | 'thought';
+  spaceId: string;
+  title: string;
+  excerpt: string;
+  archived: boolean;
+  creator: Creator;
+}
+
+export interface NewSpaceInput {
+  name: string;
+  goal?: string;
+  directories?: string[];
+  collaboratorIds?: string[];
+  icon?: string;
+  color?: string;
+}
+
+export interface SpacePatch {
+  name?: string;
+  goal?: string;
+  directories?: string[];
+  collaboratorIds?: string[];
+  icon?: string;
+  color?: string;
+}
+
+export interface NodePatch {
+  title?: string;
+  content?: string;
+}
+
+export type SpaceActivityKind =
+  | 'space'
+  | 'doc'
+  | 'thought'
+  | 'comment'
+  | 'task'
+  | 'agent';
+
+export interface SpaceActivityEvent {
+  id: string;
+  at: string;
+  kind: SpaceActivityKind;
+  title: string;
+  /** 不含文档名的动作文案；文档引用由 docTitle 单独呈现。 */
+  label?: string;
+  detail?: string;
+  docId?: string | null;
+  docTitle?: string;
+  agentEventId?: string | null;
+}
+
+export interface SpaceActivityDay {
+  /** 本地时区的 YYYY-MM-DD。 */
+  date: string;
+  count: number;
+  events: SpaceActivityEvent[];
+}
+
+export interface SpaceOverview {
+  /** 过去一年内有记录的日期，按日期升序，仅包含有活动的日期。 */
+  activity: SpaceActivityDay[];
+  recentDocs: SpaceNode[];
+  agentEvents: AgentEvent[];
+  tasks: SpaceTask[];
+  milestones: Milestone[];
+}
+
+export interface DirectoryEntry {
+  path: string;
+  name: string;
+}
+
+export interface DirectoryListing {
+  path: string;
+  entries: DirectoryEntry[];
+}
+
+export interface SpaceService {
+  hub: import('./space-hub.js').SpaceHubService;
+  listSpaces(): Promise<Space[]>;
+  getSpace(id: string): Promise<Space | undefined>;
+  createSpace(input: NewSpaceInput): Promise<Space>;
+  updateSpace(id: string, patch: SpacePatch): Promise<Space>;
+  archiveSpace(id: string): Promise<Space>;
+  unarchiveSpace(id: string): Promise<Space>;
+  listArchivedSpaces(): Promise<Space[]>;
+  deleteSpace(id: string): Promise<void>;
+  reorderSpaces(ids: string[]): Promise<Space[]>;
+
+  listNodes(spaceId: string): Promise<SpaceNode[]>;
+  getNode(id: string): Promise<SpaceNode | undefined>;
+  createNode(input: {
+    spaceId: string;
+    parentId?: string | null;
+    kind: NodeKind;
+    title?: string;
+  }): Promise<SpaceNode>;
+  saveNode(id: string, patch: NodePatch): Promise<SpaceNode>;
+  moveNode(
+    id: string,
+    target: { spaceId: string; parentId: string | null; order?: number },
+  ): Promise<SpaceNode>;
+  setPinned(id: string, pinned: boolean): Promise<SpaceNode>;
+  setArchived(id: string, archived: boolean): Promise<SpaceNode>;
+  deleteNode(id: string): Promise<void>;
+  restoreNode(id: string): Promise<SpaceNode>;
+  recordOpen(id: string): Promise<SpaceNode>;
+
+  listComments(docId: string): Promise<Comment[]>;
+  addComment(input: {
+    docId: string;
+    body: string;
+    quote?: string | null;
+  }): Promise<Comment>;
+  updateComment(
+    id: string,
+    patch: { body?: string; quote?: string | null },
+  ): Promise<Comment>;
+  addCommentSupplement(id: string, body: string): Promise<Comment>;
+  deleteComment(id: string): Promise<void>;
+  resolveComment(id: string): Promise<Comment>;
+  listVersions(docId: string): Promise<DocVersion[]>;
+  restoreVersion(docId: string, versionId: string): Promise<SpaceNode>;
+
+  listThoughts(
+    spaceId: string,
+    options?: { includeArchived?: boolean },
+  ): Promise<Thought[]>;
+  createThought(input: { spaceId: string; content: string }): Promise<Thought>;
+  updateThought(id: string, content: string): Promise<Thought>;
+  setThoughtArchived(id: string, archived: boolean): Promise<Thought>;
+  deleteThought(id: string): Promise<void>;
+  restoreThought(id: string): Promise<Thought>;
+  moveThought(id: string, spaceId: string): Promise<Thought>;
+  convertThought(id: string): Promise<{ thought: Thought; node: SpaceNode }>;
+
+  listDeleted(spaceId: string): Promise<{
+    nodes: SpaceNode[];
+    thoughts: Thought[];
+  }>;
+  /** 永久删除该空间回收站里的全部内容，不可恢复。 */
+  emptyTrash(spaceId: string): Promise<void>;
+  search(spaceId: string, query: string): Promise<SearchResult[]>;
+  getOverview(spaceId: string): Promise<SpaceOverview>;
+
+  listAgents(): Promise<Agent[]>;
+  createAgent(input: { name: string; role: string }): Promise<Agent>;
+
+  listDirectories(path: string): Promise<DirectoryListing>;
+}

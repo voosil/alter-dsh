@@ -1,0 +1,135 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  height: 56px;
+  padding: 0 32px;
+}
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+}
+.crumb {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--alter-text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+.crumb:hover {
+  background: var(--alter-surface-hover);
+  color: var(--alter-text);
+}
+.crumbChevron {
+  flex-shrink: 0;
+  color: var(--alter-text-muted);
+  opacity: 0.75;
+}
+.currentCrumb {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 4px;
+  color: var(--alter-text);
+}
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.archiveLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--alter-radius-control);
+  background: transparent;
+  color: var(--alter-text-secondary);
+  font: inherit;
+  font-size: var(--alter-font-body-sm);
+  cursor: pointer;
+}
+.archiveLink:hover {
+  background: var(--alter-surface-hover);
+  color: var(--alter-text);
+}
+.archiveLink:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: 2px;
+}
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.body {
+  width: min(100%, 720px);
+  margin: 60px auto 120px;
+  padding: 0 var(--alter-content-inset);
+}
+.head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 30px;
+}
+.title {
+  margin: 0;
+  font-size: var(--alter-font-headline);
+  font-weight: 600;
+  line-height: var(--alter-line-headline);
+  letter-spacing: var(--alter-tracking-display);
+}
+.count {
+  color: var(--alter-text-muted);
+  font-family: var(--alter-font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+}
+.timeline {
+  margin-top: 36px;
+}
+.group {
+  margin-top: 32px;
+}
+.groupLabel {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 2px;
+  color: var(--alter-text-muted);
+  font-family: var(--alter-font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+@media (max-width: 700px) {
+  .toolbar {
+    padding: 0 18px;
+  }
+  .body {
+    margin-top: 34px;
+  }
+}

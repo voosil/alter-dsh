@@ -1,0 +1,99 @@
+.anchor {
+  position: fixed;
+  width: 0;
+  height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  opacity: 0;
+  pointer-events: none;
+}
+.panel {
+  z-index: 40;
+  max-height: min(70vh, 520px);
+  overflow: auto;
+  padding: 5px;
+  border: 1px solid var(--alter-border);
+  border-radius: var(--alter-radius-panel);
+  background: var(--alter-surface-raised);
+  box-shadow: var(--alter-shadow-popover);
+  animation: pop-in 120ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.heading {
+  padding: 5px 8px 6px;
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+}
+.item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 30px;
+  padding: 6px 8px;
+  border-radius: var(--alter-radius-control);
+  color: var(--alter-text);
+  font: inherit;
+  font-size: var(--alter-font-body-sm);
+  white-space: nowrap;
+  text-align: left;
+  cursor: pointer;
+  outline: none;
+}
+.item[data-highlighted] {
+  background: var(--alter-surface-hover);
+}
+.item[data-active] {
+  background: var(--alter-surface-selected);
+  font-weight: 500;
+}
+.item[data-disabled] {
+  color: var(--alter-text-muted);
+  cursor: default;
+}
+.item[data-danger] {
+  color: var(--alter-danger);
+}
+.item[data-danger][data-highlighted] {
+  background: var(--alter-danger-soft);
+}
+.icon {
+  display: flex;
+  width: 15px;
+  height: 15px;
+  color: var(--alter-text-muted);
+}
+.item[data-danger] .icon {
+  color: inherit;
+}
+.icon svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.6;
+}
+.separator {
+  height: 1px;
+  margin: 5px 4px;
+  background: var(--alter-border);
+}
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+/* 子菜单从父浮层右侧展开，入场方向随展开方向走。 */
+.panel[data-side='right'] {
+  animation-name: pop-in-right;
+}
+@keyframes pop-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(-3px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .panel {
+    animation: none;
+  }
+}

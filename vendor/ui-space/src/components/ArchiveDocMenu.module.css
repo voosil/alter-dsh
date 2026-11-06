@@ -1,0 +1,8 @@
+.trigger {
+  transition: opacity var(--alter-duration-fast);
+}
+.confirmText {
+  margin: 0;
+  font-size: var(--alter-font-body-sm);
+  line-height: var(--alter-line-body);
+}

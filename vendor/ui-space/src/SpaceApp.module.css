@@ -1,0 +1,93 @@
+.space {
+  display: grid;
+  grid-template-columns:
+    var(--alter-space-sidebar-width) var(--alter-space-splitter-width)
+    minmax(0, 1fr);
+  min-width: 0;
+  height: 100dvh;
+}
+.main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--alter-surface);
+}
+.loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--alter-space-3);
+  height: 100%;
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-body-sm);
+}
+.loading button {
+  height: 32px;
+  padding: 0 13px;
+  border: 0;
+  border-radius: var(--alter-radius-control);
+  background: var(--alter-action-background);
+  color: var(--alter-action-text);
+  font: inherit;
+  cursor: pointer;
+}
+.pending {
+  flex: 1;
+}
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  border: 0;
+  background: var(--alter-scrim);
+  cursor: default;
+}
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  z-index: 60;
+  transform: translate(-50%, 8px);
+  padding: 8px 13px;
+  border-radius: var(--alter-radius-control);
+  background: var(--alter-action-background);
+  color: var(--alter-action-text);
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 160ms ease-out,
+    transform 160ms ease-out;
+}
+.toast[data-visible] {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+@media (max-width: 1100px) {
+  .space {
+    --alter-space-sidebar-width: 248px;
+  }
+}
+@media (max-width: 700px) {
+  .space {
+    display: block;
+    height: 100%;
+  }
+  .main {
+    height: 100%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    transition: none;
+  }
+}
+
+@media (max-width: 700px) {
+  .sidebarResizer {
+    display: none;
+  }
+}

@@ -1,0 +1,101 @@
+:root {
+  --alter-font-family:
+    'Archivo Variable', 'PingFang SC', 'Noto Sans SC', 'Source Han Sans SC',
+    'Microsoft YaHei', sans-serif;
+  --alter-font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --alter-font-headline: 32px;
+  --alter-font-title: 22px;
+  --alter-font-title-sm: 18px;
+  --alter-font-body: 16px;
+  --alter-font-body-sm: 14px;
+  --alter-font-caption: 12px;
+  --alter-font-micro: 10.5px;
+  --alter-line-display: 1.18;
+  --alter-line-headline: var(--alter-line-display);
+  --alter-line-body: 1.9;
+  --alter-line-ui: 1.6;
+  --alter-tracking-display: -0.022em;
+  --alter-tracking-body: 0.006em;
+  /* Deprecated aliases kept for apps/web and ui-overview during migration. */
+  --alter-font-headline-sm: var(--alter-font-title);
+  --alter-font-label: var(--alter-font-body-sm);
+  --alter-radius-control: 8px;
+  --alter-radius-panel: 12px;
+  --alter-radius-overlay: 24px;
+  --alter-space-1: 4px;
+  --alter-space-2: 8px;
+  --alter-space-3: 12px;
+  --alter-space-4: 16px;
+  --alter-space-6: 24px;
+  --alter-space-8: 32px;
+  --alter-content-inset: 48px;
+  --alter-rail-width: 64px;
+  --alter-space-sidebar-width: 312px;
+  --alter-space-splitter-width: 4px;
+  --alter-doc-width: 700px;
+  --alter-comment-rail-width: 284px;
+  --alter-doc-gap: 48px;
+  --alter-mobile-bar: 54px;
+  --alter-duration-fast: 140ms;
+  --alter-focus-width: 2px;
+  --alter-focus-offset: 3px;
+  --alter-layer-popup: 10;
+}
+:root,
+:root[data-theme='light'] {
+  color-scheme: light;
+  --alter-surface: #ffffff;
+  --alter-surface-rail: #fcfaf9;
+  --alter-surface-nav: #fbf9f8;
+  --alter-surface-raised: #ffffff;
+  --alter-surface-hover: #f1eeec;
+  --alter-surface-selected: #f3eeea;
+  --alter-text: #000000e6;
+  --alter-text-secondary: #44403f;
+  --alter-text-muted: #726d6b;
+  --alter-text-faint: #9da0a5;
+  --alter-border: #f1edeb;
+  --alter-control-border: #cbc6c3;
+  --alter-control-border-hover: #aaa6a4;
+  --alter-action-background: #17181a;
+  --alter-action-text: #fafaf7;
+  --alter-action-hover: #32302e;
+  --alter-accent: #d1512a;
+  --alter-accent-strong: #ad3c17;
+  --alter-accent-soft: #fbebe3;
+  --alter-focus-ring: #dcd2cb;
+  --alter-danger: #a63a2b;
+  --alter-danger-strong: #862c23;
+  --alter-danger-soft: #f9e9e4;
+  --alter-highlight: #fbe8c9;
+  --alter-code-surface: #f0f0ea;
+  --alter-diff-add: #e7efe1;
+  --alter-diff-add-text: #37502c;
+  --alter-diff-remove: #f9e9e4;
+  --alter-diff-remove-text: #863229;
+  --alter-heat-0: #ece8e6;
+  --alter-heat-1: #d7cfcc;
+  --alter-heat-2: #b3a9a4;
+  --alter-heat-3: #7c736c;
+  --alter-heat-4: #37322e;
+  --alter-scrim: rgba(0, 0, 0, 0.4);
+  --alter-shadow-popover:
+    0 1px 2px rgba(26, 24, 23, 0.06), 0 14px 38px rgba(26, 24, 23, 0.1);
+  --alter-shadow-modal:
+    0 2px 6px rgba(26, 24, 23, 0.05), 0 24px 80px rgba(26, 24, 23, 0.12);
+  --alter-shadow-drawer: 8px 0 24px rgb(23 24 26 / 8%);
+  --alter-shadow-drawer-left: -8px 0 24px rgb(23 24 26 / 8%);
+}
+@media (max-width: 1100px) {
+  :root {
+    --alter-content-inset: 32px;
+  }
+}
+@media (max-width: 700px) {
+  :root {
+    --alter-content-inset: 24px;
+    --alter-font-headline: 27px;
+    --alter-line-display: 1.18;
+    --alter-line-body: 1.85;
+  }
+}

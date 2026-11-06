@@ -1,0 +1,51 @@
+.spaceOptions {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 3px;
+  border: 1px solid var(--alter-border);
+  border-radius: var(--alter-radius-panel);
+}
+.spaceOption {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 32px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  font-size: var(--alter-font-body-sm);
+  cursor: pointer;
+}
+.spaceOption:hover {
+  background: var(--alter-surface-hover);
+}
+.spaceOption[data-selected] {
+  background: var(--alter-surface-selected);
+}
+.spaceOption input {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: var(--alter-action-background);
+}
+.spaceOption span:nth-of-type(1) {
+  flex: 1;
+  min-width: 0;
+}
+.defaultBadge {
+  padding: 1px 5px;
+  border-radius: 6px;
+  background: var(--alter-surface);
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+}
+.empty {
+  margin: 0;
+  font-size: var(--alter-font-body-sm);
+  line-height: var(--alter-line-ui);
+}
+.error {
+  margin: 10px 0 0;
+  color: var(--alter-danger);
+  font-size: var(--alter-font-caption);
+}

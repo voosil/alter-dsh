@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "forceConsistentCasingInFileNames": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": ["vite/client"],
+    "baseUrl": ".",
+    "paths": {
+      "@alter/client-modules": ["vendor/client-modules/src/index.ts"],
+      "@alter/mock-space": ["vendor/mock-space/src/index.ts"],
+      "@alter/mock-workbench": ["vendor/mock-workbench/src/index.ts"],
+      "@alter/protocol": ["vendor/protocol/src/index.ts"],
+      "@alter/ui-space": ["vendor/ui-space/src/index.ts"],
+      "@alter/ui-space/*": ["vendor/ui-space/src/*"],
+      "@alter/ui-system": ["vendor/ui-system/src/index.ts"],
+      "@alter/ui-system/tokens.css": ["vendor/ui-system/src/styles/tokens.css"],
+      "@alter/ui-workbench": ["vendor/ui-workbench/src/index.ts"]
+    }
+  },
+  "include": ["vendor/**/*.ts", "vendor/**/*.tsx"]
+}

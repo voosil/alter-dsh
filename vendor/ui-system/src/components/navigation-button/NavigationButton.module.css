@@ -1,0 +1,99 @@
+.button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--alter-radius-control);
+  background: transparent;
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-label);
+  line-height: 1.6;
+  cursor: pointer;
+  transition:
+    background-color var(--alter-duration-fast),
+    color var(--alter-duration-fast);
+}
+.button:hover {
+  background: var(--alter-surface-hover);
+}
+.button[aria-current='page'] {
+  color: var(--alter-text);
+}
+.button[aria-current='page']::before {
+  position: absolute;
+  top: 11px;
+  left: 0;
+  width: 2px;
+  height: 18px;
+  border-radius: 1px;
+  background: var(--alter-accent);
+  content: '';
+}
+.button:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: var(--alter-focus-offset);
+}
+.button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.icon {
+  display: flex;
+  width: 20px;
+  height: 20px;
+}
+.icon svg {
+  stroke-width: 1.6;
+}
+.button[aria-current='page'] .icon svg {
+  stroke-width: 2.2;
+}
+.label {
+  position: absolute;
+  left: calc(100% + var(--alter-space-2));
+  z-index: var(--alter-layer-popup);
+  padding: 3px var(--alter-space-2);
+  border-radius: var(--alter-radius-control);
+  background: var(--alter-action-background);
+  color: var(--alter-action-text);
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+}
+.button:hover .label,
+.button:focus-visible .label {
+  opacity: 1;
+}
+@media (max-width: 700px) {
+  .button {
+    width: auto;
+    height: 40px;
+    gap: var(--alter-space-2);
+    padding: 0 var(--alter-space-3);
+  }
+  .button[aria-current='page']::before {
+    top: auto;
+    bottom: -7px;
+    left: 50%;
+    width: 18px;
+    height: 2px;
+    margin-left: -9px;
+  }
+  .label {
+    position: static;
+    padding: 0;
+    background: transparent;
+    color: inherit;
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .button {
+    transition: none;
+  }
+}

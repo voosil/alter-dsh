@@ -1,0 +1,26 @@
+.control {
+  width: 100%;
+  padding: 8px 11px;
+  border: 1px solid var(--alter-control-border);
+  border-radius: var(--alter-radius-control);
+  background: var(--alter-surface);
+  color: var(--alter-text);
+  font: inherit;
+  font-size: var(--alter-font-body-sm);
+  line-height: var(--alter-line-ui);
+}
+.control::placeholder {
+  color: var(--alter-text-muted);
+}
+.control:focus-visible {
+  outline: none;
+  border-color: var(--alter-focus-ring);
+  box-shadow: 0 0 0 1px var(--alter-focus-ring);
+}
+.control[data-invalid='true'] {
+  border-color: var(--alter-danger);
+}
+.textarea {
+  min-height: 60px;
+  resize: vertical;
+}

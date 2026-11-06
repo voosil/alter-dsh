@@ -1,0 +1,10 @@
+/* Mount-scoped reset for surface that escapes the host container: Radix
+ * dialogs/menus/popovers portal into `document.body`, so the host-scoped reset
+ * in `host.css` cannot reach them. The panel inserts this rule while it is
+ * mounted and removes it on unmount, keeping the host app's own box model
+ * untouched otherwise. */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
