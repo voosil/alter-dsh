@@ -20,7 +20,8 @@
   pointer-events: none;
 }
 .surface ::selection {
-  background: var(--alter-surface-selected);
+  /* 半透明选区：选中状态下仍能透出行内高亮（mark）等文字背景色。 */
+  background: rgba(26, 24, 23, 0.08);
 }
 .surface p {
   margin: 0 0 10px;

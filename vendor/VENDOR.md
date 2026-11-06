@@ -42,3 +42,12 @@ Upstream packages that are **not** copied: the Alter host application
 (`apps/web`), the real host-side Space service (`packages/services/space`), the
 DSH bridge/launcher (`packages/dsh/*`), and every other Alter client module.
 This repository only carries what the DSH Space panel needs.
+
+## 待回灌上游的 issue 修复
+
+本沙箱只允许写本仓库，以下 `vendor/` 改动是对上游源码的本地偏离，按 Issues
+条目记录，待之后同步回上游 Alter 对应路径并删除本节记录。
+
+| 日期 | Issues 条目 | 改动文件 | 一句话说明 |
+| ---- | ----------- | -------- | ---------- |
+| 2026-11-06 | 文档行内高亮功能：选中文字是灰色的，点击高亮后显示的高亮颜色被选中文字时的灰色背景覆盖了，需要取消选中文字后才能看到高亮色，体验不是很好。 | `vendor/ui-space/src/components/editor/Editor.module.css` | 编辑器内文字选区背景改为半透明，选中时行内高亮（`mark`）等文字背景色仍可见，无需取消选中。回灌目标：`packages/client/ui-space/src/components/editor/Editor.module.css`。 |
