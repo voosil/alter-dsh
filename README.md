@@ -42,6 +42,8 @@
 2. `tokens.css` 里的 `color-scheme: light` 从 `:root` 移到 `.alter-space-host`，避免把宿主整体强制为浅色；
 3. `SearchPanel.module.css` 中裸 `kbd` 元素选择器改为 `.alter-space-host kbd`，避免影响宿主自己的 `<kbd>`。
 
+宿主窗口操作区：宿主侧栏收起（桌面端折叠，或窄窗口的抽屉模式）时，DSH 会把窗口操作区（macOS 红绿灯、展开侧栏 / 新建会话按钮）浮在主面板左上角，并通过 `--dsh-frame-leading-clearance` 发布该浮层宽度（仅在浮层挂载时存在）；`src/host.css` 据此在 Space 面板顶部预留与宿主标题栏同高的 48px 窗口条，让 Space 自己的标题行从系统控件下方开始。侧栏展开时该变量不存在，面板仍满铺。
+
 外置依赖只有宿主基座表内的 `react`、`react/jsx-runtime`、`react-dom`、`react-dom/client`；Radix、lucide、xterm 与全部 Space 代码都打进 bundle，`dsh.client.external` 无需声明。
 
 ## 构建与校验

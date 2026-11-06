@@ -23,6 +23,20 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* Window chrome over the panel's top-left corner.
+ *
+ * While the host sidebar is hidden (collapsed on desktop, or a narrow window's
+ * drawer) the shell floats the window's operation area over every main panel:
+ * macOS traffic lights and the sidebar reopen / New Session controls. The
+ * frame publishes that band's inline width as `--dsh-frame-leading-clearance`
+ * only while the seat is mounted, and the host's own panels reserve the 48px
+ * chrome strip the window titlebar occupies (`--dsh-frame-top-clearance`).
+ * Reserve the same strip here so Space's own title row starts below the system
+ * controls instead of underneath them. */
+.alter-space-host {
+  padding-top: min(var(--dsh-frame-leading-clearance, 0px), 48px);
+}
+
 .alter-space-host > div[class] {
   flex: 1 1 auto;
   height: 100%;
