@@ -343,15 +343,21 @@
   font-size: var(--alter-font-body-sm);
   font-weight: 500;
 }
+.spaceDetail,
 .spaceAction {
   opacity: 0;
+}
+.spaceAction {
   margin-right: 4px;
 }
+.spaceRow:hover .spaceDetail,
 .spaceRow:hover .spaceAction,
+.spaceRow:focus-within .spaceDetail,
 .spaceRow:focus-within .spaceAction {
   opacity: 1;
 }
 @media (hover: none) {
+  .spaceDetail,
   .spaceAction {
     opacity: 1;
   }

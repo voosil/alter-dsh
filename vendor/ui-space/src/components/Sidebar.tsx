@@ -495,6 +495,20 @@ export function Sidebar({
                     <span className={styles.spaceRowName}>{item.name}</span>
                   </span>
                 </button>
+                {/* 空间详情是高频入口：hover 一级操作区直接给出图标，不必
+                    再展开「空间操作」子菜单。 */}
+                <IconButton
+                  label={`${item.name} 的空间详情`}
+                  tooltip="空间详情"
+                  size="sm"
+                  icon={<SlidersHorizontal />}
+                  className={styles.spaceDetail}
+                  tooltipPlacement="left"
+                  onClick={() => {
+                    closeSwitcher();
+                    router.navigate(overviewPath(item.id));
+                  }}
+                />
                 <IconButton
                   label="空间操作"
                   size="sm"
@@ -531,17 +545,6 @@ export function Sidebar({
           width={190}
           heading={spaceMenu?.space.name}
           actions={[
-            {
-              id: 'details',
-              label: '详情',
-              icon: <SlidersHorizontal />,
-              onSelect: () => {
-                if (spaceMenu) {
-                  closeSwitcher();
-                  router.navigate(overviewPath(spaceMenu.space.id));
-                }
-              },
-            },
             {
               id: 'copy',
               label: '复制空间链接',
