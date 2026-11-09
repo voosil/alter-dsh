@@ -18,14 +18,20 @@
  * awaited write is durable. A failed write rolls the in-memory value back to
  * its pre-change snapshot.
  */
-import { chmod, mkdir, readFile, rename } from 'node:fs/promises';
+import { chmod, mkdir, readdir, rename, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { HubSnapshot } from '@alter/protocol';
 import type {
   SpaceStore,
   SpaceStoreData,
 } from '../vendor/service/src/contracts.js';
+import {
+  STORAGE_SETTINGS_KEY,
+  WAL_SIZE_LIMIT,
+  clampStorageSettings,
+  parseStorageSettings,
+  type StorageSettings,
+} from './settings.js';
 
 /** Business data file inside the configured data directory. */
 export const SPACE_DB_FILE = 'space.db';
@@ -35,9 +41,17 @@ export const DEFAULT_SPACE_ID = 'sp-inbox';
 export const DEFAULT_SPACE_NAME = '日常';
 
 const FORMAT_VERSION = 1;
-const LEGACY_JSON_FILE = 'space.json';
 const ORDER_PREFIX = 'order:';
-const MAX_IMPORT_ENTITIES = 500_000;
+/** Corruption copies kept on disk at most. */
+const MAX_CORRUPT_BACKUPS = 2;
+/** Total bytes corruption copies may occupy at most. */
+const MAX_CORRUPT_BACKUP_BYTES = 256 * 1024 * 1024;
+const CORRUPT_SUFFIXES = ['-wal', '-shm', '-journal'] as const;
+/** SQLite primary result codes that really mean "not a usable database". */
+const SQLITE_CORRUPT = 11;
+const SQLITE_NOTADB = 26;
+/** Makes corruption copies unique even when the clock repeats a millisecond. */
+let corruptSequence = 0;
 
 const COLLECTIONS = [
   'spaces',
@@ -69,18 +83,16 @@ export interface OpenSpaceStoreOptions {
   logger?: SpaceStoreLogger;
 }
 
-export type ImportResult =
-  | { imported: true; counts: Record<string, number> }
-  | { imported: false; reason: 'host-not-empty' };
-
-/** Persisted authority, plus the operations the RPC/import layer needs. */
+/** Persisted authority, plus the operations the Host lifecycle needs. */
 export interface SpaceStoreHandle extends SpaceStore {
   /** Absolute database file path. */
   readonly file: string;
-  /** Whether the database still holds only the untouched default state. */
-  isEmpty(): boolean;
-  /** Replace the whole database in one transaction (only when {@link isEmpty}). */
-  importData(database: SpaceStoreData): Promise<ImportResult>;
+  /** Current storage policy, loaded from the SQLite `meta` table. */
+  getStorageSettings(): StorageSettings;
+  /** Persist a storage policy; resolves after COMMIT. */
+  setStorageSettings(settings: StorageSettings): Promise<void>;
+  /** Write a consistent, compacted copy of the database to `destination`. */
+  snapshotInto(destination: string): Promise<void>;
   /** Drain queued writes and close the connection. */
   close(): Promise<void>;
 }
@@ -89,7 +101,7 @@ const CREATE_TABLE = (name: string, key: string) =>
   `CREATE TABLE IF NOT EXISTS ${name} (${key} TEXT PRIMARY KEY, data TEXT NOT NULL) STRICT;`;
 
 const SCHEMA = [
-  CREATE_TABLE('meta', 'key'),
+  'CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;',
   ...COLLECTIONS.map((name) => CREATE_TABLE(name, 'id')),
   CREATE_TABLE('hub', 'space_id'),
 ].join('\n');
@@ -139,48 +151,36 @@ function emptyCollections(): Pick<SpaceStoreData, Collection> {
   };
 }
 
-/** Same accepted data shape as the upstream JSON store parser. */
-function parseSpaceStoreData(value: unknown): SpaceStoreData | undefined {
-  if (typeof value !== 'object' || value === null) return undefined;
-  const record = value as Record<string, unknown>;
-  if (record.version !== 1) return undefined;
-  for (const field of COLLECTIONS) {
-    if (!Array.isArray(record[field])) record[field] = [];
-  }
-  const hub = record.hub;
-  if (typeof hub !== 'object' || hub === null || Array.isArray(hub))
-    record.hub = {};
-  return record as unknown as SpaceStoreData;
-}
-
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** Whether `data` is still the untouched first-run state. */
-export function isPristineSpaceData(data: SpaceStoreData): boolean {
-  if (data.spaces.length !== 1) return false;
-  const space = data.spaces[0];
-  if (space.id !== DEFAULT_SPACE_ID) return false;
-  if (space.name !== DEFAULT_SPACE_NAME) return false;
-  if (space.goal !== '') return false;
-  if (space.directories.length !== 0) return false;
-  if (space.collaboratorIds.length !== 0) return false;
-  if (space.isDefault !== true) return false;
-  if (space.archivedAt !== null) return false;
-  for (const collection of COLLECTIONS) {
-    if (collection === 'spaces') continue;
-    if (data[collection].length !== 0) return false;
-  }
-  return Object.keys(data.hub).length === 0;
-}
-
-function messageOf(error: unknown): string {
+function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function corruptStamp(now: Date): string {
-  return now().toISOString().replaceAll(':', '-');
+/** SQLite primary result code carried by `node:sqlite` errors, if any. */
+function sqliteErrcode(error: unknown): number | undefined {
+  if (typeof error !== 'object' || error === null) return undefined;
+  const errcode = (error as { errcode?: unknown }).errcode;
+  return typeof errcode === 'number' ? errcode & 0xff : undefined;
+}
+
+/** Whether a failure means the file content is corrupt, not merely locked. */
+function isCorruptionError(error: unknown): boolean {
+  const code = sqliteErrcode(error);
+  return code === SQLITE_CORRUPT || code === SQLITE_NOTADB;
+}
+
+function corruptStamp(now: () => Date): string {
+  corruptSequence += 1;
+  return `${now().toISOString().replaceAll(':', '-')}-${process.pid}-${corruptSequence}`;
+}
+
+/** StatementSync.close() exists at runtime but is missing from @types/node 26. */
+function closeStatement(statement: unknown): void {
+  const candidate = statement as { close?: () => void };
+  if (typeof candidate.close === 'function') candidate.close();
 }
 
 function openDatabase(file: string): DatabaseSync {
@@ -188,10 +188,14 @@ function openDatabase(file: string): DatabaseSync {
 }
 
 function configureDatabase(db: DatabaseSync): void {
+  // The busy timeout comes first: switching the journal mode may need a lock,
+  // and a momentary lock must not be mistaken for corruption later.
+  db.exec('PRAGMA busy_timeout = 5000');
   db.exec('PRAGMA journal_mode = WAL');
   db.exec('PRAGMA synchronous = FULL');
-  db.exec('PRAGMA busy_timeout = 5000');
   db.exec('PRAGMA foreign_keys = ON');
+  // Cap how much of the WAL file survives a checkpoint (unclean shutdown).
+  db.exec(`PRAGMA journal_size_limit = ${WAL_SIZE_LIMIT}`);
 }
 
 function readUserVersion(db: DatabaseSync): number {
@@ -218,25 +222,100 @@ async function setFileMode(file: string): Promise<void> {
   }
 }
 
-/** Move an unreadable database aside so a fresh one can start. */
+/**
+ * Move an unreadable database (and its sidecars) aside so a fresh one can
+ * start. Sidecars go first and the main database last, so a crash halfway
+ * leaves a recoverable original path instead of an orphaned WAL.
+ * @returns absolute path of the backup copy.
+ */
 async function backupCorruptDatabase(
   file: string,
   now: () => Date,
   logger: SpaceStoreLogger,
 ): Promise<string> {
-  const stamp = corruptStamp(now);
-  const target = `${file}.corrupt-${stamp}`;
-  for (const candidate of [file, `${file}-wal`, `${file}-shm`]) {
+  const target = `${file}.corrupt-${corruptStamp(now)}`;
+  for (const suffix of CORRUPT_SUFFIXES) {
     try {
-      await rename(candidate, `${target}${candidate.slice(file.length)}`);
+      await rename(`${file}${suffix}`, `${target}${suffix}`);
     } catch {
-      // Missing files are fine; the main database rename matters most.
+      // Missing sidecars are expected; only the main database is mandatory.
     }
+  }
+  try {
+    await rename(file, target);
+  } catch (error) {
+    logger.warn?.(
+      `[alter-dsh-space] Space 数据库损坏，但无法备份原文件：${describeError(error)}`,
+    );
+    throw new Error(
+      `Space 数据库无法读取且无法备份（${describeError(error)}），已保留原文件`,
+    );
   }
   logger.warn?.(
     `[alter-dsh-space] Space 数据库损坏，已备份到 ${target} 并重建默认数据`,
   );
   return target;
+}
+
+/**
+ * Bound the corruption backups: keep the newest group(s) within a byte cap so
+ * a recurring failure cannot fill the disk. Never deletes the newest group.
+ */
+async function pruneCorruptBackups(directory: string): Promise<void> {
+  let names: string[];
+  try {
+    names = await readdir(directory);
+  } catch {
+    return;
+  }
+  const prefix = `${SPACE_DB_FILE}.corrupt-`;
+  const groups = new Map<string, string[]>();
+  for (const name of names) {
+    if (!name.startsWith(prefix)) continue;
+    const stamp = name.slice(prefix.length).replace(/-(?:wal|shm|journal)$/u, '');
+    const files = groups.get(stamp) ?? [];
+    files.push(name);
+    groups.set(stamp, files);
+  }
+  const ordered = [...groups.entries()].sort(([left], [right]) =>
+    right.localeCompare(left),
+  );
+  let keptGroups = 0;
+  let keptBytes = 0;
+  for (const [, files] of ordered) {
+    let bytes = 0;
+    for (const name of files) {
+      try {
+        bytes += (await stat(join(directory, name))).size;
+      } catch {
+        // A vanished file contributes nothing.
+      }
+    }
+    const keep =
+      keptGroups === 0 ||
+      (keptGroups < MAX_CORRUPT_BACKUPS &&
+        keptBytes + bytes <= MAX_CORRUPT_BACKUP_BYTES);
+    if (keep) {
+      keptGroups += 1;
+      keptBytes += bytes;
+      continue;
+    }
+    for (const name of files) {
+      try {
+        await rm(join(directory, name), { force: true });
+      } catch {
+        // Pruning is best-effort; startup must not fail on it.
+      }
+    }
+  }
+}
+
+/** Read the persisted storage policy JSON from `meta`. */
+function readStorageSettingsValue(db: DatabaseSync): string | undefined {
+  const row = db
+    .prepare('SELECT value FROM meta WHERE key = ?')
+    .get(STORAGE_SETTINGS_KEY) as { value?: string } | undefined;
+  return typeof row?.value === 'string' ? row.value : undefined;
 }
 
 function readOrder(db: DatabaseSync, collection: Collection): string[] {
@@ -298,7 +377,7 @@ function readDatabase(db: DatabaseSync, now: () => Date): SpaceStoreData {
 }
 
 function parseEntityRow(
-  collection: Collection,
+  _collection: Collection,
   id: string,
   raw: string,
 ): Entity {
@@ -417,7 +496,7 @@ function applyWritePlan(
         for (const id of row.deletes)
           db.prepare(`DELETE FROM ${row.collection} WHERE id = ?`).run(id);
       } finally {
-        upsert.close();
+        closeStatement(upsert);
       }
       if (row.order) setMeta(db, `${ORDER_PREFIX}${row.collection}`, JSON.stringify(row.order));
     }
@@ -431,7 +510,7 @@ function applyWritePlan(
       for (const spaceId of plan.hubDeletes)
         db.prepare('DELETE FROM hub WHERE space_id = ?').run(spaceId);
     } finally {
-      hubUpsert.close();
+      closeStatement(hubUpsert);
     }
     setMeta(db, 'updated_at', new Date().toISOString());
     db.exec('COMMIT');
@@ -462,7 +541,7 @@ function setMeta(db: DatabaseSync, key: string, value: string): void {
   ).run(key, value);
 }
 
-/** Replace every row in one transaction; used for first run, imports and legacy JSON. */
+/** Replace every row in one transaction; used when creating a new database. */
 function persistAll(db: DatabaseSync, data: SpaceStoreData): void {
   const upsertMeta = db.prepare(
     `INSERT INTO meta (key, value) VALUES (?, ?)
@@ -477,7 +556,7 @@ function persistAll(db: DatabaseSync, data: SpaceStoreData): void {
         for (const entity of data[collection])
           insert.run(String(entity.id), JSON.stringify(entity));
       } finally {
-        insert.close();
+        closeStatement(insert);
       }
       upsertMeta.run(
         `${ORDER_PREFIX}${collection}`,
@@ -490,7 +569,7 @@ function persistAll(db: DatabaseSync, data: SpaceStoreData): void {
       for (const [spaceId, snapshot] of Object.entries(data.hub))
         hubInsert.run(spaceId, JSON.stringify(snapshot));
     } finally {
-      hubInsert.close();
+      closeStatement(hubInsert);
     }
     upsertMeta.run('updated_at', new Date().toISOString());
     db.exec('COMMIT');
@@ -502,36 +581,7 @@ function persistAll(db: DatabaseSync, data: SpaceStoreData): void {
     }
     throw error;
   } finally {
-    upsertMeta.close();
-  }
-}
-
-async function readLegacyJson(
-  directory: string,
-  logger: SpaceStoreLogger,
-): Promise<SpaceStoreData | undefined> {
-  const file = join(directory, LEGACY_JSON_FILE);
-  let raw: string;
-  try {
-    raw = await readFile(file, 'utf8');
-  } catch {
-    return undefined;
-  }
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    const data = parseSpaceStoreData(parsed);
-    if (!data) {
-      logger.warn?.(
-        `[alter-dsh-space] 旧版 ${LEGACY_JSON_FILE} 无法解析，已忽略（文件保留）`,
-      );
-      return undefined;
-    }
-    return data;
-  } catch {
-    logger.warn?.(
-      `[alter-dsh-space] 旧版 ${LEGACY_JSON_FILE} 不是合法 JSON，已忽略（文件保留）`,
-    );
-    return undefined;
+    closeStatement(upsertMeta);
   }
 }
 
@@ -546,13 +596,6 @@ function isDatabaseEmpty(db: DatabaseSync): boolean {
     | { count?: number }
     | undefined;
   return Number(hub?.count ?? 0) === 0;
-}
-
-function countEntities(data: SpaceStoreData): Record<string, number> {
-  const counts: Record<string, number> = {};
-  for (const collection of COLLECTIONS) counts[collection] = data[collection].length;
-  counts.hubs = Object.keys(data.hub).length;
-  return counts;
 }
 
 /**
@@ -570,23 +613,47 @@ export async function openSpaceStore(
   await mkdir(options.directory, { recursive: true, mode: 0o700 });
   const file = join(options.directory, SPACE_DB_FILE);
 
-  let db = openDatabase(file);
-  configureDatabase(db);
+  let db: DatabaseSync;
   let recovered = false;
+  let candidate: DatabaseSync | undefined;
   try {
-    if (!quickCheck(db)) recovered = true;
-  } catch {
+    candidate = openDatabase(file);
+    configureDatabase(candidate);
+    if (!quickCheck(candidate)) recovered = true;
+  } catch (error) {
+    // Only "not a database" failures mean corruption. A lock, permission or
+    // I/O problem must keep the file untouched and surface its real cause
+    // instead of moving a healthy database aside.
+    if (!isCorruptionError(error)) {
+      try {
+        candidate?.close();
+      } catch {
+        // Ignore close failure while reporting the original error.
+      }
+      throw error;
+    }
     recovered = true;
   }
   if (recovered) {
     try {
-      db.close();
+      candidate?.close();
     } catch {
       // Ignore close failure after a corrupt read.
     }
     await backupCorruptDatabase(file, now, logger);
     db = openDatabase(file);
     configureDatabase(db);
+    // Retention: repeated corruption must not accumulate full copies forever.
+    await pruneCorruptBackups(options.directory).catch(() => undefined);
+  } else {
+    db = candidate!;
+  }
+  // Drop WAL residue left behind by an unclean shutdown; later growth is
+  // bounded by `journal_size_limit`.
+  try {
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+  } catch {
+    // A busy database keeps its WAL; the limit still applies at checkpoint.
   }
   await setFileMode(file);
 
@@ -603,18 +670,12 @@ export async function openSpaceStore(
     version = FORMAT_VERSION;
   }
 
+  const storageSettings = parseStorageSettings(readStorageSettingsValue(db));
+
   const fresh = isDatabaseEmpty(db);
   let data: SpaceStoreData;
   if (fresh) {
-    const legacy = await readLegacyJson(options.directory, logger);
-    if (legacy) {
-      data = legacy;
-      logger.info?.(
-        `[alter-dsh-space] 已把旧版 ${LEGACY_JSON_FILE} 导入 ${SPACE_DB_FILE}`,
-      );
-    } else {
-      data = createDefaultData(now());
-    }
+    data = createDefaultData(now());
     persistAll(db, data);
     await setFileMode(file);
   } else {
@@ -631,10 +692,20 @@ export async function openSpaceStore(
 
   let closed = false;
   let queue: Promise<void> = Promise.resolve();
+  let currentSettings = storageSettings;
+
+  function enqueue<T>(job: () => T | Promise<T>): Promise<T> {
+    if (closed) return Promise.reject(new Error('Space 数据已关闭'));
+    const run = queue.then(job);
+    queue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
 
   function update<T>(change: (value: SpaceStoreData) => T): Promise<T> {
-    if (closed) return Promise.reject(new Error('Space 数据已关闭'));
-    const run = queue.then(async () => {
+    return enqueue(async () => {
       const snapshot = structuredClone(data);
       let result: T;
       try {
@@ -669,36 +740,35 @@ export async function openSpaceStore(
       }
       return result;
     });
-    queue = run.then(
-      () => undefined,
-      () => undefined,
-    );
-    return run;
   }
 
   return {
     file,
     read: () => data,
     update,
-    isEmpty: () => isPristineSpaceData(data),
-    importData(database: SpaceStoreData) {
-      const total = COLLECTIONS.reduce(
-        (sum, collection) => sum + database[collection].length,
-        0,
-      );
-      if (total > MAX_IMPORT_ENTITIES)
-        throw new Error('导入数据量超过上限，已拒绝');
-      return update((value) => {
-        if (!isPristineSpaceData(value)) {
-          return { imported: false, reason: 'host-not-empty' as const };
+    getStorageSettings: () => ({ ...currentSettings }),
+    setStorageSettings(next) {
+      const value = clampStorageSettings(next);
+      return enqueue(() => {
+        db.exec('BEGIN IMMEDIATE');
+        try {
+          setMeta(db, STORAGE_SETTINGS_KEY, JSON.stringify(value));
+          db.exec('COMMIT');
+        } catch (error) {
+          try {
+            db.exec('ROLLBACK');
+          } catch {
+            // A failed transaction may already be rolled back by SQLite.
+          }
+          throw error;
         }
-        value.version = 1;
-        for (const collection of COLLECTIONS) {
-          const replacement = database[collection].slice();
-          Object.assign(value, { [collection]: replacement });
-        }
-        value.hub = { ...database.hub };
-        return { imported: true as const, counts: countEntities(database) };
+        currentSettings = value;
+      });
+    },
+    snapshotInto(destination) {
+      return enqueue(() => {
+        const target = destination.replaceAll("'", "''");
+        db.exec(`VACUUM INTO '${target}'`);
       });
     },
     async close() {

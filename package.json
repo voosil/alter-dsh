@@ -3,18 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Space feature for the DSH Web client: space directory, documents, thoughts, hub overview, activity, archive and configuration.",
+  "description": "Self-contained Space feature for the DSH Web client: SQLite-backed Host authority, browser RPC client, space directory, documents, thoughts, hub overview, activity, archive and configuration.",
   "exports": {
-    ".": "./index.js",
+    ".": "./lib/host/index.js",
     "./client": "./client.js",
     "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg"
   },
   "files": [
-    "index.js",
     "client.js",
     "cordis.patch.yml",
+    "lib/",
     "locale/*.json",
     "icon.svg"
   ],
@@ -28,15 +28,19 @@
       "inject": [
         "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-ui-layout",
-        "@deepseek-ai/dsh-client-ui-sidebar"
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-connection"
       ]
     }
   },
   "scripts": {
-    "build": "node build/build.mjs",
-    "typecheck": "tsc --noEmit",
+    "build:client": "node build/build.mjs",
+    "build:host": "tsc -p tsconfig.host.json",
+    "build": "node build/build.mjs && tsc -p tsconfig.host.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.host.json --noEmit",
+    "test": "vitest run",
     "verify": "node scripts/verify.mjs",
-    "check": "node build/build.mjs && node scripts/verify.mjs && tsc --noEmit"
+    "check": "node build/build.mjs && tsc -p tsconfig.host.json && node scripts/verify.mjs && tsc -p tsconfig.json --noEmit && tsc -p tsconfig.host.json --noEmit && vitest run"
   },
   "engines": {
     "node": ">=24.0.0"
@@ -47,6 +51,7 @@
     "@radix-ui/react-dropdown-menu": "2.2.1",
     "@radix-ui/react-popover": "1.3.1",
     "@radix-ui/react-tooltip": "1.4.1",
+    "@types/node": "26.6.5",
     "@types/react": "19.2.2",
     "@types/react-dom": "19.2.2",
     "@xterm/addon-fit": "^0.11.0",
@@ -55,6 +60,7 @@
     "react": "19.2.6",
     "react-dom": "19.2.6",
     "typescript": "5.9.2",
-    "vite": "8.3.4"
+    "vite": "8.3.4",
+    "vitest": "5.0.4"
   }
 }

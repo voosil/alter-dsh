@@ -1,27 +1,22 @@
 /**
  * Browser-facing RPC dispatch for the Space authority.
  *
- * The Host registers this handler on a DSH Connection RPC channel
- * (`ctx.connection.rpc.handle`), which already enforces browser authentication
- * and the Host/Origin fence. Requests carry `{ args: unknown[] }`; a result is
+ * The Host registers this handler on a DSH Connection RPC route
+ * (`ctx.connection.fetch`), which already enforces browser authentication and
+ * the Host/Origin fence. Requests carry `{ op, args }`; a result is
  * `{ value }` or `{ error: { code, message } }`.
- *
- * `migrate.import` is the one non-SpaceService endpoint: it accepts the
- * normalized browser-local database and imports it only while the SQLite
- * authority is still pristine.
  */
-import type { HubSnapshot, SpaceService } from '@alter/protocol';
-import type {
-  SpaceStoreData,
-} from '../vendor/service/src/contracts.js';
-import type { SpaceStoreHandle } from './store.js';
+import type { SpaceService } from '@alter/protocol';
+import type { SpaceStorageApi } from './storage.js';
 import {
-  DEFAULT_SPACE_ID,
-  DEFAULT_SPACE_NAME,
-} from './store.js';
+  STORAGE_LIMITS,
+  type StorageSettings,
+} from './settings.js';
 
-/** RPC channel the browser calls; also the client-side constant. */
-export const RPC_CHANNEL = '/alter-space';
+/** Exact `/api` fetch-route path the browser posts to (Connection owns auth). */
+export const RPC_ROUTE_PATH = '/api/alter-space';
+/** Endpoint name the browser puts in the Connection RPC envelope. */
+export const RPC_ENDPOINT = 'alter-space';
 
 const SPACE_METHODS = [
   'listSpaces',
@@ -87,30 +82,13 @@ const HUB_METHODS = [
   'remove',
 ] as const;
 
+const STORAGE_METHODS = ['get', 'estimate', 'set'] as const;
+
 const SPACE_METHOD_SET: ReadonlySet<string> = new Set(SPACE_METHODS);
 const HUB_METHOD_SET: ReadonlySet<string> = new Set(HUB_METHODS);
+const STORAGE_METHOD_SET: ReadonlySet<string> = new Set(STORAGE_METHODS);
 
 const MAX_ARGS = 16;
-const MAX_IMPORT_ENTITIES = 500_000;
-
-const BUILTIN_PLUGINS: HubSnapshot['plugins'] = [
-  {
-    id: 'overview',
-    label: '概览',
-    description: '空间近况、活动与使用统计',
-    builtin: true,
-    required: true,
-    enabled: true,
-  },
-  {
-    id: 'config',
-    label: '配置',
-    description: '空间信息、协作者与插件',
-    builtin: true,
-    required: true,
-    enabled: true,
-  },
-];
 
 /** One RPC failure with a stable machine code. */
 export class SpaceRpcError extends Error {
@@ -131,9 +109,8 @@ export type SpaceRpcHandler = (
 ) => Promise<unknown>;
 
 export interface SpaceRpcOptions {
-  store: SpaceStoreHandle;
   service: SpaceService;
-  now: () => Date;
+  storage: SpaceStorageApi;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -151,208 +128,39 @@ function normalizeArgs(payload: unknown): unknown[] {
   return args.slice(0, MAX_ARGS);
 }
 
-/** Imported entity rows keep their JSON shape; invalid ids are dropped. */
-function collectEntities(value: unknown): Array<Record<string, unknown>> {
-  if (!Array.isArray(value)) return [];
-  const seen = new Set<string>();
-  const entities: Array<Record<string, unknown>> = [];
-  for (const item of value) {
-    if (!isPlainObject(item)) continue;
-    const id = item.id;
-    if (typeof id !== 'string' || id.length === 0 || seen.has(id)) continue;
-    seen.add(id);
-    entities.push(item);
-  }
-  return entities;
-}
+const STORAGE_SETTING_KEYS = ['historyLimit', 'snapshotKeep'] as const;
 
-function filterBy(
-  entities: Array<Record<string, unknown>>,
-  field: string,
-  allowed: ReadonlySet<string>,
-): Array<Record<string, unknown>> {
-  return entities.filter((entity) => {
-    const value = entity[field];
-    return typeof value === 'string' && allowed.has(value);
-  });
-}
-
-function defaultSpace(now: Date) {
-  return {
-    id: DEFAULT_SPACE_ID,
-    name: DEFAULT_SPACE_NAME,
-    goal: '',
-    directories: [] as string[],
-    collaboratorIds: [] as string[],
-    isDefault: true,
-    order: 0,
-    createdAt: now.toISOString(),
-    archivedAt: null,
-  };
-}
-
-function emptyJourney(at: string): HubSnapshot['journey'] {
-  return {
-    vision: '',
-    shortTerm: '',
-    longTerm: '',
-    principles: '',
-    background: '',
-    updatedAt: at,
-    nodes: [],
-  };
-}
-
-function normalizeSnapshot(value: unknown, at: string): HubSnapshot {
-  if (!isPlainObject(value)) {
-    return {
-      matters: [],
-      journey: emptyJourney(at),
-      observations: [],
-      plugins: BUILTIN_PLUGINS.map((plugin) => ({ ...plugin })),
-      policy: 'ask',
-      onboarding: 'complete',
-      summary: { content: '', updatedAt: '' },
-      usage: [],
-    };
-  }
-  const plugins = Array.isArray(value.plugins)
-    ? value.plugins
-        .filter(isPlainObject)
-        .filter((plugin) => typeof plugin.id === 'string')
-        .map((plugin) => ({
-          id: String(plugin.id),
-          label: typeof plugin.label === 'string' ? plugin.label : String(plugin.id),
-          description:
-            typeof plugin.description === 'string' ? plugin.description : '',
-          builtin: plugin.builtin === true,
-          required: plugin.required === true,
-          enabled: plugin.enabled !== false,
-          ...(typeof plugin.content === 'string'
-            ? { content: plugin.content }
-            : {}),
-        }))
-    : [];
-  const journey = isPlainObject(value.journey)
-    ? { ...emptyJourney(at), ...value.journey }
-    : emptyJourney(at);
-  const summary = isPlainObject(value.summary) ? value.summary : {};
-  const policy =
-    value.policy === 'judge' || value.policy === 'autonomous'
-      ? value.policy
-      : 'ask';
-  const onboarding =
-    value.onboarding === 'pending' || value.onboarding === 'skipped'
-      ? value.onboarding
-      : 'complete';
-  return {
-    matters: Array.isArray(value.matters)
-      ? (value.matters.filter(isPlainObject) as unknown as HubSnapshot['matters'])
-      : [],
-    journey,
-    observations: Array.isArray(value.observations)
-      ? (value.observations.filter(
-          isPlainObject,
-        ) as unknown as HubSnapshot['observations'])
-      : [],
-    plugins: plugins.length > 0 ? plugins : BUILTIN_PLUGINS.map((p) => ({ ...p })),
-    policy,
-    onboarding,
-    summary: {
-      content: typeof summary.content === 'string' ? summary.content : '',
-      updatedAt:
-        typeof summary.updatedAt === 'string' ? summary.updatedAt : '',
-    },
-    usage: Array.isArray(value.usage)
-      ? (value.usage.filter(isPlainObject) as unknown as HubSnapshot['usage'])
-      : [],
-  };
-}
-
-interface ImportPayload {
-  database: Record<string, unknown>;
-  hubs: Record<string, unknown>;
-}
-
-function readImportPayload(input: unknown): ImportPayload {
+/** Validate one storage settings patch; absent fields keep their value. */
+function readStoragePatch(input: unknown): Partial<StorageSettings> {
+  if (input === undefined) return {};
   if (!isPlainObject(input))
-    throw new SpaceRpcError('space/invalid-input', '导入载荷必须是对象');
-  const database = input.database;
-  if (!isPlainObject(database))
-    throw new SpaceRpcError('space/invalid-input', '缺少 database');
-  if (database.version !== 1)
-    throw new SpaceRpcError('space/invalid-input', '不支持的数据版本');
-  const hubs = input.hubs;
-  return { database, hubs: isPlainObject(hubs) ? hubs : {} };
-}
-
-/** Validate, de-duplicate and normalize the browser-local database. */
-function buildImportData(
-  payload: ImportPayload,
-  now: () => Date,
-): { database: SpaceStoreData; counts: Record<string, number> } {
-  const at = now().toISOString();
-  const spaces = collectEntities(payload.database.spaces);
-  if (!spaces.some((space) => space.id === DEFAULT_SPACE_ID)) {
-    spaces.unshift(defaultSpace(now()) as unknown as Record<string, unknown>);
+    throw new SpaceRpcError('space/invalid-input', '存储设置必须是对象');
+  const patch: Partial<StorageSettings> = {};
+  for (const key of STORAGE_SETTING_KEYS) {
+    const value = input[key];
+    if (value === undefined) continue;
+    const limits = STORAGE_LIMITS[key];
+    if (typeof value !== 'number' || !Number.isInteger(value))
+      throw new SpaceRpcError(
+        'space/invalid-input',
+        `${key} 必须是整数`,
+      );
+    if (value < limits.min || value > limits.max)
+      throw new SpaceRpcError(
+        'space/invalid-input',
+        `${key} 需在 ${limits.min}–${limits.max} 之间`,
+      );
+    patch[key] = value;
   }
-  const spaceIds = new Set(spaces.map((space) => String(space.id)));
-  const nodes = filterBy(collectEntities(payload.database.nodes), 'spaceId', spaceIds);
-  const nodeIds = new Set(nodes.map((node) => String(node.id)));
-  const comments = filterBy(collectEntities(payload.database.comments), 'docId', nodeIds);
-  const versions = filterBy(collectEntities(payload.database.versions), 'docId', nodeIds);
-  const thoughts = filterBy(
-    collectEntities(payload.database.thoughts),
-    'spaceId',
-    spaceIds,
-  );
-  const agents = collectEntities(payload.database.agents);
-  const tasks = filterBy(collectEntities(payload.database.tasks), 'spaceId', spaceIds);
-  const events = filterBy(collectEntities(payload.database.events), 'spaceId', spaceIds);
-  const milestones = filterBy(
-    collectEntities(payload.database.milestones),
-    'spaceId',
-    spaceIds,
-  );
-  const hub: Record<string, HubSnapshot> = {};
-  for (const spaceId of spaceIds) {
-    const snapshot = payload.hubs[spaceId];
-    if (snapshot !== undefined) hub[spaceId] = normalizeSnapshot(snapshot, at);
-  }
-  const collections = {
-    spaces,
-    nodes,
-    thoughts,
-    comments,
-    versions,
-    agents,
-    tasks,
-    events,
-    milestones,
-  };
-  const counts: Record<string, number> = {};
-  let total = 0;
-  for (const [name, items] of Object.entries(collections)) {
-    counts[name] = items.length;
-    total += items.length;
-  }
-  counts.hubs = Object.keys(hub).length;
-  if (total > MAX_IMPORT_ENTITIES)
-    throw new SpaceRpcError('space/payload-too-large', '导入数据量超过上限');
-  const database = {
-    version: 1,
-    ...collections,
-    hub,
-  } as unknown as SpaceStoreData;
-  return { database, counts };
+  return patch;
 }
 
 /**
  * Create the RPC handler for one opened authority.
- * @param options - opened store, composed service and business clock.
+ * @param options - the composed business service.
  */
 export function createSpaceRpc(options: SpaceRpcOptions): SpaceRpcHandler {
-  const { store, service, now } = options;
+  const { service, storage } = options;
   return async (endpoint, payload) => {
     const args = normalizeArgs(payload);
     try {
@@ -363,16 +171,12 @@ export function createSpaceRpc(options: SpaceRpcOptions): SpaceRpcHandler {
           `未知的接口 ${endpoint}`,
         );
       }
-      if (endpoint === 'migrate.import') {
-        const importPayload = readImportPayload(args[0]);
-        const { database, counts } = buildImportData(importPayload, now);
-        const result = await store.importData(database);
-        return {
-          value:
-            result.imported === true
-              ? { imported: true, counts: result.counts }
-              : { imported: false, reason: result.reason },
-        };
+      if (group === 'storage' && STORAGE_METHOD_SET.has(method)) {
+        if (method === 'get') return { value: await storage.get() };
+        const patch = readStoragePatch(args[0]);
+        if (method === 'estimate')
+          return { value: await storage.estimate(patch) };
+        return { value: await storage.set(patch) };
       }
       if (group === 'space' && SPACE_METHOD_SET.has(method)) {
         const target = service as unknown as Record<
@@ -398,5 +202,61 @@ export function createSpaceRpc(options: SpaceRpcOptions): SpaceRpcHandler {
         error: { code: 'space/failed', message: messageOf(error) },
       };
     }
+  };
+}
+
+interface ConnectionRequestEnvelope {
+  rpcId: string;
+  payload: unknown;
+}
+
+function parseConnectionEnvelope(body: unknown): ConnectionRequestEnvelope | undefined {
+  if (!isPlainObject(body)) return undefined;
+  if (body.type !== 'client-request') return undefined;
+  if (typeof body.rpcId !== 'string' || body.rpcId.length === 0) return undefined;
+  return { rpcId: body.rpcId, payload: body.payload };
+}
+
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  });
+}
+
+/**
+ * Fetch-route handler mounted at {@link RPC_ROUTE_PATH} through
+ * `ctx.connection.fetch.register`. Connection authenticates the browser and
+ * calls this with the validated peer; the request body is the Connection RPC
+ * envelope, so the response must echo its `rpcId`.
+ */
+export function createSpaceFetchRoute(options: SpaceRpcOptions) {
+  const handler = createSpaceRpc(options);
+  return async (request: Request): Promise<Response> => {
+    if (request.method !== 'POST')
+      return jsonResponse(405, { error: 'method_not_allowed' });
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return jsonResponse(400, { error: 'invalid_json' });
+    }
+    const envelope = parseConnectionEnvelope(body);
+    if (!envelope) return jsonResponse(400, { error: 'invalid_envelope' });
+    const payload = isPlainObject(envelope.payload) ? envelope.payload : {};
+    const op = typeof payload.op === 'string' ? payload.op : '';
+    let result: unknown;
+    try {
+      result = await handler(op, payload, request.signal, undefined);
+    } catch (error) {
+      return jsonResponse(500, { error: 'handler_failure' });
+    }
+    // Business failures stay inside the success value: the browser unwraps
+    // `{ value }` / `{ error }` without depending on Connection's error schema.
+    return jsonResponse(200, {
+      type: 'server-response',
+      rpcId: envelope.rpcId,
+      result: { ok: true, value: result },
+    });
   };
 }

@@ -2,9 +2,9 @@
 /**
  * Build the self-contained Space client plugin bundle.
  *
- * The Space sources are vendored into this repository (`vendor/`) and the
- * plugin seam lives in `src/`; this script only compiles them into the DSH
- * client bundle format:
+ * The Space UI sources are vendored into this repository (`vendor/`) and the
+ * plugin seam lives in `src/`; this script only compiles the browser half into
+ * the DSH client bundle format:
  *
  *   window.__ModuleLoader__.load({ id, factory: (require) => exports })
  *
@@ -35,30 +35,6 @@ const pkg = JSON.parse(
 /** Source root of a vendored package, e.g. `vendorSrc('ui-space')`. */
 const vendorSrc = (name) => path.join(vendor, name, 'src');
 
-/**
- * The vendored data layer (`vendor/mock-space`) keeps the design-stage service
- * implementation as a browser-local store. Its seed must not ship demo
- * spaces/notes/thoughts, so replace the seed with the plugin-local minimal seed
- * for the browser bundle.
- */
-function minimalMockSeed() {
-  const mockSpaceSrc = vendorSrc('mock-space') + path.sep;
-  return {
-    name: 'alter-dsh-space:minimal-mock-seed',
-    enforce: 'pre',
-    resolveId(source, importer) {
-      if (!importer?.startsWith(mockSpaceSrc)) return;
-      if (
-        source !== './seed' &&
-        source !== './seed.js' &&
-        source !== './seed.ts'
-      )
-        return;
-      return path.join(pluginRoot, 'src/minimal-seed.js');
-    },
-  };
-}
-
 /** Vendored packages keep their own source layout and relative imports. */
 const alias = [
   {
@@ -78,12 +54,14 @@ const alias = [
     replacement: path.join(vendorSrc('ui-system'), 'index.ts'),
   },
   {
-    find: /^@alter\/ui-workbench$/,
-    replacement: path.join(vendorSrc('ui-workbench'), 'index.ts'),
+    // The upstream settings package registers through Alter's module registry;
+    // the DSH port reuses only its page component, mounted by the panel shell.
+    find: /^@alter\/ui-settings\/SettingsPage$/,
+    replacement: path.join(vendorSrc('ui-settings'), 'SettingsPage.tsx'),
   },
   {
-    find: /^@alter\/mock-space$/,
-    replacement: path.join(vendorSrc('mock-space'), 'index.ts'),
+    find: /^@alter\/ui-workbench$/,
+    replacement: path.join(vendorSrc('ui-workbench'), 'index.ts'),
   },
   {
     find: /^@alter\/mock-workbench$/,
@@ -106,7 +84,6 @@ await build({
   root: pluginRoot,
   logLevel: 'warn',
   define: { 'process.env.NODE_ENV': JSON.stringify('production') },
-  plugins: [minimalMockSeed()],
   resolve: { alias },
   build: {
     outDir: 'dist',
@@ -149,7 +126,7 @@ function adaptCss(css) {
   return css
     .replaceAll('100dvh', '100%')
     .replace(/(:root[^{}]*\{[^}]*?)color-scheme:\s*light;?/g, '$1')
-    .replace(/(^|[}])kbd\{/g, '$1.alter-space-host kbd{');
+    .replace(/(^|[}])\s*kbd\s*\{/g, '$1.alter-space-host kbd{');
 }
 
 const css = cssFile

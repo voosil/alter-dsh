@@ -2,12 +2,12 @@
 /**
  * Static validation for the built self-contained Space plugin package.
  *
- * This checks the pieces the DSH profile loader and the browser module system
- * consume: the manifest declarations, the bundle patch, display resources, the
- * generated loader registration, the external module requests, and the fact
- * that the vendored Space sources are actually part of this repository. It does
- * not render the UI; live verification runs through the Harness inspection
- * tools.
+ * Checks the pieces the DSH profile loader and the browser module system
+ * consume: manifest declarations, bundle patch, display resources, the
+ * generated client registration and its external requests, the compiled Host
+ * half (SQLite + RPC), and the fact that all Space sources live in this
+ * repository. It does not render the UI; live verification runs through the
+ * Harness inspection tools and the running page.
  */
 import { readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
@@ -26,12 +26,13 @@ function check(condition, message) {
 const read = (relative) => readFile(path.join(pluginRoot, relative), 'utf8');
 
 const pkg = JSON.parse(await read('package.json'));
-check(
-  pkg.name === '@alter-dsh/space',
-  'package name must be @alter-dsh/space',
-);
+check(pkg.name === '@alter-dsh/space', 'package name must be @alter-dsh/space');
 check(Boolean(pkg.version), 'package version is required');
 check(pkg.type === 'module', 'package must be an ES module');
+check(
+  pkg.exports?.['.'] === './lib/host/index.js',
+  'exports(".") must point at the compiled Host half',
+);
 check(
   pkg.exports?.['./client'] === './client.js',
   'exports("./client") must point at client.js',
@@ -41,18 +42,22 @@ check(
   'dsh.bundle.patch must point at cordis.patch.yml',
 );
 check(pkg.dsh?.client?.platform === 'web', 'dsh.client.platform must be web');
-for (const resource of [
-  'client.js',
-  'cordis.patch.yml',
-  'locale/en.json',
-  'icon.svg',
-]) {
+check(
+  pkg.dsh?.client?.inject?.includes('@deepseek-ai/dsh-client-connection'),
+  'dsh.client.inject must include @deepseek-ai/dsh-client-connection',
+);
+for (const resource of ['client.js', 'cordis.patch.yml', 'icon.svg']) {
   check(
     pkg.files?.includes(resource) ||
       pkg.files?.some((file) => file.startsWith(resource.split('/')[0])),
     `files must include ${resource}`,
   );
 }
+check(pkg.files?.some((file) => file.startsWith('lib')), 'files must include lib/');
+check(
+  (await readdir(pluginRoot)).includes('index.js') === false,
+  'the JavaScript Host entry index.js must not sit at the package root',
+);
 
 const patch = await read('cordis.patch.yml');
 check(
@@ -82,9 +87,10 @@ check(
 // The feature must be carried by this repository, not by an external checkout.
 const vendored = [
   'client-modules',
-  'mock-space',
   'mock-workbench',
   'protocol',
+  'service',
+  'ui-settings',
   'ui-space',
   'ui-system',
   'ui-workbench',
@@ -109,7 +115,83 @@ check(
   ).includes('SpaceApp.tsx'),
   'vendor/ui-space/src must carry the Space application entry',
 );
+check(
+  (
+    await readdir(path.join(pluginRoot, 'vendor', 'ui-settings', 'src'), {
+      recursive: true,
+    })
+  ).includes('SettingsPage.tsx'),
+  'vendor/ui-settings/src must carry the reused settings page',
+);
+check(
+  (
+    await readdir(path.join(pluginRoot, 'vendor', 'service', 'src'), {
+      recursive: true,
+    })
+  ).includes('service.ts'),
+  'vendor/service/src must carry the upstream Space business service',
+);
 
+// --- Host half -------------------------------------------------------------
+const hostEntry = 'lib/host/index.js';
+const host = await read(hostEntry);
+const hostSyntax = spawnSync(
+  process.execPath,
+  ['--check', path.join(pluginRoot, hostEntry)],
+  { encoding: 'utf8' },
+);
+check(hostSyntax.status === 0, `node --check ${hostEntry} failed: ${hostSyntax.stderr.trim()}`);
+const hostRpc = await read('lib/host/rpc.js');
+check(
+  hostRpc.includes('/api/alter-space') && hostRpc.includes('alter-space'),
+  'Host half must register the /api/alter-space fetch route',
+);
+check(
+  host.includes('connection') && host.includes('fetch'),
+  'Host half must register through ctx.connection.fetch',
+);
+for (const fragment of ['space.db', 'node:sqlite']) {
+  const storeFile = await read('lib/host/store.js');
+  check(
+    storeFile.includes(fragment),
+    `compiled store must carry ${JSON.stringify(fragment)}`,
+  );
+}
+const hostFiles = await readdir(path.join(pluginRoot, 'lib'), {
+  recursive: true,
+});
+const hostScripts = hostFiles
+  .filter((file) => file.endsWith('.js'))
+  .map((file) => path.join(pluginRoot, 'lib', file));
+for (const script of hostScripts) {
+  const text = await readFile(script, 'utf8');
+  check(
+    !text.includes('from "@alter/') && !text.includes("from '@alter/"),
+    `${path.relative(pluginRoot, script)} must not import @alter runtime code`,
+  );
+  for (const match of text.matchAll(/from "([^"]+)"/g)) {
+    const specifier = match[1];
+    check(
+      specifier.startsWith('node:') ||
+        specifier.startsWith('./') ||
+        specifier.startsWith('../'),
+      `${path.relative(pluginRoot, script)} imports unexpected module ${specifier}`,
+    );
+  }
+}
+for (const fragment of ['storage.get', 'storage.set', 'storage.estimate']) {
+  check(
+    (await read('lib/host/rpc.js')).includes(fragment),
+    `compiled RPC must carry ${fragment}`,
+  );
+}
+check(
+  hostFiles.includes('host/storage.js') && hostFiles.includes('host/backup.js'),
+  'compiled Host half must carry the storage controller and snapshot scheduler',
+);
+notes.push(`host scripts: ${String(hostScripts.length)}`);
+
+// --- Client half -----------------------------------------------------------
 const client = await read('client.js');
 check(
   client.includes('window.__ModuleLoader__.load('),
@@ -160,14 +242,10 @@ check(
 const syntax = spawnSync(
   process.execPath,
   ['--check', path.join(pluginRoot, 'client.js')],
-  {
-    encoding: 'utf8',
-  },
+  { encoding: 'utf8' },
 );
 check(syntax.status === 0, `node --check failed: ${syntax.stderr.trim()}`);
 
-// Feature evidence: tokens, the Space module itself, the data layer and the
-// host fit, all bundled locally.
 const escaped = client.endsWith('\n') ? client : `${client}\n`;
 check(
   escaped.includes('--alter-surface'),
@@ -182,8 +260,31 @@ check(
   'stylesheet must carry the host fit rules',
 );
 check(
+  escaped.includes('AI 协作者') && escaped.includes('创建协作者'),
+  'client bundle must carry the settings page collaborator creation UI',
+);
+check(
+  escaped.includes('#/settings') && escaped.includes('返回空间'),
+  'client bundle must carry the in-panel settings route and its back control',
+);
+check(
+  escaped.includes('alter-space-settings-back'),
+  'client bundle must carry the settings back control styles',
+);
+check(
   escaped.includes('.alter-space-host kbd'),
   'bare kbd selector from the copied CSS must be scoped to the host container',
+);
+check(
+  escaped.includes('存储与备份') &&
+    escaped.includes('版本历史上限') &&
+    escaped.includes('每日快照保留'),
+  'client bundle must carry the storage policy settings UI',
+);
+check(
+  escaped.includes('alter-space-settings-scroll') &&
+    escaped.includes('alter-space-storage'),
+  'stylesheet must carry the storage settings section layout',
 );
 check(
   !escaped.includes('100dvh'),
@@ -194,21 +295,45 @@ check(
   'color-scheme must not leak to the document root',
 );
 check(
-  escaped.includes('alter.space.mock.v4'),
-  'bundle must carry the vendored Space data layer',
+  escaped.includes('alter-space'),
+  'client bundle must reference the /alter-space RPC channel',
+);
+check(
+  !escaped.includes('保存中'),
+  'the hosted editor must keep autosave silent (no 保存中 label)',
+);
+check(
+  escaped.includes('保存失败'),
+  'the hosted editor must still surface a save-failure affordance',
+);
+check(
+  !escaped.includes('createSpaceService'),
+  'client bundle must not carry the removed mock data layer',
 );
 
-// Self-containment: no build/source file may point back at another checkout.
+// Self-containment: no build/runtime file may point back at another checkout.
 // The needle is assembled at runtime so this file does not match itself.
 const foreignCheckout = ['', 'workspace', 'indie', 'Alter', ''].join('/');
 const localSources = [
   'build/build.mjs',
-  'index.js',
   'scripts/verify.mjs',
   'src/entry.js',
-  'src/plugin-data.js',
   'src/router.js',
-  'src/minimal-seed.js',
+  'src/space-client.ts',
+  'src/space-shell.tsx',
+  'src/storage-client.ts',
+  'src/storage-settings.tsx',
+  'host/authority.ts',
+  'host/backup.ts',
+  'host/index.ts',
+  'host/retention.ts',
+  'host/rpc.ts',
+  'host/settings.ts',
+  'host/storage.ts',
+  'host/store.ts',
+  'tsconfig.json',
+  'tsconfig.host.json',
+  'vitest.config.mts',
 ];
 for (const file of localSources) {
   const text = await read(file);

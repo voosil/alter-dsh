@@ -536,9 +536,7 @@ export function DocumentView({
           <span className={styles.currentCrumb}>{title || '无标题'}</span>
         </nav>
         <div className={styles.actions}>
-          {saveState === 'saving' ? (
-            <span className={styles.saveState}>保存中…</span>
-          ) : null}
+          {/* Auto-save stays silent: the editor shows errors only. */}
           {saveState === 'error' ? (
             <button
               type="button"

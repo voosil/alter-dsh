@@ -1,25 +1,21 @@
 /**
  * The Space feature as a self-contained DSH Web client plugin.
  *
- * Everything below the two registration calls is vendored source that ships in
- * this repository under `vendor/`:
+ * The Space UI and data-layer sources are vendored into this repository under
+ * `vendor/`; the Host half (`lib/host`) owns a SQLite-backed Space authority.
+ * This file is the client assembly seam: it mounts `SpaceApp` on the Host via
+ * `ctx.connection.rpc` and registers the panel/sidebar entry.
  *
  * - `vendor/ui-space` renders the whole Space module (`SpaceApp`).
- * - `vendor/mock-space` is the browser-local data layer; its demo seed is
- *   cleaned at boot, see `plugin-data.js`.
  * - `vendor/ui-system` supplies the shared controls and the `--alter-*` tokens.
- *
- * Only the assembly seam is local to `src/`: this file maps
- * `SpaceCapabilities` onto the DSH shell (a root-scoped `main` panel keyed
- * `alter-space` plus the matching `sidebar.panellist` entry, whose id addresses
- * that key).
+ * - `src/space-client.ts` implements `SpaceService` over the Host RPC channel.
  */
 import { createElement, useEffect } from 'react';
 import { Orbit } from 'lucide-react';
-import { SpaceApp } from '@alter/ui-space/SpaceApp';
-import { createSpaceService } from '@alter/mock-space';
-import { cleanDemoData, prepareSpaceService } from './plugin-data.js';
+import { createSpaceClient } from './space-client';
+import { createSpaceStorageClient } from './storage-client';
 import { createSpaceRouter } from './router.js';
+import { SpaceShell } from './space-shell';
 import resetCss from './global-reset.css?inline';
 import '@alter/ui-system/tokens.css';
 import './host.css';
@@ -33,14 +29,7 @@ const dictionaries = {
   en: { panel: 'Space' },
 };
 
-/* One service and one route source per client run: switching panels unmounts
- * the view but keeps the Space session state, like the product's module.
- * Existing demo seed data is removed before the service reads its storage. */
-cleanDemoData();
-const service = prepareSpaceService(createSpaceService());
-const router = createSpaceRouter();
-
-function SpacePanel() {
+function SpacePanel({ service, storage, router }) {
   useEffect(() => {
     const tag = document.createElement('style');
     tag.dataset.plugin = '@alter-dsh/space';
@@ -55,7 +44,7 @@ function SpacePanel() {
   return createElement(
     'div',
     { className: 'alter-space-host' },
-    createElement(SpaceApp, { service, router }),
+    createElement(SpaceShell, { service, storage, router }),
   );
 }
 
@@ -67,13 +56,22 @@ function SpaceIcon({ size = 18 }) {
   });
 }
 
-export const inject = ['slots', 'locale'];
+export const inject = ['slots', 'locale', 'connection'];
 
 /**
  * Register the Space panel and its sidebar entry.
  * @param ctx - the client root context.
  */
 export function apply(ctx) {
+  const rpc = ctx.connection.rpc;
+  const service = createSpaceClient(rpc);
+  const storage = createSpaceStorageClient(rpc);
+  const router = createSpaceRouter();
+
+  function SpaceView() {
+    return createElement(SpacePanel, { service, storage, router });
+  }
+
   ctx.effect(
     () => ctx.locale.register(NS, dictionaries),
     'alter-space: dictionaries',
@@ -81,7 +79,7 @@ export function apply(ctx) {
   const t = ctx.locale.bind(NS);
 
   ctx.slots.inject('main', () =>
-    ctx.slots.register({ name: 'main', key: PANEL_ID }, SpacePanel),
+    ctx.slots.register({ name: 'main', key: PANEL_ID }, SpaceView),
   );
 
   ctx.slots.inject('sidebar.panellist', () =>

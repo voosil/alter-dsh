@@ -19,15 +19,27 @@
     "baseUrl": ".",
     "paths": {
       "@alter/client-modules": ["vendor/client-modules/src/index.ts"],
-      "@alter/mock-space": ["vendor/mock-space/src/index.ts"],
       "@alter/mock-workbench": ["vendor/mock-workbench/src/index.ts"],
       "@alter/protocol": ["vendor/protocol/src/index.ts"],
       "@alter/ui-space": ["vendor/ui-space/src/index.ts"],
       "@alter/ui-space/*": ["vendor/ui-space/src/*"],
+      "@alter/ui-settings/SettingsPage": [
+        "vendor/ui-settings/src/SettingsPage.tsx"
+      ],
       "@alter/ui-system": ["vendor/ui-system/src/index.ts"],
       "@alter/ui-system/tokens.css": ["vendor/ui-system/src/styles/tokens.css"],
       "@alter/ui-workbench": ["vendor/ui-workbench/src/index.ts"]
     }
   },
-  "include": ["vendor/**/*.ts", "vendor/**/*.tsx"]
+  "include": [
+    "vendor/client-modules/src",
+    "vendor/mock-workbench/src",
+    "vendor/protocol/src",
+    "vendor/ui-space/src",
+    "vendor/ui-settings/src",
+    "vendor/ui-system/src",
+    "vendor/ui-workbench/src",
+    "src/**/*.ts",
+    "src/**/*.tsx"
+  ]
 }
