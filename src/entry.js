@@ -12,7 +12,8 @@
  */
 import { createElement, useEffect } from 'react';
 import { Orbit } from 'lucide-react';
-import { createSpaceClient } from './space-client';
+import { attachDocumentClient } from './document/client-access';
+import { createSpaceClient, createSpaceDocumentClient } from './space-client';
 import { createSpaceStorageClient } from './storage-client';
 import { createSpaceRouter } from './router.js';
 import { SpaceShell } from './space-shell';
@@ -90,7 +91,10 @@ export const inject = ['slots', 'locale', 'connection'];
  */
 export function apply(ctx) {
   const rpc = ctx.connection.rpc;
-  const service = createSpaceClient(rpc);
+  const service = attachDocumentClient(
+    createSpaceClient(rpc),
+    createSpaceDocumentClient(rpc),
+  );
   const storage = createSpaceStorageClient(rpc);
   const router = createSpaceRouter();
   const pickDirectory = createHostDirectoryPicker(ctx);

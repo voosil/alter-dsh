@@ -206,6 +206,7 @@ export interface SpaceDocumentBlockRef {
 
 /** Document client mirror of the Host `doc.*` RPC endpoints. */
 export interface SpaceDocumentClient {
+  get(docId: string): Promise<unknown>;
   outline(docId: string): Promise<unknown>;
   read(docId: string, options?: Record<string, unknown>): Promise<unknown>;
   search(input: {
@@ -220,6 +221,11 @@ export interface SpaceDocumentClient {
     ops: unknown[];
     dryRun?: boolean;
     idempotencyKey?: string;
+  }): Promise<unknown>;
+  undo(input: {
+    docId: string;
+    baseRevision: number;
+    undoToken?: string;
   }): Promise<unknown>;
   generate(input: {
     docId?: string;
@@ -255,10 +261,12 @@ export function createSpaceDocumentClient(
     return undefined as T;
   }
   return {
+    get: (docId) => request('doc.get', [docId]),
     outline: (docId) => request('doc.outline', [docId]),
     read: (docId, options) => request('doc.read', [docId, options]),
     search: (input) => request('doc.search', [input]),
     applyOperations: (input) => request('doc.applyOps', [input]),
+    undo: (input) => request('doc.undo', [input]),
     generate: (input) => request('doc.generate', [input]),
     getObject: (objectId) => request('object.get', [objectId]),
   };

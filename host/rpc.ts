@@ -91,7 +91,7 @@ const HUB_METHODS = [
 
 const STORAGE_METHODS = ['get', 'estimate', 'set'] as const;
 
-const DOCUMENT_METHODS = ['outline', 'read', 'search', 'applyOps', 'generate'] as const;
+const DOCUMENT_METHODS = ['get', 'outline', 'read', 'search', 'applyOps', 'undo', 'generate'] as const;
 const OBJECT_METHODS = ['get'] as const;
 
 const SPACE_METHOD_SET: ReadonlySet<string> = new Set(SPACE_METHODS);
@@ -238,6 +238,8 @@ export function createSpaceRpc(options: SpaceRpcOptions): SpaceRpcHandler {
         if (document === undefined)
           throw new SpaceRpcError('doc/unavailable', '文档模型服务未启用');
         switch (method) {
+          case 'get':
+            return { value: await document.get(String(args[0])) };
           case 'outline':
             return { value: await document.outline(String(args[0])) };
           case 'read':
@@ -257,6 +259,12 @@ export function createSpaceRpc(options: SpaceRpcOptions): SpaceRpcHandler {
             return {
               value: await document.applyOperations(
                 (args[0] ?? {}) as ApplyOperationsInput,
+              ),
+            };
+          case 'undo':
+            return {
+              value: await document.undo(
+                (args[0] ?? {}) as Parameters<DocumentService['undo']>[0],
               ),
             };
           case 'generate':

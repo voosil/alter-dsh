@@ -243,6 +243,22 @@ describe('host plugin apply', () => {
       ]),
     ).rejects.toThrow('doc/conflict');
 
+    const ast = (await harness.call('doc.get', [generated.docId])) as {
+      revision: number;
+      doc: { blocks: Array<{ id: string; type: string }> };
+    };
+    expect(ast.revision).toBe(2);
+    expect(ast.doc.blocks.length).toBeGreaterThan(0);
+
+    const undone = (await harness.call('doc.undo', [
+      { docId: generated.docId, baseRevision: 2 },
+    ])) as { revision: number; changedBlockIds: string[] };
+    expect(undone.revision).toBe(3);
+    const restored = (await harness.call('doc.read', [generated.docId])) as {
+      markdown: string;
+    };
+    expect(restored.markdown).toContain('正文段落');
+
     await harness.teardown();
     expect(fake.definitions.size).toBe(0);
   });

@@ -21,10 +21,16 @@
 
 ## 构建期模块覆盖
 
-目前唯一的模块级覆盖是**工作目录字段**：`build/build.mjs` 把两处导入
-（`CreateSpaceDialog.tsx` → `./DirectoryField`、`ConfigView.tsx` → `../components/DirectoryField`）
-重定向到 `src/native-directory-field.tsx`。覆盖组件打开宿主目录选择器（桌面=系统对话框，
-Web=DSH 浏览），无选择器时回退内置目录浏览器；其余导入（含覆盖组件内部的回退导入）保持原解析。
+当前有两个模块级覆盖，均由 `build/build.mjs` 注册：
+
+- **工作目录字段**：把 `CreateSpaceDialog.tsx` → `./DirectoryField` 与
+  `ConfigView.tsx` → `../components/DirectoryField` 重定向到 `src/native-directory-field.tsx`。
+  覆盖组件打开宿主目录选择器（桌面=系统对话框，Web=DSH 浏览），无选择器时回退内置目录浏览器。
+- **文档视图**：把 `SpaceApp.tsx` 的 `./views/DocumentView` 重定向到
+  `src/document/adaptive-document-view.tsx`。旧 HTML 文档继续使用原编辑器；AST 文档走结构化
+  只读视图，直到 Tiptap 编辑器接入。
+
+其余导入（含覆盖模块内部对原实现的引用）保持原解析。
 
 新增覆盖必须同时改 `build/build.mjs` 并更新本节清单；不要在其他位置散落覆盖逻辑。
 

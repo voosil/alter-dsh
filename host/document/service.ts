@@ -139,7 +139,22 @@ export interface DryRunResult {
   warnings: string[];
 }
 
+export interface GetDocumentResult {
+  docId: string;
+  revision: number;
+  title: string;
+  doc: AlterDoc;
+}
+
+export interface UndoDocumentInput {
+  docId: string;
+  baseRevision: number;
+  undoToken?: string;
+  actor?: DocumentActor;
+}
+
 export interface DocumentService {
+  get(docId: string): Promise<GetDocumentResult>;
   outline(docId: string): Promise<DocumentOutlineResult>;
   read(docId: string, options?: DocumentReadOptions): Promise<DocumentReadResult>;
   search(input: {
@@ -149,6 +164,7 @@ export interface DocumentService {
     limit?: number;
   }): Promise<DocumentSearchResult>;
   applyOperations(input: ApplyOperationsInput): Promise<ApplyOperationsResult>;
+  undo(input: UndoDocumentInput): Promise<ApplyOperationsResult>;
   generate(input: GenerateDocumentInput): Promise<GenerateDocumentResult>;
   getObject(objectId: string): Promise<DocumentObjectRecord | undefined>;
   updateObject(input: {
@@ -315,6 +331,13 @@ export function createDocumentService(
   }
 
   const api: DocumentService = {
+    async get(docId) {
+      const node = findNode(store.read(), docId);
+      if (node === undefined) throw new DocumentError('doc/not-found', '文档不存在');
+      const doc = loadDocument(node);
+      return { docId, revision: doc.revision, title: node.title, doc };
+    },
+
     async outline(docId) {
       const node = findNode(store.read(), docId);
       if (node === undefined) throw new DocumentError('doc/not-found', '文档不存在');
@@ -509,6 +532,63 @@ export function createDocumentService(
         };
         if (op.result !== undefined) op.result = response as unknown as JsonValue;
         return response;
+      });
+    },
+
+    async undo(input) {
+      const actor = input.actor ?? 'alter';
+      const at = nowIsoOf(now);
+      const settings = store.getStorageSettings();
+      return store.transactDocument((data, sidecar) => {
+        const node = findNode(data, input.docId);
+        if (node === undefined) throw new DocumentError('doc/not-found', '文档不存在');
+        const doc = loadDocument(node);
+        if (input.baseRevision !== doc.revision)
+          throw new DocumentError(
+            'doc/conflict',
+            `文档已被修改（当前 revision=${doc.revision}，提交基于 ${input.baseRevision}）`,
+          );
+        const operations = sidecar.listOps(input.docId);
+        const target =
+          input.undoToken === undefined
+            ? operations[operations.length - 1]
+            : operations.find((record) => record.id === input.undoToken);
+        if (target === undefined)
+          throw new DocumentError('op/invalid', '没有可撤销的操作');
+        if (target.inverseOps.length === 0)
+          throw new DocumentError('op/invalid', '该操作没有可撤销的逆操作');
+        const result = applyDocumentOperations(
+          doc,
+          target.inverseOps,
+          input.docId,
+          at,
+          { sidecar, actor },
+        );
+        const revision = doc.revision + 1;
+        const content = serializeAlterDoc({ ...result.doc, revision });
+        node.content = content;
+        asDocNode(node).contentFormat = ALTER_DOC_FORMAT;
+        touchNodeContent(data, node, actor, at, settings);
+        const op: DocumentOpRecord = {
+          id: newOperationId(),
+          docId: input.docId,
+          revision,
+          actor,
+          ops: target.inverseOps,
+          inverseOps: target.ops,
+          changedBlockIds: result.diff.changedBlockIds,
+          diff: result.diff,
+          createdAt: at,
+        };
+        sidecar.appendOp(op);
+        return {
+          docId: input.docId,
+          revision,
+          changedBlockIds: result.diff.changedBlockIds,
+          diff: result.diff,
+          undoToken: op.id,
+          warnings: [],
+        };
       });
     },
 

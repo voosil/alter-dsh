@@ -22,6 +22,9 @@ DSH desktop profile 中的注册与读写链路。结论：**PASS（安装 / 工
 | 检索 | `space_doc_search` 命中被编辑的 paragraph 块 id。 |
 | 对象 | `space_object_update` 生成新 `obj_…`（revision=3），旧占位对象不存在；`space_object_get` 回读 payload，`provenance.generatedBy=alter`；重读投影中的 `objectId` 已替换。 |
 | 归属 | 工具写入按 `alter` 归属；版本/op log 随事务写入。 |
+| 完整 AST 读取 | `doc.get` 返回 revision/title/doc 块树；`tests/document-service.test.ts` 与 `host-apply` 集成用例覆盖。 |
+| 撤销 | `doc.undo` 应用 op log 的 inverseOps：revision+1、旧内容恢复；过期 base 报 `doc/conflict`，未知 token 报 `op/invalid`。 |
+| 结构化文档 UI（只读） | 构建期把 `DocumentView` 重定向到 `src/document/adaptive-document-view.tsx`：旧 HTML 文档走原编辑器，AST 文档渲染标题/块树/占位；`client.js` 产物断言与 SSR 渲染测试覆盖。未做浏览器截图验证。 |
 
 真机测试文档：`doc-b16dc506-1186-45ab-bcf9-59e98291a2a4`（「S0 验收测试（可删除）」）。
 v0 没有删除工具，需在空间面板中手动删除。
@@ -34,7 +37,7 @@ v0 没有删除工具，需在空间面板中手动删除。
 
 ## 限制
 
-- 旧 HTML 文档对工具返回 `doc/legacy-format`；AST 文档在 S1 编辑器接入前由旧 UI 打开会显示 JSON 原文。
+- 旧 HTML 文档对工具返回 `doc/legacy-format`；AST 文档当前只有**只读**结构化视图（Tiptap 编辑器未接入），评论/历史入口暂缺。
 - `space_doc_outline` 的 `total_blocks` 计入嵌套块（示例 18），`outline` 只列顶层块（示例 7）。
 - 资产导入、undo 端点、对象 GC、组件运行时不在本切片。
 

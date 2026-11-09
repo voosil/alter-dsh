@@ -152,6 +152,8 @@ export interface SpaceStoreHandle extends SpaceStore {
   getDocumentAsset(id: string): DocumentAssetRecord | undefined;
   /** Read the operation log of one document, oldest first. */
   listDocumentOps(docId: string, limit?: number): DocumentOpRecord[];
+  /** Read one operation-log row by id. */
+  getDocumentOp(id: string): DocumentOpRecord | undefined;
   /** Find one operation-log row by idempotency key. */
   findDocumentOpByKey(
     docId: string,
@@ -1156,6 +1158,7 @@ export async function openSpaceStore(
     listDocumentObjects: (docId) => readDocumentObjects(db, docId),
     getDocumentAsset: (id) => readDocumentAsset(db, id),
     listDocumentOps: (docId, limit) => readDocumentOps(db, docId, limit),
+    getDocumentOp: (id) => readDocumentOp(db, id),
     findDocumentOpByKey: (docId, key) => readDocumentOpByKey(db, docId, key),
     transactDocument,
     snapshotInto(destination) {

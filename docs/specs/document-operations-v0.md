@@ -176,7 +176,8 @@ v0 限制：
 
 ## 8. RPC 暴露
 
-- 对应端点：`doc.outline` / `doc.read` / `doc.search` / `doc.applyOps` / `doc.generate` / `object.get`；
+- 对应端点：`doc.get` / `doc.outline` / `doc.read` / `doc.search` / `doc.applyOps` / `doc.undo` / `doc.generate` / `object.get`；
+  `doc.get` 返回完整 AST（编辑器加载用），`doc.undo` 应用一次 op log 的 `inverseOps`；
   新增端点必须同时加入 Host 路由白名单与浏览器客户端映射（约束见 [system-architecture.md](system-architecture.md)）。
 - 端点参数/结果沿用本规范 §1 信封与 §5 错误码；Agent 工具契约见 [agent-doc-tools-v0.md](agent-doc-tools-v0.md)。
 

@@ -23,6 +23,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'vite';
 import { createDirectoryFieldOverride } from './directory-field-override.mjs';
+import { createDocumentViewOverride } from './document-view-override.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const pluginRoot = path.resolve(here, '..');
@@ -80,6 +81,7 @@ const alias = [
 ];
 
 const directoryFieldOverride = createDirectoryFieldOverride(pluginRoot);
+const documentViewOverride = createDocumentViewOverride(pluginRoot);
 
 await rm(distDir, { recursive: true, force: true });
 
@@ -89,7 +91,7 @@ await build({
   logLevel: 'warn',
   define: { 'process.env.NODE_ENV': JSON.stringify('production') },
   resolve: { alias },
-  plugins: [directoryFieldOverride],
+  plugins: [directoryFieldOverride, documentViewOverride],
   build: {
     outDir: 'dist',
     emptyOutDir: true,

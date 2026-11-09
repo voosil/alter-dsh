@@ -114,6 +114,54 @@ describe('document service', () => {
     await store.close();
   });
 
+  it('reads full AST and undoes one operation batch', async () => {
+    const { store } = await tempStore();
+    const service = createDocumentService({ store, now: fixedNow });
+    const created = await service.generate({
+      spaceId: DEFAULT_SPACE_ID,
+      markdown: '原文段落\n',
+    });
+    const loaded = await service.get(created.docId);
+    expect(loaded.revision).toBe(1);
+    expect(loaded.doc.blocks).toHaveLength(1);
+    expect(loaded.doc.blocks[0]?.type).toBe('paragraph');
+
+    const paragraphId = loaded.doc.blocks[0]!.id;
+    const edited = await service.applyOperations({
+      docId: created.docId,
+      baseRevision: 1,
+      ops: [
+        {
+          op: 'update_text',
+          target: paragraphId,
+          edits: [{ oldText: '原文段落', newText: '改后段落' }],
+        },
+      ],
+    });
+    expect(edited.revision).toBe(2);
+
+    await expect(
+      service.undo({ docId: created.docId, baseRevision: 1 }),
+    ).rejects.toMatchObject({ code: 'doc/conflict' });
+    await expect(
+      service.undo({
+        docId: created.docId,
+        baseRevision: 2,
+        undoToken: 'op_missing',
+      }),
+    ).rejects.toMatchObject({ code: 'op/invalid' });
+
+    const undone = await service.undo({
+      docId: created.docId,
+      baseRevision: 2,
+    });
+    expect(undone.revision).toBe(3);
+    const reread = await service.read(created.docId);
+    expect(reread.markdown).toContain('原文段落');
+    expect(reread.markdown).not.toContain('改后段落');
+    await store.close();
+  });
+
   it('inserts new markdown into an existing document via generate', async () => {
     const { store } = await tempStore();
     const service = createDocumentService({ store, now: fixedNow });

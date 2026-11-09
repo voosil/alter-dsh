@@ -270,6 +270,15 @@ check(
   escaped.includes('#/settings') && escaped.includes('返回空间'),
   'client bundle must carry the in-panel settings route and its back control',
 );
+check(
+  escaped.includes('结构化文档 · 只读预览') &&
+    escaped.includes('data-doc-format'),
+  'client bundle must carry the structured document view',
+);
+check(
+  escaped.includes('doc.get') && escaped.includes('doc.undo'),
+  'client bundle must map the doc.get/doc.undo endpoints',
+);
 
 check(
   !/(^|[}])\s*kbd\s*\{/.test(escaped),
