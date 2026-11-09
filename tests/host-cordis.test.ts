@@ -38,7 +38,7 @@ interface Harness {
 async function boot(dataDir: string): Promise<Harness> {
   const registry = new FakeWorkspaceRegistry();
   let routePath = '';
-  let routeFetch: ((request: Request) => Promise<Response>) | undefined;
+  const routes = new Map<string, (request: Request) => Promise<Response>>();
   const root = new Context();
   // Stand-in for DSH Connection: owns the fetch route registry.
   root.plugin((ctx) => {
@@ -48,8 +48,8 @@ async function boot(dataDir: string): Promise<Harness> {
           path: string;
           fetch: (request: Request) => Promise<Response>;
         }) {
-          routePath = route.path;
-          routeFetch = route.fetch;
+          if (routePath === '') routePath = route.path;
+          routes.set(route.path, route.fetch);
           return () => undefined;
         },
       },
@@ -76,8 +76,9 @@ async function boot(dataDir: string): Promise<Harness> {
     registry,
     routePath,
     call: async (op, args = []) => {
-      if (routeFetch === undefined) throw new Error('route is not registered');
-      const response = await routeFetch(
+      const rpcRoute = routes.get(RPC_ROUTE_PATH);
+      if (rpcRoute === undefined) throw new Error('route is not registered');
+      const response = await rpcRoute(
         new Request(`http://dsh.internal${routePath}`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
@@ -133,12 +134,15 @@ describe('Host plugin on the real Cordis kernel', () => {
   it('still creates Spaces without a registry service (degraded host)', async () => {
     const dataDir = await tempDir();
     const root = new Context();
-    let routeFetch: ((request: Request) => Promise<Response>) | undefined;
+    const routes = new Map<string, (request: Request) => Promise<Response>>();
     root.plugin((ctx) => {
       ctx.provide('connection', {
         fetch: {
-          register(route: { fetch: (request: Request) => Promise<Response> }) {
-            routeFetch = route.fetch;
+          register(route: {
+            path: string;
+            fetch: (request: Request) => Promise<Response>;
+          }) {
+            routes.set(route.path, route.fetch);
             return () => undefined;
           },
         },
@@ -154,7 +158,7 @@ describe('Host plugin on the real Cordis kernel', () => {
       { dataDir },
     );
     await new Promise((resolve) => setTimeout(resolve, 100));
-    const response = await routeFetch!(
+    const response = await routes.get(RPC_ROUTE_PATH)!(
       new Request(`http://dsh.internal${RPC_ROUTE_PATH}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },

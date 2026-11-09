@@ -8,6 +8,7 @@
  * @module @alter-dsh/space/document/tools
  */
 import type { JsonValue } from './types.js';
+import type { DocumentAssets } from './assets.js';
 import type {
   ApplyOperationsInput,
   DocumentService,
@@ -68,6 +69,8 @@ export interface ToolsLike {
 
 export interface DocumentToolDeps {
   service: DocumentService;
+  /** Optional asset store; absent disables space_asset_import. */
+  assets?: DocumentAssets;
 }
 
 function view(value: unknown): JsonValue {
@@ -747,6 +750,86 @@ export function registerDocumentTools(
       },
       presentCall: () =>
         view({ card: 'generic', title: 'Undo document operations', kind: 'edit' }),
+    }),
+  );
+
+  disposers.push(
+    tools.register({
+      name: 'space_asset_import',
+      description:
+        'Import a small image into the Space asset store and return its asset id. Use the id in an image block; bytes are content-addressed and deduplicated.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['mime', 'data_base64'],
+        properties: {
+          mime: {
+            type: 'string',
+            description: 'Image media type: image/png, image/jpeg, image/webp or image/gif.',
+          },
+          data_base64: {
+            type: 'string',
+            description: 'Base64-encoded image bytes (max 4 MiB decoded).',
+          },
+          name: { type: 'string', description: 'Optional display name.' },
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['asset_id', 'mime', 'bytes'],
+          properties: {
+            asset_id: { type: 'string' },
+            mime: { type: 'string' },
+            bytes: { type: 'integer' },
+            name: { type: 'string' },
+          },
+        },
+        render: (_args, value) => {
+          const result = value as {
+            asset_id: string;
+            mime: string;
+            bytes: number;
+          };
+          return [
+            text(
+              `资产已导入：${result.asset_id}（${result.mime}，${result.bytes} 字节）。`,
+            ),
+          ];
+        },
+      },
+      isConcurrencySafe: () => true,
+      async execute(args) {
+        const input = asRecord(args);
+        try {
+          if (deps.assets === undefined)
+            throw new Error('object/invalid: 资产存储未启用');
+          const mime = requireString(input, 'mime').toLowerCase();
+          const encoded = requireString(input, 'data_base64');
+          if (encoded.length > 6 * 1024 * 1024)
+            throw new Error('object/invalid: 资产 base64 超过上限');
+          const data = Buffer.from(encoded, 'base64');
+          if (data.byteLength === 0) throw new Error('object/invalid: 资产内容为空');
+          const record = await deps.assets.import({
+            data: new Uint8Array(data),
+            mime,
+            ...(optionalString(input, 'name') === undefined
+              ? {}
+              : { name: optionalString(input, 'name') }),
+          });
+          return {
+            asset_id: record.id,
+            mime: record.mime,
+            bytes: record.bytes,
+            ...(record.name === undefined ? {} : { name: record.name }),
+          };
+        } catch (error) {
+          throw new Error(errorMessage(error));
+        }
+      },
+      presentCall: () =>
+        view({ card: 'generic', title: 'Import document asset', kind: 'edit' }),
     }),
   );
 

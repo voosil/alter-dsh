@@ -135,14 +135,34 @@ function setup(service = fakeService()): {
   dispose: () => void;
 } {
   const { tools, definitions } = fakeTools();
-  const dispose = registerDocumentTools(tools, { service });
-  return { definitions, deps: { service }, dispose };
+  const assets = {
+    async import(input: { data: Uint8Array; mime: string; name?: string }) {
+      return {
+        id: 'asset_imported',
+        sha256: '0'.repeat(64),
+        mime: input.mime,
+        bytes: input.data.byteLength,
+        ...(input.name === undefined ? {} : { name: input.name }),
+        createdAt: '2026-01-01T00:00:00.000Z',
+      };
+    },
+    async get() {
+      return undefined;
+    },
+    async read() {
+      return undefined;
+    },
+  };
+  const deps = { service, assets } as DocumentToolDeps;
+  const dispose = registerDocumentTools(tools, deps);
+  return { definitions, deps, dispose };
 }
 
 describe('document Agent tools', () => {
-  it('registers the seven v0 tools with read/write concurrency hints', () => {
+  it('registers the v0 tools with read/write concurrency hints', () => {
     const { definitions, dispose } = setup();
     expect([...definitions.keys()].sort()).toEqual([
+      'space_asset_import',
       'space_doc_generate',
       'space_doc_ops',
       'space_doc_outline',
@@ -300,6 +320,24 @@ describe('document Agent tools', () => {
       revision: 4,
       changed_block_ids: ['blk_2'],
       undo_token: 'op_undo',
+    });
+  });
+
+  it('imports assets through the asset store', async () => {
+    const { definitions } = setup();
+    const value = await definitions.get('space_asset_import')!.execute(
+      {
+        mime: 'image/png',
+        data_base64: Buffer.from([1, 2, 3]).toString('base64'),
+        name: 'a.png',
+      },
+      exec('space_asset_import'),
+    );
+    expect(value).toEqual({
+      asset_id: 'asset_imported',
+      mime: 'image/png',
+      bytes: 3,
+      name: 'a.png',
     });
   });
 

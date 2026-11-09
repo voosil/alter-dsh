@@ -157,10 +157,13 @@ v0 限制：
 }
 ```
 
-- 内容寻址：同字节只存一份；二进制放 `${dataDir}/assets/<sha[0:2]>/<sha256>.<ext>`，DB 只存元数据。
-- URI 形式：`space-asset://asset_<id>`；v0 只允许图片（png/jpeg/webp/gif）与受支持的附件类型。
-- 上传：由 Host 校验 mime/尺寸/大小后写入资产表；Markdown 投影只输出 URI，不输出 base64。
-- 备份：资产目录必须纳入备份/恢复流程（见 §7）。
+- 内容寻址：同字节只存一份；id 为 `asset_<sha256 前 32 位>`，二进制放
+  `${dataDir}/assets/<sha[0:2]>/<sha256>.<ext>`（0600），DB 只存元数据。
+- 只允许图片（png/jpeg/webp/gif），单资产 ≤ 4 MiB；导入时校验 mime/大小并去重。
+- 导入：Agent 工具 `space_asset_import` 接收 base64（≤ 4 MiB 解码后）；浏览器/编辑器后续可直接上传。
+- 读取：Host 注册 `GET /api/alter-space/asset?id=<assetId>`（Connection 鉴权）返回原始字节，
+  客户端用该 URL 渲染 `<img>`；`space-asset://` 只是 Markdown 投影里的引用写法，不直接进 HTML。
+- 备份：资产目录必须纳入备份/恢复流程（见 §7）。当前每日快照仍只覆盖 SQLite；资产备份为已知待补项。
 
 ## 7. 版本、快照与备份
 

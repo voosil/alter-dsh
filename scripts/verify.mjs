@@ -282,6 +282,10 @@ check(
     escaped.includes('doc.applyOps'),
   'client bundle must map the document model endpoints',
 );
+check(
+  escaped.includes('/api/alter-space/asset'),
+  'client bundle must render images through the authenticated asset route',
+);
 
 check(
   !/(^|[}])\s*kbd\s*\{/.test(escaped),

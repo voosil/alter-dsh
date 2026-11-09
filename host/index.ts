@@ -13,6 +13,8 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createSpaceAuthority } from './authority.js';
 import { createSnapshotScheduler } from './backup.js';
+import { createDocumentAssetRoute } from './document/asset-route.js';
+import { ASSET_ROUTE_PATH, createDocumentAssets } from './document/assets.js';
 import { createDocumentService } from './document/service.js';
 import {
   registerDocumentTools,
@@ -168,6 +170,7 @@ export async function apply(
     const service = createSpaceAuthority(retainedStore, now);
     const storage = createSpaceStorage({ store, directory });
     const document = createDocumentService({ store, now });
+    const assets = createDocumentAssets({ store, directory, now });
     let workspaceSync: SpaceWorkspaceSync | undefined;
     let disposeDocumentTools: (() => void) | undefined;
     const route = createSpaceFetchRoute({
@@ -182,7 +185,7 @@ export async function apply(
         logger.warn?.('[alter-dsh-space] DSH 工具服务不可用：文档模型工具未注册');
         return;
       }
-      const dispose = registerDocumentTools(tools, { service: document });
+      const dispose = registerDocumentTools(tools, { service: document, assets });
       disposeDocumentTools = dispose;
       const cleanup = () => {
         if (disposeDocumentTools === dispose) disposeDocumentTools = undefined;
@@ -239,6 +242,12 @@ export async function apply(
       requestBody: 'buffered',
       fetch: route,
     });
+    const disposeAssetRoute = ctx.connection.fetch.register({
+      path: ASSET_ROUTE_PATH,
+      methods: ['GET'],
+      requestBody: 'buffered',
+      fetch: createDocumentAssetRoute(assets),
+    });
     const snapshots = createSnapshotScheduler({
       store,
       directory,
@@ -253,6 +262,7 @@ export async function apply(
       workspaceSync = undefined;
       disposeDocumentTools?.();
       disposeRoute();
+      disposeAssetRoute();
       await snapshots.dispose();
       await store.close();
     };

@@ -26,6 +26,7 @@ DSH desktop profile 中的注册与读写链路。结论：**PASS（安装 / 工
 | 撤销 | `doc.undo` 应用 op log 的 inverseOps：revision+1、旧内容恢复；过期 base 报 `doc/conflict`，未知 token 报 `op/invalid`。 |
 | 结构化文档 UI | 构建期把 `DocumentView` 重定向到 `src/document/adaptive-document-view.tsx`：旧 HTML 文档走原编辑器，AST 文档走 Tiptap 编辑器（标题/块树/工具栏/保存/冲突重载）；保存由客户端 block diff → `doc.applyOps`，不整篇覆盖。`client.js` 产物断言、映射/diff 单测与只读渲染 SSR 测试覆盖；未做浏览器点击验证。 |
 | 撤销工具 | `space_doc_undo`：按 `undo_token` 或最近一次 batch 应用 `inverseOps`，生成新 revision 与 op log；冲突/未知 token 错误码覆盖。 |
+| 资产 | `space_asset_import` + 内容寻址资产表/文件：去重、mime/大小校验、`GET /api/alter-space/asset` 读取；客户端图片块用该 URL 渲染，失败回退占位。资产备份目录仍待纳入每日快照。 |
 
 真机测试文档：`doc-b16dc506-1186-45ab-bcf9-59e98291a2a4`（「S0 验收测试（可删除）」）。
 v0 没有删除工具，需在空间面板中手动删除。
@@ -38,7 +39,7 @@ v0 没有删除工具，需在空间面板中手动删除。
 
 ## 限制
 
-- 旧 HTML 文档对工具返回 `doc/legacy-format`；AST 文档已有 Tiptap 编辑器，但评论、版本历史入口与资产渲染仍待接入。
+- 旧 HTML 文档对工具返回 `doc/legacy-format`；AST 文档已有 Tiptap 编辑器与图片资产渲染，但评论、版本历史入口与资产备份仍待接入。
 - `space_doc_outline` 的 `total_blocks` 计入嵌套块（示例 18），`outline` 只列顶层块（示例 7）。
 - 资产导入、undo 端点、对象 GC、组件运行时不在本切片。
 

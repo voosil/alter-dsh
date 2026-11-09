@@ -51,7 +51,7 @@ function createHarness(
   options: { registry?: unknown; tools?: unknown } = {},
 ): Harness {
   let registeredPath: string | undefined;
-  let routeFetch: ((request: Request) => Promise<Response>) | undefined;
+  const routes = new Map<string, (request: Request) => Promise<Response>>();
   const disposers: Array<() => unknown> = [];
   const childEffect = async (execute: () => unknown) => {
     const dispose = await execute();
@@ -66,8 +66,8 @@ function createHarness(
           path: string;
           fetch: (request: Request) => Promise<Response>;
         }) {
-          registeredPath = route.path;
-          routeFetch = route.fetch;
+          if (registeredPath === undefined) registeredPath = route.path;
+          routes.set(route.path, route.fetch);
           return () => undefined;
         },
       },
@@ -92,6 +92,7 @@ function createHarness(
     ctx,
     routePath: () => registeredPath,
     call: async (op: string, args: unknown[] = []) => {
+      const routeFetch = routes.get(RPC_ROUTE_PATH);
       if (!routeFetch) throw new Error('route is not registered yet');
       const rpcId = 'test-rpc';
       const response = await routeFetch(
@@ -182,6 +183,7 @@ describe('host plugin apply', () => {
     const harness = createHarness({ tools: fake.tools });
     await apply(harness.ctx, { dataDir: dir });
     expect([...fake.definitions.keys()].sort()).toEqual([
+      'space_asset_import',
       'space_doc_generate',
       'space_doc_ops',
       'space_doc_outline',

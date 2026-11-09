@@ -17,6 +17,7 @@ import {
   type ReactNodeViewProps,
 } from '@tiptap/react';
 import styles from './AlterTiptapEditor.module.css';
+import { documentAssetUrl } from '../asset-url';
 
 const CALLBACK_TONE_LABELS: Record<string, string> = {
   info: '提示',
@@ -85,6 +86,7 @@ export function AlterImageNodeView(props: ReactNodeViewProps) {
   const alt = attrText(props, 'alt');
   const caption = attrText(props, 'caption');
   const width = attrText(props, 'width');
+  const assetId = attrText(props, 'assetId');
   return (
     <NodeViewWrapper
       as="div"
@@ -101,11 +103,19 @@ export function AlterImageNodeView(props: ReactNodeViewProps) {
         <RemoveButton label="删除图片块" onRemove={props.deleteNode} />
       </div>
       <div className={styles.objectMeta} contentEditable={false}>
-        {attrText(props, 'assetId') ?? '（缺少资产 id）'}
+        {assetId ?? '（缺少资产 id）'}
         {width === undefined ? '' : ` · 宽 ${width}`}
       </div>
       <div className={styles.objectPlaceholder} contentEditable={false}>
-        图片渲染器随后接入
+        {assetId === undefined ? (
+          '（缺少资产 id）'
+        ) : (
+          <img
+            className={styles.objectImage}
+            src={documentAssetUrl(assetId)}
+            alt={alt ?? '图片'}
+          />
+        )}
       </div>
     </NodeViewWrapper>
   );

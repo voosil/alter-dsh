@@ -106,14 +106,20 @@ updated: 2026-11-09
 - 只有 registry 声明 `ai.writable` 的对象类型可用；application 组件只允许改 registry 暴露的
   props 子集。
 
-### 2.7 资产工具（v0.1，规划中，尚未注册）
+### 2.8 `space_asset_import`
 
-- `space_asset_import`：接收 DSH 附件/文件引用，返回 `asset_id`；或由外部上传后由工具校验。
-- v0 不做模型直接上传大文件，先支持「引用已有附件」。
+```
+输入：{ mime, data_base64, name? }
+输出：{ asset_id, mime, bytes, name? }
+```
+
+- 仅图片（`image/png|jpeg|webp|gif`），解码后 ≤ 4 MiB；内容寻址去重，重复导入返回同一 `asset_id`。
+- 生成/编辑图片块时把返回的 `asset_id` 写入 `image.attrs.assetId`；渲染 URL 由客户端拼
+  `GET /api/alter-space/asset?id=…`。
 
 ## 3. 预算与裁剪
 
-- 8 个核心工具 schema 约 +1.4–1.8k tokens；读投影单次 ≤ 12k tokens / ≤ 40k 字符。
+- 9 个核心工具 schema 约 +1.6–2.0k tokens；读投影单次 ≤ 12k tokens / ≤ 40k 字符。
 - 每个工具的输出 schema 只列模型真正需要消费的字段，不回传整篇文档或未变更内容。
 - 读工具超限必须截断并在 `next` 给出续读锚点；写工具不因预算裁剪而改变语义。
 - 结构摘要与检索结果有独立上限：outline ≤ 2k tokens，search 默认 20 条且 preview ≤ 60 字。

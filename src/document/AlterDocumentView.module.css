@@ -192,6 +192,14 @@
   margin: 0 0 var(--alter-space-paragraph, 24px);
 }
 
+.image {
+  display: block;
+  max-width: 100%;
+  max-height: 520px;
+  border-radius: var(--alter-radius-control);
+  object-fit: contain;
+}
+
 .imagePlaceholder {
   display: flex;
   align-items: center;

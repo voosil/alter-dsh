@@ -1,4 +1,5 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
+import { documentAssetUrl } from './asset-url';
 import type { AlterDoc, BlockNode, InlineNode, Mark } from './types';
 import styles from './AlterDocumentView.module.css';
 
@@ -143,6 +144,37 @@ function objectPlaceholder(
   );
 }
 
+function AssetFigure({
+  assetId,
+  alt,
+  caption,
+}: {
+  assetId: string | undefined;
+  alt: string;
+  caption: string | undefined;
+}) {
+  const [failed, setFailed] = useState(false);
+  const showImage = assetId !== undefined && !failed;
+  return (
+    <figure className={styles.imageCard}>
+      {showImage ? (
+        <img
+          className={styles.image}
+          src={documentAssetUrl(assetId)}
+          alt={alt}
+          onError={() => setFailed(true)}
+        />
+      ) : (
+        <div className={styles.imagePlaceholder}>{alt || '图片'}</div>
+      )}
+      <figcaption className={styles.imageMeta}>
+        {assetId ?? '（无资产）'}
+        {caption === undefined ? '' : ` · ${caption}`}
+      </figcaption>
+    </figure>
+  );
+}
+
 function renderBlock(block: BlockNode): ReactNode {
   switch (block.type) {
     case 'paragraph':
@@ -187,12 +219,16 @@ function renderBlock(block: BlockNode): ReactNode {
     case 'image': {
       const alt = typeof block.attrs.alt === 'string' ? block.attrs.alt : '';
       const assetId =
-        typeof block.attrs.assetId === 'string' ? block.attrs.assetId : '（无资产）';
+        typeof block.attrs.assetId === 'string' ? block.attrs.assetId : undefined;
       return (
-        <figure key={block.id} className={styles.imageCard}>
-          <div className={styles.imagePlaceholder}>{alt || '图片'}</div>
-          <figcaption className={styles.imageMeta}>{assetId}</figcaption>
-        </figure>
+        <AssetFigure
+          key={block.id}
+          assetId={assetId}
+          alt={alt}
+          caption={
+            typeof block.attrs.caption === 'string' ? block.attrs.caption : undefined
+          }
+        />
       );
     }
     case 'callout': {
