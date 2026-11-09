@@ -286,6 +286,12 @@ check(
   escaped.includes('/api/alter-space/asset'),
   'client bundle must render images through the authenticated asset route',
 );
+check(
+  escaped.includes('评论与历史') &&
+    escaped.includes('恢复此版本') &&
+    escaped.includes('发布评论'),
+  'client bundle must carry the AST document comments/history panel',
+);
 
 check(
   !/(^|[}])\s*kbd\s*\{/.test(escaped),

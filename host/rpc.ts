@@ -91,7 +91,7 @@ const HUB_METHODS = [
 
 const STORAGE_METHODS = ['get', 'estimate', 'set'] as const;
 
-const DOCUMENT_METHODS = ['get', 'outline', 'read', 'search', 'applyOps', 'undo', 'generate'] as const;
+const DOCUMENT_METHODS = ['get', 'outline', 'read', 'search', 'applyOps', 'undo', 'restoreVersion', 'generate'] as const;
 const OBJECT_METHODS = ['get'] as const;
 
 const SPACE_METHOD_SET: ReadonlySet<string> = new Set(SPACE_METHODS);
@@ -265,6 +265,12 @@ export function createSpaceRpc(options: SpaceRpcOptions): SpaceRpcHandler {
             return {
               value: await document.undo(
                 (args[0] ?? {}) as Parameters<DocumentService['undo']>[0],
+              ),
+            };
+          case 'restoreVersion':
+            return {
+              value: await document.restoreVersion(
+                (args[0] ?? {}) as Parameters<DocumentService['restoreVersion']>[0],
               ),
             };
           case 'generate':

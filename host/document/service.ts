@@ -165,6 +165,12 @@ export interface DocumentService {
   }): Promise<DocumentSearchResult>;
   applyOperations(input: ApplyOperationsInput): Promise<ApplyOperationsResult>;
   undo(input: UndoDocumentInput): Promise<ApplyOperationsResult>;
+  restoreVersion(input: {
+    docId: string;
+    versionId: string;
+    baseRevision: number;
+    actor?: DocumentActor;
+  }): Promise<ApplyOperationsResult>;
   generate(input: GenerateDocumentInput): Promise<GenerateDocumentResult>;
   getObject(objectId: string): Promise<DocumentObjectRecord | undefined>;
   updateObject(input: {
@@ -587,6 +593,76 @@ export function createDocumentService(
           changedBlockIds: result.diff.changedBlockIds,
           diff: result.diff,
           undoToken: op.id,
+          warnings: [],
+        };
+      });
+    },
+
+    async restoreVersion(input) {
+      const actor = input.actor ?? 'alter';
+      const at = nowIsoOf(now);
+      const settings = store.getStorageSettings();
+      return store.transactDocument((data, sidecar) => {
+        const node = findNode(data, input.docId);
+        if (node === undefined) throw new DocumentError('doc/not-found', '文档不存在');
+        const doc = loadDocument(node);
+        if (input.baseRevision !== doc.revision)
+          throw new DocumentError(
+            'doc/conflict',
+            `文档已被修改（当前 revision=${doc.revision}，提交基于 ${input.baseRevision}）`,
+          );
+        const version = data.versions.find(
+          (item) => item.id === input.versionId && item.docId === input.docId,
+        );
+        if (version === undefined)
+          throw new DocumentError('op/invalid', '历史版本不存在');
+        const stored = parseAlterDoc(version.content);
+        if (stored.kind !== 'alter-doc')
+          throw new DocumentError(
+            'doc/legacy-format',
+            '该历史版本是旧 HTML 格式，暂不支持恢复到结构化文档',
+          );
+        const ops: Operation[] = doc.blocks.map((block) => ({
+          op: 'delete_block' as const,
+          target: block.id,
+        }));
+        if (stored.doc.blocks.length > 0) {
+          ops.push({
+            op: 'insert_blocks',
+            parent: null,
+            index: 0,
+            blocks: stored.doc.blocks,
+          });
+        }
+        if (ops.length === 0) throw new DocumentError('op/invalid', '没有可恢复的内容');
+        if (ops.length > 64)
+          throw new DocumentError('op/invalid', '文档顶层块过多，请分批恢复');
+        const result = applyDocumentOperations(doc, ops, input.docId, at, {
+          sidecar,
+          actor,
+        });
+        const revision = doc.revision + 1;
+        const content = serializeAlterDoc({ ...result.doc, revision });
+        node.content = content;
+        asDocNode(node).contentFormat = ALTER_DOC_FORMAT;
+        node.title = version.title;
+        touchNodeContent(data, node, actor, at, settings);
+        sidecar.appendOp({
+          id: newOperationId(),
+          docId: input.docId,
+          revision,
+          actor,
+          ops,
+          inverseOps: result.inverseOps,
+          changedBlockIds: result.diff.changedBlockIds,
+          diff: result.diff,
+          createdAt: at,
+        });
+        return {
+          docId: input.docId,
+          revision,
+          changedBlockIds: result.diff.changedBlockIds,
+          diff: result.diff,
           warnings: [],
         };
       });

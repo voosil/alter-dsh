@@ -3,6 +3,7 @@ import type { SpaceNode } from '@alter/protocol';
 import { useSpaceContext } from '../../vendor/ui-space/src/runtime';
 import { documentClientOf } from './client-access';
 import { AlterTiptapEditor } from './editor';
+import { DocumentSidePanel } from './DocumentSidePanel';
 import type { DocumentSnapshot } from './types';
 import styles from './AlterDocumentView.module.css';
 
@@ -23,6 +24,7 @@ export function AlterDocumentView({ node }: { node: SpaceNode }) {
   const client = documentClientOf(service);
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
   const [title, setTitle] = useState(node.title);
+  const [panelOpen, setPanelOpen] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -79,6 +81,14 @@ export function AlterDocumentView({ node }: { node: SpaceNode }) {
             }}
           />
           <span className={styles.badge}>结构化文档</span>
+          <button
+            type="button"
+            className={panelOpen ? styles.panelToggleActive : styles.panelToggle}
+            aria-pressed={panelOpen}
+            onClick={() => setPanelOpen((open) => !open)}
+          >
+            评论与历史
+          </button>
         </div>
         <div className={styles.meta}>
           {state.kind === 'ready'
@@ -90,7 +100,8 @@ export function AlterDocumentView({ node }: { node: SpaceNode }) {
           评论与版本历史将在后续接入
         </div>
       </header>
-      <div className={styles.body}>
+      <div className={styles.bodyRow}>
+        <div className={styles.body}>
         {state.kind === 'loading' ? (
           <div className={styles.state}>正在读取结构化文档…</div>
         ) : state.kind === 'error' ? (
@@ -103,6 +114,7 @@ export function AlterDocumentView({ node }: { node: SpaceNode }) {
           </div>
         ) : (
           <AlterTiptapEditor
+            key={state.snapshot.revision}
             docId={node.id}
             initialDoc={state.snapshot.doc}
             baseRevision={state.snapshot.revision}
@@ -112,6 +124,32 @@ export function AlterDocumentView({ node }: { node: SpaceNode }) {
             }
           />
         )}
+        </div>
+        {panelOpen && state.kind === 'ready' && client !== undefined ? (
+          <DocumentSidePanel
+            docId={node.id}
+            revision={state.snapshot.revision}
+            service={service}
+            client={client}
+            onRestored={(revision) => {
+              const nextClient = documentClientOf(service);
+              if (nextClient === undefined) return;
+              void nextClient
+                .get(node.id)
+                .then((value) => {
+                  const snapshot = value as DocumentSnapshot;
+                  setState({ kind: 'ready', snapshot });
+                  setTitle(snapshot.title);
+                })
+                .catch(() => undefined);
+              setState((current) =>
+                current.kind === 'ready'
+                  ? { kind: 'ready', snapshot: { ...current.snapshot, revision } }
+                  : current,
+              );
+            }}
+          />
+        ) : null}
       </div>
     </article>
   );

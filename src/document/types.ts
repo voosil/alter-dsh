@@ -99,3 +99,22 @@ export type Operation =
       attrs?: Record<string, JsonValue>;
     }
   | { op: 'update_object'; target: string; payload: JsonValue };
+
+/** Parse stored content into an AST document, or undefined for legacy HTML. */
+export function parseAlterDocContent(content: string): AlterDoc | undefined {
+  const trimmed = content.trimStart();
+  if (!trimmed.startsWith('{')) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(content);
+    if (
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      (parsed as { format?: unknown }).format === 'alter-doc/1' &&
+      Array.isArray((parsed as { blocks?: unknown }).blocks)
+    )
+      return parsed as AlterDoc;
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}

@@ -110,6 +110,11 @@ describe('createSpaceDocumentClient', () => {
       ops: [],
     });
     await document.undo({ docId: 'doc-1', baseRevision: 2 });
+    await document.restoreVersion({
+      docId: 'doc-1',
+      versionId: 'ver_1',
+      baseRevision: 3,
+    });
     await document.generate({ spaceId: 'sp-1', markdown: '# x' });
     await document.getObject('obj_1');
     expect(calls.map((call) => call.op)).toEqual([
@@ -119,6 +124,7 @@ describe('createSpaceDocumentClient', () => {
       'doc.search',
       'doc.applyOps',
       'doc.undo',
+      'doc.restoreVersion',
       'doc.generate',
       'object.get',
     ]);

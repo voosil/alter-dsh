@@ -68,9 +68,34 @@
   margin: 0 6px;
 }
 
+.bodyRow {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
 .body {
   flex: 1;
+  min-width: 0;
   padding: 32px 48px 96px;
+  overflow: auto;
+}
+
+.panelToggle,
+.panelToggleActive {
+  margin-left: auto;
+  padding: 5px 10px;
+  border: 1px solid var(--alter-control-line);
+  border-radius: var(--alter-radius-xs);
+  background: transparent;
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+  cursor: pointer;
+}
+
+.panelToggleActive {
+  border-color: var(--alter-text);
+  color: var(--alter-text);
 }
 
 .state,

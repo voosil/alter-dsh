@@ -206,6 +206,64 @@ describe('document service', () => {
     await store.close();
   });
 
+  it('restores an older AST version through operations', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'alter-space-restore-'));
+    dirs.push(dir);
+    const store = await openSpaceStore({ directory: dir, now: fixedNow });
+    let clock = new Date('2026-11-09T00:00:00.000Z');
+    const service = createDocumentService({ store, now: () => clock });
+    const created = await service.generate({
+      spaceId: DEFAULT_SPACE_ID,
+      markdown: '原始内容\n',
+    });
+    const originalVersion = store
+      .read()
+      .versions.filter((version) => version.docId === created.docId)[0];
+    expect(originalVersion).toBeDefined();
+
+    clock = new Date('2026-11-09T00:10:00.000Z');
+    const paragraph = (await service.get(created.docId)).doc.blocks[0]!;
+    await service.applyOperations({
+      docId: created.docId,
+      baseRevision: 1,
+      ops: [
+        {
+          op: 'update_text',
+          target: paragraph.id,
+          edits: [{ oldText: '原始内容', newText: '修改后的内容' }],
+        },
+      ],
+    });
+    expect((await service.read(created.docId)).markdown).toContain('修改后的内容');
+
+    await expect(
+      service.restoreVersion({
+        docId: created.docId,
+        versionId: originalVersion!.id,
+        baseRevision: 1,
+      }),
+    ).rejects.toMatchObject({ code: 'doc/conflict' });
+    await expect(
+      service.restoreVersion({
+        docId: created.docId,
+        versionId: 'ver_missing',
+        baseRevision: 2,
+      }),
+    ).rejects.toMatchObject({ code: 'op/invalid' });
+
+    clock = new Date('2026-11-09T00:20:00.000Z');
+    const restored = await service.restoreVersion({
+      docId: created.docId,
+      versionId: originalVersion!.id,
+      baseRevision: 2,
+    });
+    expect(restored.revision).toBe(3);
+    const read = await service.read(created.docId);
+    expect(read.markdown).toContain('原始内容');
+    expect(read.markdown).not.toContain('修改后的内容');
+    await store.close();
+  });
+
   it('searches text and reports legacy HTML documents explicitly', async () => {
     const { store } = await tempStore();
     const service = createDocumentService({ store, now: fixedNow });

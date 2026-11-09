@@ -174,12 +174,13 @@ v0 限制：
 - **对象/资产**：不重复进快照，只存引用；GC 按引用与保留期。
 - **版本预算**：当前「每篇 10 版 / 64 KiB」由存储设置控制、在写入事务内从最旧裁剪；
   AST 快照更大，预算重估仍开放（见 [agent-doc-tools-v0.md](agent-doc-tools-v0.md)）。
-- **恢复**：restore 历史快照 = 写入其 AST、revision+1、追加事件 op；旧对象/资产按引用保活。
+- **恢复**：restore 历史快照 = 通过 delete+insert Operations 重放该 AST、revision+1、追加 op log；
+  旧对象/资产按引用保活；旧 HTML 历史版本对 AST 文档拒绝恢复（需先迁移）。
 - **备份**：SQLite 快照 + `assets/` 目录 +（可选）`objects/` 导出清单；恢复流程必须同时覆盖三者。
 
 ## 8. RPC 暴露
 
-- 对应端点：`doc.get` / `doc.outline` / `doc.read` / `doc.search` / `doc.applyOps` / `doc.undo` / `doc.generate` / `object.get`；
+- 对应端点：`doc.get` / `doc.outline` / `doc.read` / `doc.search` / `doc.applyOps` / `doc.undo` / `doc.restoreVersion` / `doc.generate` / `object.get`；
   `doc.get` 返回完整 AST（编辑器加载用），`doc.undo` 应用一次 op log 的 `inverseOps`；
   浏览器编辑器加载 AST、编辑后在客户端做 block 级 diff 生成 Operation 批次再提交，不整篇覆盖；
   新增端点必须同时加入 Host 路由白名单与浏览器客户端映射（约束见 [system-architecture.md](system-architecture.md)）。
