@@ -270,6 +270,7 @@ export function SearchPanel({
                   aria-selected={index === active}
                   data-search-active={index === active || undefined}
                   className={styles.result}
+                  data-single-line="true"
                   onMouseEnter={() => setActive(index)}
                   onClick={() => openRecent(node.id)}
                 >
@@ -280,10 +281,6 @@ export function SearchPanel({
                     <span className={styles.resultTitle}>
                       {displayTitle(node.title)}
                     </span>
-                    <span className={styles.excerpt}>
-                      {node.creator === 'alter' ? 'Alter 创建' : '我创建'}
-                      {node.archived ? ' · 已归档' : ''}
-                    </span>
                   </span>
                 </button>
               ))}
@@ -293,18 +290,6 @@ export function SearchPanel({
               输入关键词，搜索当前空间的文档和随想。
             </p>
           )}
-        </div>
-        <div className={styles.footer} aria-hidden="true">
-          <span>
-            <kbd>↑</kbd>
-            <kbd>↓</kbd> 选择
-          </span>
-          <span>
-            <kbd>↵</kbd> 打开
-          </span>
-          <span>
-            <kbd>esc</kbd> 关闭
-          </span>
         </div>
       </div>
     </div>,

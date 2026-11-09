@@ -28,7 +28,6 @@
   flex-shrink: 0;
   height: 48px;
   padding: 0 12px 0 16px;
-  border-bottom: 1px solid var(--alter-border);
 }
 .searchIcon {
   flex-shrink: 0;
@@ -37,7 +36,7 @@
 .input {
   flex: 1;
   min-width: 0;
-  /* 不铺满 48px 行高：聚焦时的 1px 描边上下要留出空隙，否则会贴着分隔线。 */
+  /* 不铺满 48px 行高：聚焦时的 1px 描边上下要留出空隙，不贴住面板上缘。 */
   height: 34px;
   padding: 0 11px;
   border: 0;
@@ -52,31 +51,15 @@
 .input:focus {
   outline: none;
 }
-.close {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border: 0;
-  border-radius: var(--alter-radius-control);
-  background: transparent;
-  color: var(--alter-text-muted);
-  cursor: pointer;
-}
-.close:hover {
-  background: var(--alter-surface-hover);
-  color: var(--alter-text);
-}
 .results {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 6px;
+  padding: 2px 6px 6px;
 }
 .groupLabel {
-  /* 与结果标题左对齐：行内缩进 9px + 图标 16px + 间距 10px。 */
-  padding: 8px 9px 4px 35px;
+  /* 与下方条目的内容左缘对齐：条目自身水平内缩进 9px。 */
+  padding: 10px 9px 4px;
   color: var(--alter-text-muted);
   font-size: var(--alter-font-caption);
 }
@@ -93,6 +76,13 @@
   font: inherit;
   text-align: left;
   cursor: pointer;
+}
+/* 单行条目（最近更新）没有摘要行，图标与标题垂直居中。 */
+.result[data-single-line='true'] {
+  align-items: center;
+}
+.result[data-single-line='true'] .resultIcon {
+  margin-top: 0;
 }
 .result:hover {
   background: var(--alter-surface-hover);
@@ -146,39 +136,10 @@
 }
 .empty {
   margin: 0;
-  padding: 34px 16px;
+  padding: 28px 16px;
   color: var(--alter-text-muted);
   font-size: var(--alter-font-body-sm);
   text-align: center;
-}
-.footer {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  flex-shrink: 0;
-  height: 34px;
-  padding: 0 14px;
-  border-top: 1px solid var(--alter-border);
-  color: var(--alter-text-muted);
-  font-size: var(--alter-font-caption);
-}
-.footer span {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-}
-kbd {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 4px;
-  border: 1px solid var(--alter-border);
-  border-radius: var(--alter-radius-xs);
-  background: var(--alter-surface-nav);
-  font: inherit;
-  font-size: var(--alter-font-caption);
 }
 @keyframes fade-in {
   from {
