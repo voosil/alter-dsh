@@ -17,6 +17,7 @@ import {
   ListTree,
   Plus,
   Search,
+  Settings,
   SlidersHorizontal,
   Trash2,
   X,
@@ -452,6 +453,25 @@ export function Sidebar({
             </span>
           </button>
         </div>
+        {/* 设置页是整个 Space 模块的全局设置（协作者、归档空间、快捷键、
+            存储与备份），不属于当前空间的页面导航，因此独立放在页脚右侧。 */}
+        <button
+          type="button"
+          className={styles.footerIcon}
+          aria-label="空间设置"
+          onClick={() => {
+            onClose();
+            router.navigate('#/settings');
+          }}
+        >
+          <Settings size={18} strokeWidth={1.6} aria-hidden="true" />
+          <span
+            className={`${styles.footerTooltip} ${styles.footerTooltipEnd}`}
+            role="tooltip"
+          >
+            空间设置
+          </span>
+        </button>
       </nav>
 
       <Popover

@@ -204,6 +204,9 @@
   background-clip: content-box;
 }
 .footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   flex-shrink: 0;
   /* 与左侧导航条底部的 40px 导航按钮共用一条中心线：两者底边距同为 12px，
      这里再补上半个高度差（40px 与 30px 图标之差），否则两排控件会错开。 */
@@ -261,6 +264,11 @@
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--alter-duration-fast);
+}
+/* 页脚右侧的入口贴右缘，提示框改为右对齐，避免溢出面板。 */
+.footerTooltipEnd {
+  left: auto;
+  right: 0;
 }
 .footerIcon:hover .footerTooltip,
 .footerIcon:focus-visible .footerTooltip {
