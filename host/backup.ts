@@ -26,12 +26,14 @@ import { basename, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { createGzip } from 'node:zlib';
 import type { SpaceStoreHandle, SpaceStoreLogger } from './store.js';
+import { writeAssetArchive } from './asset-archive.js';
 
 /** Subdirectory of the Space data directory that holds snapshots. */
 export const BACKUPS_DIR_NAME = 'backups';
 /** Snapshot file name: `space-YYYYMMDD.db.gz`. */
 const SNAPSHOT_NAME = /^space-\d{8}\.db\.gz$/;
-const TEMP_NAME = /^\.snapshot-\d+-\d+\.db(?:\.gz)?$/;
+const ASSET_ARCHIVE_NAME = /^space-\d{8}\.assets\.tar\.gz$/;
+const TEMP_NAME = /^\.snapshot-\d+-\d+\.db(?:\.gz)?$|^\.snapshot-\d+-\d+\.assets\.tar\.gz$/;
 const TEMP_TTL_MS = 60 * 60_000;
 const FREE_SPACE_MARGIN = 32 * 1024 * 1024;
 const FREE_SPACE_FACTOR = 2.2;
@@ -55,6 +57,73 @@ export function snapshotDay(now: Date): string {
 /** Snapshot file name for the given clock. */
 export function snapshotFileName(now: Date): string {
   return `space-${snapshotDay(now)}.db.gz`;
+}
+
+/** Asset archive file name for the given clock. */
+export function assetArchiveFileName(now: Date): string {
+  return `space-${snapshotDay(now)}.assets.tar.gz`;
+}
+
+/** List asset archives, oldest first. */
+export async function listAssetArchives(
+  directory: string,
+): Promise<SnapshotFile[]> {
+  let names: string[];
+  try {
+    names = await readdir(backupsDirectory(directory));
+  } catch {
+    return [];
+  }
+  const files: SnapshotFile[] = [];
+  for (const name of names) {
+    if (!ASSET_ARCHIVE_NAME.test(name)) continue;
+    const path = join(backupsDirectory(directory), name);
+    const bytes = await fileSize(path);
+    if (bytes === undefined) continue;
+    files.push({ name, path, bytes });
+  }
+  files.sort((a, b) => a.name.localeCompare(b.name));
+  return files;
+}
+
+/** Delete the oldest asset archives so at most `keep` remain. */
+export async function pruneAssetArchives(
+  directory: string,
+  keep: number,
+): Promise<void> {
+  const files = await listAssetArchives(directory);
+  const excess = files.slice(0, Math.max(0, files.length - keep));
+  for (const file of excess) await rm(file.path, { force: true });
+}
+
+async function ensureAssetArchive(
+  context: SnapshotContext,
+  backups: string,
+  targetName: string,
+  logger: SpaceStoreLogger,
+): Promise<string | undefined> {
+  const target = join(backups, targetName);
+  try {
+    const result = await writeAssetArchive({
+      dataDirectory: context.directory,
+      destination: `${target}.tmp`,
+      skipWhenEmpty: true,
+    });
+    if (result.files === 0) {
+      await rm(`${target}.tmp`, { force: true });
+      return undefined;
+    }
+    await chmod(`${target}.tmp`, 0o600).catch(() => undefined);
+    await rename(`${target}.tmp`, target);
+    logger.info?.(
+      `[alter-dsh-space] 已生成资产备份 ${basename(target)}（${result.files} 个文件）`,
+    );
+    return target;
+  } catch (error) {
+    await rm(`${target}.tmp`, { force: true }).catch(() => undefined);
+    logger.warn?.(`[alter-dsh-space] 资产备份失败：${messageOf(error)}`);
+    return undefined;
+  }
 }
 
 export interface SnapshotFile {
@@ -151,6 +220,7 @@ export interface SnapshotContext {
 export interface SnapshotOutcome {
   status: 'created' | 'skipped' | 'failed';
   file?: string;
+  assetsFile?: string;
   reason?: string;
 }
 
@@ -173,8 +243,19 @@ export async function createDailySnapshot(
     await mkdir(backups, { recursive: true, mode: 0o700 });
     await removeStaleTemps(backups);
     if ((await listSnapshots(directory)).some((file) => file.name === targetName)) {
+      const assetTarget = assetArchiveFileName(now());
+      const existingAssets = (await listAssetArchives(directory)).some(
+        (file) => file.name === assetTarget,
+      );
+      if (!existingAssets)
+        await ensureAssetArchive(context, backups, assetTarget, logger);
       await pruneSnapshots(directory, settings.snapshotKeep);
-      return { status: 'skipped', reason: 'today-already-snapshotted' };
+      await pruneAssetArchives(directory, settings.snapshotKeep);
+      return {
+        status: 'skipped',
+        reason: 'today-already-snapshotted',
+        ...(existingAssets ? { assetsFile: join(backups, assetTarget) } : {}),
+      };
     }
     const databaseBytes = (await fileSize(store.file)) ?? 0;
     const needed = Math.ceil(databaseBytes * FREE_SPACE_FACTOR) + FREE_SPACE_MARGIN;
@@ -204,9 +285,20 @@ export async function createDailySnapshot(
       await rm(tempDatabase, { force: true });
       const target = join(backups, targetName);
       await rename(tempArchive, target);
+      const assetsFile = await ensureAssetArchive(
+        context,
+        backups,
+        assetArchiveFileName(now()),
+        logger,
+      );
       await pruneSnapshots(directory, settings.snapshotKeep);
+      await pruneAssetArchives(directory, settings.snapshotKeep);
       logger.info?.(`[alter-dsh-space] 已生成每日备份 ${basename(target)}`);
-      return { status: 'created', file: target };
+      return {
+        status: 'created',
+        file: target,
+        ...(assetsFile === undefined ? {} : { assetsFile }),
+      };
     } catch (error) {
       await rm(tempDatabase, { force: true }).catch(() => undefined);
       await rm(tempArchive, { force: true }).catch(() => undefined);

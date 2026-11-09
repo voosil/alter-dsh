@@ -148,8 +148,16 @@ export interface SpaceStoreHandle extends SpaceStore {
   getDocumentObject(id: string): DocumentObjectRecord | undefined;
   /** Read every object row owned by one document. */
   listDocumentObjects(docId: string): DocumentObjectRecord[];
+  /** Read every object row (GC scan). */
+  listAllDocumentObjects(): DocumentObjectRecord[];
+  /** Delete object rows by id. */
+  deleteDocumentObjects(ids: readonly string[]): Promise<void>;
   /** Read one asset sidecar row. */
   getDocumentAsset(id: string): DocumentAssetRecord | undefined;
+  /** Read every asset row (GC scan). */
+  listAllDocumentAssets(): DocumentAssetRecord[];
+  /** Delete asset metadata rows by id (bytes are removed by the caller). */
+  deleteDocumentAssets(ids: readonly string[]): Promise<void>;
   /** Read the operation log of one document, oldest first. */
   listDocumentOps(docId: string, limit?: number): DocumentOpRecord[];
   /** Read one operation-log row by id. */
@@ -594,6 +602,30 @@ function readDocumentOpByKey(
   return row === undefined ? undefined : readDocumentOp(db, row.id);
 }
 
+function readAllDocumentObjects(db: DatabaseSync): DocumentObjectRecord[] {
+  const rows = db
+    .prepare(`SELECT id FROM ${DOCUMENT_OBJECTS_TABLE} ORDER BY rowid ASC`)
+    .all() as Array<{ id: string }>;
+  const records: DocumentObjectRecord[] = [];
+  for (const row of rows) {
+    const record = readDocumentObject(db, row.id);
+    if (record !== undefined) records.push(record);
+  }
+  return records;
+}
+
+function readAllDocumentAssets(db: DatabaseSync): DocumentAssetRecord[] {
+  const rows = db
+    .prepare(`SELECT id FROM ${DOCUMENT_ASSETS_TABLE} ORDER BY rowid ASC`)
+    .all() as Array<{ id: string }>;
+  const records: DocumentAssetRecord[] = [];
+  for (const row of rows) {
+    const record = readDocumentAsset(db, row.id);
+    if (record !== undefined) records.push(record);
+  }
+  return records;
+}
+
 function flushDocumentWrites(
   db: DatabaseSync,
   writes: readonly DocumentSidecarWrite[],
@@ -1024,6 +1056,52 @@ export async function openSpaceStore(
     });
   }
 
+  function deleteDocumentObjects(ids: readonly string[]): Promise<void> {
+    if (ids.length === 0) return Promise.resolve();
+    return enqueue(() => {
+      db.exec('BEGIN IMMEDIATE');
+      const statement = db.prepare(
+        `DELETE FROM ${DOCUMENT_OBJECTS_TABLE} WHERE id = ?`,
+      );
+      try {
+        for (const id of ids) statement.run(id);
+        db.exec('COMMIT');
+      } catch (error) {
+        try {
+          db.exec('ROLLBACK');
+        } catch {
+          // A failed transaction may already have been rolled back.
+        }
+        throw error;
+      } finally {
+        closeStatement(statement);
+      }
+    });
+  }
+
+  function deleteDocumentAssets(ids: readonly string[]): Promise<void> {
+    if (ids.length === 0) return Promise.resolve();
+    return enqueue(() => {
+      db.exec('BEGIN IMMEDIATE');
+      const statement = db.prepare(
+        `DELETE FROM ${DOCUMENT_ASSETS_TABLE} WHERE id = ?`,
+      );
+      try {
+        for (const id of ids) statement.run(id);
+        db.exec('COMMIT');
+      } catch (error) {
+        try {
+          db.exec('ROLLBACK');
+        } catch {
+          // A failed transaction may already have been rolled back.
+        }
+        throw error;
+      } finally {
+        closeStatement(statement);
+      }
+    });
+  }
+
   function transactDocument<T>(
     change: (value: SpaceStoreData, sidecar: DocumentSidecar) => T,
   ): Promise<T> {
@@ -1156,6 +1234,10 @@ export async function openSpaceStore(
     deleteWorkspaceLink: removeWorkspaceLink,
     getDocumentObject: (id) => readDocumentObject(db, id),
     listDocumentObjects: (docId) => readDocumentObjects(db, docId),
+    listAllDocumentObjects: () => readAllDocumentObjects(db),
+    deleteDocumentObjects,
+    listAllDocumentAssets: () => readAllDocumentAssets(db),
+    deleteDocumentAssets,
     getDocumentAsset: (id) => readDocumentAsset(db, id),
     listDocumentOps: (docId, limit) => readDocumentOps(db, docId, limit),
     getDocumentOp: (id) => readDocumentOp(db, id),

@@ -163,7 +163,7 @@ v0 限制：
 - 导入：Agent 工具 `space_asset_import` 接收 base64（≤ 4 MiB 解码后）；浏览器/编辑器后续可直接上传。
 - 读取：Host 注册 `GET /api/alter-space/asset?id=<assetId>`（Connection 鉴权）返回原始字节，
   客户端用该 URL 渲染 `<img>`；`space-asset://` 只是 Markdown 投影里的引用写法，不直接进 HTML。
-- 备份：资产目录必须纳入备份/恢复流程（见 §7）。当前每日快照仍只覆盖 SQLite；资产备份为已知待补项。
+- 备份：资产目录必须纳入备份/恢复流程（见 §7）。每日快照会同时生成资产归档。
 
 ## 7. 版本、快照与备份
 
@@ -171,12 +171,12 @@ v0 限制：
 - **快照版本**：内容为规范化（键序稳定、紧凑 JSON）的 AST 序列化；写入时按「revision 每 N 次
   或每次内容变化」生成，沿用现有每 5 分钟最多一版的节流。
 - **op log**（`doc_ops`）：审计/撤销依据；与快照并存。
-- **对象/资产**：不重复进快照，只存引用；GC 按引用与保留期。
+- **对象/资产**：不重复进快照，只存引用；Host 启动时按「当前文档 + 保留版本」引用做 GC。
 - **版本预算**：当前「每篇 10 版 / 64 KiB」由存储设置控制、在写入事务内从最旧裁剪；
   AST 快照更大，预算重估仍开放（见 [agent-doc-tools-v0.md](agent-doc-tools-v0.md)）。
 - **恢复**：restore 历史快照 = 通过 delete+insert Operations 重放该 AST、revision+1、追加 op log；
   旧对象/资产按引用保活；旧 HTML 历史版本对 AST 文档拒绝恢复（需先迁移）。
-- **备份**：SQLite 快照 + `assets/` 目录 +（可选）`objects/` 导出清单；恢复流程必须同时覆盖三者。
+- **备份**：数据库快照 + `assets/` 归档（`space-YYYYMMDD.assets.tar.gz`）成对生成与保留；恢复流程同时覆盖两者。
 
 ## 8. RPC 暴露
 

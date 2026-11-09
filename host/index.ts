@@ -15,6 +15,7 @@ import { createSpaceAuthority } from './authority.js';
 import { createSnapshotScheduler } from './backup.js';
 import { createDocumentAssetRoute } from './document/asset-route.js';
 import { ASSET_ROUTE_PATH, createDocumentAssets } from './document/assets.js';
+import { gcDocumentArtifacts } from './document/gc.js';
 import { createDocumentService } from './document/service.js';
 import {
   registerDocumentTools,
@@ -171,6 +172,9 @@ export async function apply(
     const storage = createSpaceStorage({ store, directory });
     const document = createDocumentService({ store, now });
     const assets = createDocumentAssets({ store, directory, now });
+    void gcDocumentArtifacts({ store, directory, logger }).catch((error: unknown) => {
+      logger.warn?.(`[alter-dsh-space] 文档对象/资产 GC 失败：${describeError(error)}`);
+    });
     let workspaceSync: SpaceWorkspaceSync | undefined;
     let disposeDocumentTools: (() => void) | undefined;
     const route = createSpaceFetchRoute({

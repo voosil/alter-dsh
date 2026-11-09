@@ -79,7 +79,7 @@ client-HMR 自动替换。
 - Agent 能力：hub 的「事项 / 旅程 / 观察」仍是未实现占位；协作者是产品级数据，不驱动真实 DSH Agent
   运行时；Workbench 右侧面板不装配。
 - 工作区映射：只有主目录映射工作区；归档空间的工作区仍留在 DSH 侧栏。
-- 备份存活范围：每日快照与主库同在数据目录，防误删/误改/损坏，不防磁盘故障。
+- 备份存活范围：每日数据库快照与资产归档都在数据目录内，防误删/误改/损坏，不防磁盘故障。
 
 完整边界、RPO/RTO 与存储/恢复语义只在
 [docs/specs/system-architecture.md](docs/specs/system-architecture.md) 定义，本文件不复述。

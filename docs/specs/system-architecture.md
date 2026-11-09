@@ -46,10 +46,12 @@ updated: 2026-11-09
 ## 3. SQLite 持久化
 
 - **位置**：`${DSH_HOME:-~/.dsh}/data/space/space.db`，可用插件行 `config.dataDir` 覆盖目录；
-  每日快照在 `<dataDir>/backups/space-YYYYMMDD.db.gz`。
+  文档资产字节在 `<dataDir>/assets/`；每日快照为 `<dataDir>/backups/space-YYYYMMDD.db.gz` +
+  `space-YYYYMMDD.assets.tar.gz`（无资产时只生成数据库快照）。
 - **介质**：Node 内置 `node:sqlite`，WAL 模式、`synchronous=FULL`、`busy_timeout=5000`。
-- **结构**：`PRAGMA user_version` 记录结构版本（当前 v2，新增 `workspace_links` 侧表）；
-  每实体一张 `(id, data)` 表存 JSON，`hub(space_id, data)`，`meta(key, value)` 保存数组顺序与簿记。
+- **结构**：`PRAGMA user_version` 记录结构版本（当前 v3：v2 的 `workspace_links` 侧表、v3 的
+  `document_objects` / `document_assets` / `document_ops` 文档侧表）；每实体一张 `(id, data)` 表存
+  JSON，`hub(space_id, data)`，`meta(key, value)` 保存数组顺序与簿记。
   低版本库启动时原地加表升级、业务数据不动；schema 版本高于插件支持时拒绝启动。
 - **文档内容**：存 `SpaceNode.content` 字符串并由 `contentFormat` 标记格式；新表/新字段只加插件
   自有侧表并通过 `user_version` 升级，不改 `vendor/` 实体结构。
@@ -62,8 +64,11 @@ updated: 2026-11-09
 - **版本历史**：业务服务每 5 分钟最多记录一个完整版本；宿主在业务写入的同一事务里把每篇文档的历史
   裁剪到设置值（默认 10 个版本）且单篇总量 ≤ 64 KiB，从最旧删除。
 - **每日快照**：Host 启动约 10 秒后、之后每 6 小时、以及插件卸载时（当天还没有快照才执行）生成：
-  `VACUUM INTO` 一致性副本 → gzip → 原子替换；只保留最近「设置值（默认 3）份」。
+  `VACUUM INTO` 一致性副本 → gzip → 原子替换；随后把 `assets/` 打成
+  `space-YYYYMMDD.assets.tar.gz`（无资产跳过）；两者都只保留最近「设置值（默认 3）份」。
   生成失败或磁盘不足只告警，不影响业务。
+- **文档侧表 GC**：启动时扫描当前文档与保留版本快照的引用，清理未被引用的 `doc_objects` /
+  `doc_assets`（资产同时删除磁盘字节）。
 - **存储设置**：版本历史上限与每日快照份数存在 `meta` 表（`settings:storage`），经
   `storage.get / storage.estimate / storage.set` RPC 修改；保存后立即裁剪历史并清理多余快照；
   占用估算是上限值（不含 WAL 与损坏兜底副本）。
@@ -73,10 +78,10 @@ updated: 2026-11-09
 - **损坏判定**：只有真正的数据库损坏（`SQLITE_NOTADB` / `SQLITE_CORRUPT`，或 `quick_check` 失败）
   才把 `space.db`、`-wal`、`-shm`、`-journal` 移到 `.corrupt-<时间戳>-<pid>-<序号>` 并重建默认库。
   锁、权限、I/O 错误保留原文件并直接报错；损坏副本最多保留 2 组 / 256 MiB。
-- **备份**：每日快照即整库备份；运行中的 DSH 持有连接，禁止手工编辑或移动数据库，
+- **备份**：每日快照 = 数据库快照 + 资产归档；运行中的 DSH 持有连接，禁止手工编辑或移动数据库，
   手工备份用 `sqlite3 .backup`、退出后复制，或直接用每日快照。
-- **恢复**：退出 DSH → `gunzip` 快照 → 用 Node `DatabaseSync` 跑一次 `PRAGMA quick_check` →
-  替换 `space.db`（删除残留 `-wal`/`-shm`）。
+- **恢复**：退出 DSH → `gunzip` 数据库快照并用 Node `DatabaseSync` 跑一次 `PRAGMA quick_check` →
+  替换 `space.db`（删除残留 `-wal`/`-shm`）；如需恢复图片，再把资产归档解包回 `<dataDir>/assets/`。
 - **恢复目标**：文档内容 RPO ≤ 1 次编辑（版本历史，最多 5 分钟粒度）；其余业务数据 RPO ≤ 24 小时
   （每日快照）；RTO 手动恢复约 5–10 分钟。
 

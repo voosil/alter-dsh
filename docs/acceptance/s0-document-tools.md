@@ -28,6 +28,8 @@ DSH desktop profile 中的注册与读写链路。结论：**PASS（安装 / 工
 | 撤销工具 | `space_doc_undo`：按 `undo_token` 或最近一次 batch 应用 `inverseOps`，生成新 revision 与 op log；冲突/未知 token 错误码覆盖。 |
 | 资产 | `space_asset_import` + 内容寻址资产表/文件：去重、mime/大小校验、`GET /api/alter-space/asset` 读取；客户端图片块用该 URL 渲染，失败回退占位。资产备份目录仍待纳入每日快照。 |
 | 评论与历史 | AST 文档侧栏：评论列表/发布/解决；版本列表、AST 预览与「恢复此版本」。恢复走 `doc.restoreVersion`（delete+insert Operations，revision+1，不倒退 revision），旧 HTML 历史版本明确拒绝。 |
+| 对象/资产 GC | 启动时扫描当前文档与保留版本的引用，删除未引用对象与资产元数据/字节；版本中仍引用的对象保留。 |
+| 资产备份 | 每日快照同时生成 `space-YYYYMMDD.assets.tar.gz`（无资产跳过），二者按同一 keep 策略保留；恢复流程同时覆盖。 |
 
 真机测试文档：`doc-b16dc506-1186-45ab-bcf9-59e98291a2a4`（「S0 验收测试（可删除）」）。
 v0 没有删除工具，需在空间面板中手动删除。
@@ -40,7 +42,7 @@ v0 没有删除工具，需在空间面板中手动删除。
 
 ## 限制
 
-- 旧 HTML 文档对工具返回 `doc/legacy-format`；AST 文档已有 Tiptap 编辑器、图片资产渲染与评论/历史侧栏，资产备份目录仍待接入。
+- 旧 HTML 文档对工具返回 `doc/legacy-format`；AST 文档已有 Tiptap 编辑器、图片资产渲染、评论/历史侧栏与资产/对象 GC、资产备份。
 - `space_doc_outline` 的 `total_blocks` 计入嵌套块（示例 18），`outline` 只列顶层块（示例 7）。
 - 资产导入、undo 端点、对象 GC、组件运行时不在本切片。
 

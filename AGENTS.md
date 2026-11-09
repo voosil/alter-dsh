@@ -11,7 +11,7 @@ Host 半侧（`host/` → `lib/`）是 Cordis 插件，持有 SQLite 与业务�
 ## 硬约束（违反即返工）
 
 - **数据权威在 Host**：业务数据只写 SQLite（`${DSH_HOME:-~/.dsh}/data/space/space.db`）；
-  localStorage 只存 UI 偏好。不要手工编辑/移动运行中的数据库；备份用每日快照或 `sqlite3 .backup`。
+  localStorage 只存 UI 偏好。不要手工编辑/移动运行中的数据库；备份用每日快照（含资产归档）或 `sqlite3 .backup`。
 - **新增 RPC 端点**必须同时改 `host/rpc.ts` 白名单与 `src/space-client.ts` 映射；通道常量
   `('/api', 'alter-space')` 两处保持同步。传输信封与端点语义以 spec 为准。
 - **`vendor/` 可改但克制**：新增逻辑优先放 `host/`、`src/`；确实要改 `vendor/` 时保持行为与
