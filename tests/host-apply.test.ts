@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -10,6 +10,7 @@ import {
 import { RPC_ENDPOINT, RPC_ROUTE_PATH } from '../host/rpc.js';
 import { SPACE_DB_FILE, openSpaceStore } from '../host/store.js';
 import type { SpaceRpcHandler } from '../host/rpc.js';
+import { FakeWorkspaceRegistry } from './workspace-fixtures.js';
 
 const dirs: string[] = [];
 
@@ -30,10 +31,16 @@ interface Harness {
   teardown: () => Promise<void>;
 }
 
-function createHarness(): Harness {
+function createHarness(options: { registry?: unknown } = {}): Harness {
   let registeredPath: string | undefined;
   let routeFetch: ((request: Request) => Promise<Response>) | undefined;
   const disposers: Array<() => unknown> = [];
+  const childEffect = async (execute: () => unknown) => {
+    const dispose = await execute();
+    if (typeof dispose === 'function')
+      disposers.push(dispose as () => unknown);
+    return dispose;
+  };
   const ctx = {
     connection: {
       fetch: {
@@ -48,12 +55,17 @@ function createHarness(): Harness {
       },
     },
     logger: { info: () => undefined, warn: () => undefined },
-    effect: async (execute: () => unknown) => {
-      const dispose = await execute();
-      if (typeof dispose === 'function')
-        disposers.push(dispose as () => unknown);
-      return dispose;
-    },
+    effect: childEffect,
+    ...(options.registry === undefined
+      ? {}
+      : {
+          inject(names: string[], callback: (child: unknown) => void) {
+            callback({
+              workspaceRegistry: options.registry,
+              effect: childEffect,
+            });
+          },
+        }),
   } as unknown as HostContextLike;
   return {
     ctx,
@@ -116,6 +128,30 @@ describe('host plugin apply', () => {
       true,
     );
     expect(reopened.getStorageSettings().historyLimit).toBe(6);
+    await reopened.close();
+  });
+
+  it('creates the DSH workspace through the RPC seam when a registry is available', async () => {
+    const dir = await tempDir();
+    const workspaceDir = await mkdtemp(join(tmpdir(), 'alter-space-apply-ws-'));
+    dirs.push(workspaceDir);
+    const registry = new FakeWorkspaceRegistry();
+    const harness = createHarness({ registry });
+    await apply(harness.ctx, { dataDir: dir });
+    const created = (await harness.call('space.createSpace', [
+      { name: '工作空间', directories: [workspaceDir] },
+    ])) as { id: string };
+    const workspace = registry.list()[0] as
+      | { id: string; path: string; title: string }
+      | undefined;
+    expect(workspace).toBeDefined();
+    expect(workspace?.path).toBe(await realpath(workspaceDir));
+    expect(workspace?.title).toBe('🪐 工作空间');
+    await harness.teardown();
+    const reopened = await openSpaceStore({ directory: dir });
+    expect(reopened.getWorkspaceLink(created.id)?.workspaceId).toBe(
+      workspace?.id,
+    );
     await reopened.close();
   });
 

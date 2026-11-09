@@ -214,32 +214,6 @@
 .evidence li {
   padding: 6px 0;
 }
-.plugins {
-  list-style: none;
-  padding: 0;
-  margin: 20px 0 0;
-}
-.pluginCreate {
-  display: flex;
-  justify-content: flex-end;
-}
-.plugins li {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  justify-content: space-between;
-  padding: 18px 0;
-  border-bottom: 1px solid var(--alter-border);
-}
-.plugins strong {
-  font-size: var(--alter-font-body-sm);
-  font-weight: 500;
-}
-.plugins p {
-  margin: 4px 0 0;
-  font-size: var(--alter-font-caption);
-  color: var(--alter-text-muted);
-}
 .conversation {
   display: flex;
   flex-direction: column;
@@ -658,67 +632,99 @@
 .observationAction {
   margin-left: -12px;
 }
-.policyChoices {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  margin: 24px 0 40px;
-}
-.policyChoices > button {
-  align-items: flex-start;
-  justify-content: space-between;
-  text-align: left;
-  white-space: normal;
-  min-width: 0;
-  height: auto;
-  padding: 18px 16px;
-  border: 1px solid var(--alter-border);
+.policyControl {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 2px;
   border-radius: var(--alter-radius-control);
+  background: var(--alter-surface-hover);
 }
-.policyChoices > button[aria-pressed='true'] {
-  border-color: var(--alter-control-border-hover);
-  background: var(--alter-surface-rail);
-}
-.policyChoices svg {
-  flex-shrink: 0;
+.policyOption {
+  height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: calc(var(--alter-radius-control) - 2px);
+  background: transparent;
   color: var(--alter-text-muted);
-  margin-top: 2px;
-}
-.policyText {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.policyText strong {
-  font-size: var(--alter-font-body-sm);
-  font-weight: 500;
-}
-.policyText > span {
+  font: inherit;
   font-size: var(--alter-font-caption);
-  line-height: 1.7;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--alter-duration-fast),
+    color var(--alter-duration-fast);
+}
+.policyOption:hover:not(:disabled) {
+  color: var(--alter-text);
+}
+.policyOption[data-selected] {
+  background: var(--alter-surface);
+  box-shadow: inset 0 0 0 1px var(--alter-border);
+  color: var(--alter-text);
+}
+.policyOption:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.policyOption:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: 1px;
+}
+.policyDetail {
+  margin: 10px 0 0;
   color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
 }
 .plugins {
-  margin: 20px 0 40px;
-  border-top: 1px solid var(--alter-border);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 .plugins li {
-  gap: 16px;
-  padding: 20px 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 8px 0;
 }
 .pluginIcon {
   display: grid;
   place-items: center;
-  width: 38px;
-  height: 38px;
+  width: 28px;
+  height: 28px;
   flex-shrink: 0;
-  background: var(--alter-surface-rail);
+  background: var(--alter-surface-hover);
   color: var(--alter-text-secondary);
   border-radius: var(--alter-radius-control);
 }
 .pluginText {
   flex: 1;
   min-width: 0;
+}
+.pluginText strong {
+  display: block;
+  font-size: var(--alter-font-body-sm);
+  font-weight: 500;
+}
+.pluginText p {
+  margin: 2px 0 0;
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+}
+.pluginBadge {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: var(--alter-radius-pill);
+  background: var(--alter-surface-hover);
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-micro);
+  line-height: 1.6;
 }
 .pluginToggle {
   flex-shrink: 0;
@@ -738,6 +744,12 @@
   border-radius: 50%;
   background: var(--alter-surface);
   transition: transform var(--alter-duration-fast);
+}
+@media (prefers-reduced-motion: reduce) {
+  .policyOption,
+  .toggleTrack > span {
+    transition: none;
+  }
 }
 [aria-checked='true'] .toggleTrack {
   background: var(--alter-text-secondary);

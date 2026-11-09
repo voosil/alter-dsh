@@ -22,6 +22,7 @@ import { readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'vite';
+import { createDirectoryFieldOverride } from './directory-field-override.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const pluginRoot = path.resolve(here, '..');
@@ -54,8 +55,9 @@ const alias = [
     replacement: path.join(vendorSrc('ui-system'), 'index.ts'),
   },
   {
-    // The upstream settings package registers through Alter's module registry;
-    // the DSH port reuses only its page component, mounted by the panel shell.
+    // Kept resolvable for parity with the vendored tree: the DSH port renders
+    // its own settings page (`src/settings-page.tsx`) because that page also
+    // owns the DSH-only storage policy, so the upstream page is not mounted.
     find: /^@alter\/ui-settings\/SettingsPage$/,
     replacement: path.join(vendorSrc('ui-settings'), 'SettingsPage.tsx'),
   },
@@ -77,6 +79,8 @@ const alias = [
   },
 ];
 
+const directoryFieldOverride = createDirectoryFieldOverride(pluginRoot);
+
 await rm(distDir, { recursive: true, force: true });
 
 await build({
@@ -85,6 +89,7 @@ await build({
   logLevel: 'warn',
   define: { 'process.env.NODE_ENV': JSON.stringify('production') },
   resolve: { alias },
+  plugins: [directoryFieldOverride],
   build: {
     outDir: 'dist',
     emptyOutDir: true,
@@ -119,8 +124,8 @@ const bundle = await readFile(path.join(distDir, bundleFile), 'utf8');
  *   item, so the percentage resolves against the panel box instead;
  * - `tokens.css` keeps `color-scheme: light` at the document root, which would
  *   force the whole host app light; the host container carries it instead;
- * - `SearchPanel.module.css` has a bare `kbd` element selector (CSS Modules
- *   leaves element selectors unscoped) that would restyle the host's own <kbd>.
+ * - CSS Modules leaves element selectors unscoped; a bare `kbd` rule in copied
+ *   styles would restyle the host's own <kbd>, so scope it to the container.
  */
 function adaptCss(css) {
   return css

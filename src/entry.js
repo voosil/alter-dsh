@@ -16,6 +16,7 @@ import { createSpaceClient } from './space-client';
 import { createSpaceStorageClient } from './storage-client';
 import { createSpaceRouter } from './router.js';
 import { SpaceShell } from './space-shell';
+import { DIRECTORY_PICKER_UNAVAILABLE } from './native-directory-field';
 import resetCss from './global-reset.css?inline';
 import '@alter/ui-system/tokens.css';
 import './host.css';
@@ -29,7 +30,7 @@ const dictionaries = {
   en: { panel: 'Space' },
 };
 
-function SpacePanel({ service, storage, router }) {
+function SpacePanel({ service, storage, router, pickDirectory }) {
   useEffect(() => {
     const tag = document.createElement('style');
     tag.dataset.plugin = '@alter-dsh/space';
@@ -44,8 +45,33 @@ function SpacePanel({ service, storage, router }) {
   return createElement(
     'div',
     { className: 'alter-space-host' },
-    createElement(SpaceShell, { service, storage, router }),
+    createElement(SpaceShell, { service, storage, router, pickDirectory }),
   );
+}
+
+/**
+ * Resolve the host directory picker on demand.
+ *
+ * DSH's client workspace domain owns the same picker its own "add workspace"
+ * flow uses: native folder dialog on desktop, DSH browse dialog in the web
+ * profile. The service is read lazily (apply may run before it is active) and
+ * a dedicated error code lets the field fall back to the vendored browser.
+ * @param ctx - the client plugin context.
+ */
+function createHostDirectoryPicker(ctx) {
+  return async () => {
+    const ui =
+      typeof ctx.get === 'function' ? ctx.get('uiWorkspace') : undefined;
+    if (ui === undefined || typeof ui.pickDirectory !== 'function') {
+      const error = new Error('当前宿主不支持系统目录选择');
+      error.code = DIRECTORY_PICKER_UNAVAILABLE;
+      throw error;
+    }
+    const picked = await ui.pickDirectory();
+    return typeof picked === 'string' && picked.trim() !== ''
+      ? picked.trim()
+      : null;
+  };
 }
 
 function SpaceIcon({ size = 18 }) {
@@ -67,9 +93,15 @@ export function apply(ctx) {
   const service = createSpaceClient(rpc);
   const storage = createSpaceStorageClient(rpc);
   const router = createSpaceRouter();
+  const pickDirectory = createHostDirectoryPicker(ctx);
 
   function SpaceView() {
-    return createElement(SpacePanel, { service, storage, router });
+    return createElement(SpacePanel, {
+      service,
+      storage,
+      router,
+      pickDirectory,
+    });
   }
 
   ctx.effect(

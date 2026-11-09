@@ -6,11 +6,11 @@ import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import type {
   Agent,
+  AgentEvent,
   AgentPermission,
   Comment,
   CreateAgentInput,
   DirectoryEntry,
-  DocVersion,
   Milestone,
   NewSpaceInput,
   NodeKind,
@@ -102,6 +102,215 @@ function localDayKey(value: string) {
 function excerpt(value: string, max = 48) {
   const text = value.replace(/\s+/g, ' ').trim();
   return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+interface ActivitySource {
+  space: Space;
+  nodes: SpaceNode[];
+  thoughts: Thought[];
+  comments: Comment[];
+  tasks: SpaceTask[];
+  agentEvents: AgentEvent[];
+  /** 活动窗口起点（含）。 */
+  since: Date;
+  /** 业务时钟；不记录尚未发生的事件。 */
+  now: Date;
+}
+
+/**
+ * 「什么值得记」——空间详情活动记录的产品口径。
+ *
+ * 活动流由实体当前状态推导，不是系统日志：这里只留下回看空间时真正关心的
+ * 变化；编辑过程、使用统计与系统行为交给版本历史、数据库和运行日志。
+ *
+ * 记：
+ * - 空间的创建；
+ * - 文档的新建（空白草稿不算；Alter 的同一动作由 AgentEvent 呈现，不重复记）；
+ * - 用户主动归档文档（闲置自动归档是系统清理，不是用户决定，不记）；
+ * - 随想的记录，以及随想被整理成文档；
+ * - 评论的发起与讨论了结；
+ * - 事项的提出；
+ * - Alter 的行动（AgentEvent 本身已是整理过的结果摘要）。
+ *
+ * 不记：文档每次编辑、自动保存与版本快照；评论改字；随想改动；打开文档与
+ * 活跃度；系统 / 存储 / 同步行为。以上仍完整保存在数据库与版本历史里。
+ */
+function buildActivityEvents({
+  space,
+  nodes,
+  thoughts,
+  comments,
+  tasks,
+  agentEvents,
+  since,
+  now,
+}: ActivitySource): SpaceActivityEvent[] {
+  const events: SpaceActivityEvent[] = [];
+  const record = (event: SpaceActivityEvent) => {
+    const at = Date.parse(event.at);
+    if (!Number.isFinite(at) || at > now.getTime() || at < since.getTime())
+      return;
+    events.push(event);
+  };
+
+  const notes = nodes.filter(
+    (node) => node.spaceId === space.id && node.kind === 'note',
+  );
+  const notesById = new Map(notes.map((node) => [node.id, node]));
+
+  // Alter 的 AgentEvent 已经概括了同一动作，5 分钟内的文档新建不再单独记。
+  const agentDocTimes = new Map<string, number[]>();
+  for (const event of agentEvents) {
+    if (!event.docId) continue;
+    const times = agentDocTimes.get(event.docId) ?? [];
+    times.push(Date.parse(event.at));
+    agentDocTimes.set(event.docId, times);
+  }
+  const recordedByAgent = (docId: string, at: string) =>
+    agentDocTimes
+      .get(docId)
+      ?.some((time) => Math.abs(time - Date.parse(at)) < 5 * 60_000) ?? false;
+
+  record({
+    id: `act-space-${space.id}`,
+    at: space.createdAt,
+    kind: 'space',
+    title: `创建了空间「${space.name}」`,
+  });
+
+  // 随想转文档时，文档的新建由「把随想整理成」这条记录承担，避免重复。
+  const convertedDocIds = new Set(
+    thoughts
+      .filter(
+        (thought) =>
+          thought.spaceId === space.id &&
+          !thought.deletedAt &&
+          thought.convertedDocId,
+      )
+      .map((thought) => thought.convertedDocId as string),
+  );
+
+  for (const node of notes) {
+    if (node.deletedAt) continue;
+    const title = node.title || '未命名文档';
+    // 空白草稿只是「点了一下新建」，还没有内容，不值得记；后来写了字自然补记。
+    if (!node.title.trim() && !htmlToText(node.content).trim()) continue;
+    if (
+      !convertedDocIds.has(node.id) &&
+      !recordedByAgent(node.id, node.createdAt)
+    ) {
+      const label = node.creator === 'alter' ? 'Alter 新建了' : '新建';
+      record({
+        id: `act-doc-create-${node.id}`,
+        at: node.createdAt,
+        kind: 'doc',
+        title: `${label}《${title}》`,
+        label,
+        docId: node.id,
+        docTitle: title,
+      });
+    }
+    // 只有用户主动归档才值得记；闲置自动归档属于系统清理。
+    if (node.archivedAt && node.archivedBy === 'user') {
+      const label = '归档';
+      record({
+        id: `act-doc-archive-${node.id}`,
+        at: node.archivedAt,
+        kind: 'doc',
+        title: `${label}《${title}》`,
+        label,
+        docId: node.id,
+        docTitle: title,
+      });
+    }
+  }
+
+  for (const thought of thoughts) {
+    if (thought.spaceId !== space.id || thought.deletedAt) continue;
+    const text = excerpt(htmlToText(thought.content), 36);
+    const title = text ? `记录随想「${text}」` : '记录了一条随想';
+    record({
+      id: `act-thought-${thought.id}`,
+      at: thought.createdAt,
+      kind: 'thought',
+      title,
+      label: title,
+    });
+    const converted = thought.convertedDocId
+      ? notesById.get(thought.convertedDocId)
+      : undefined;
+    if (!converted || converted.deletedAt) continue;
+    const docTitle = converted.title || '未命名文档';
+    const label = '把随想整理成';
+    record({
+      id: `act-thought-convert-${thought.id}`,
+      at: converted.createdAt,
+      kind: 'doc',
+      title: `${label}《${docTitle}》`,
+      label,
+      docId: converted.id,
+      docTitle,
+    });
+  }
+
+  for (const comment of comments) {
+    const note = notesById.get(comment.docId);
+    if (!note || note.deletedAt) continue;
+    const docTitle = note.title || '未命名文档';
+    const prefix = comment.author === 'alter' ? 'Alter ' : '';
+    record({
+      id: `act-comment-${comment.id}`,
+      at: comment.createdAt,
+      kind: 'comment',
+      title: `${prefix}评论《${docTitle}》`,
+      label: `${prefix}评论`,
+      detail: excerpt(comment.body),
+      docId: note.id,
+      docTitle,
+    });
+    if (!comment.resolvedAt) continue;
+    const label = `${prefix}结束讨论`;
+    record({
+      id: `act-comment-resolved-${comment.id}`,
+      at: comment.resolvedAt,
+      kind: 'comment',
+      title: `${label}《${docTitle}》`,
+      label,
+      detail: excerpt(comment.body),
+      docId: note.id,
+      docTitle,
+    });
+  }
+
+  for (const task of tasks) {
+    if (task.spaceId !== space.id) continue;
+    const title = `提出事项「${task.title}」`;
+    const note = task.docId ? notesById.get(task.docId) : undefined;
+    record({
+      id: `act-task-${task.id}`,
+      at: task.createdAt,
+      kind: 'task',
+      title,
+      label: title,
+      detail: task.detail,
+      docId: task.docId,
+      docTitle: note?.title || undefined,
+    });
+  }
+
+  for (const event of agentEvents) {
+    record({
+      id: `act-agent-${event.id}`,
+      at: event.at,
+      kind: 'agent',
+      title: event.title,
+      detail: event.detail,
+      docId: event.docId,
+      agentEventId: event.id,
+    });
+  }
+
+  return events.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
 }
 
 const directoryCollator = new Intl.Collator('zh-CN');
@@ -901,162 +1110,19 @@ export function createContentService(
       const since = new Date(timestamp);
       since.setDate(since.getDate() - 365);
       since.setHours(0, 0, 0, 0);
-      const notes = data.nodes.filter(
-        (node) => node.spaceId === spaceId && node.kind === 'note',
-      );
-      const notesById = new Map(notes.map((node) => [node.id, node]));
       const agentEvents = data.events
         .filter((event) => event.spaceId === spaceId)
         .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
-      const agentDocTimes = new Map<string, number[]>();
-      for (const event of agentEvents) {
-        if (!event.docId) continue;
-        const times = agentDocTimes.get(event.docId) ?? [];
-        times.push(Date.parse(event.at));
-        agentDocTimes.set(event.docId, times);
-      }
-      const recordedByAgent = (docId: string, at: string) =>
-        agentDocTimes
-          .get(docId)
-          ?.some((time) => Math.abs(time - Date.parse(at)) < 5 * 60_000) ??
-        false;
-      const versionsByDoc = new Map<string, DocVersion[]>();
-      for (const version of data.versions) {
-        if (!notesById.has(version.docId)) continue;
-        const list = versionsByDoc.get(version.docId) ?? [];
-        list.push(version);
-        versionsByDoc.set(version.docId, list);
-      }
-
-      const events: SpaceActivityEvent[] = [];
-      const record = (event: SpaceActivityEvent) => {
-        const at = Date.parse(event.at);
-        if (
-          !Number.isFinite(at) ||
-          at > timestamp.getTime() ||
-          at < since.getTime()
-        )
-          return;
-        events.push(event);
-      };
-
-      record({
-        id: `act-space-${space.id}`,
-        at: space.createdAt,
-        kind: 'space',
-        title: `创建了空间「${space.name}」`,
+      const events = buildActivityEvents({
+        space,
+        nodes: data.nodes,
+        thoughts: data.thoughts,
+        comments: data.comments,
+        tasks: data.tasks,
+        agentEvents,
+        since,
+        now: timestamp,
       });
-      for (const node of notes) {
-        if (node.deletedAt) continue;
-        const title = node.title || '未命名文档';
-        if (!recordedByAgent(node.id, node.createdAt)) {
-          const label = node.creator === 'alter' ? 'Alter 新建了' : '新建';
-          record({
-            id: `act-doc-create-${node.id}`,
-            at: node.createdAt,
-            kind: 'doc',
-            title: `${label}《${title}》`,
-            label,
-            docId: node.id,
-            docTitle: title,
-          });
-        }
-        const versions = versionsByDoc.get(node.id) ?? [];
-        for (const version of versions) {
-          if (recordedByAgent(node.id, version.at)) continue;
-          const label = version.author === 'alter' ? 'Alter 更新了' : '更新';
-          record({
-            id: `act-doc-version-${version.id}`,
-            at: version.at,
-            kind: 'doc',
-            title: `${label}《${title}》`,
-            label,
-            docId: node.id,
-            docTitle: title,
-          });
-        }
-        const savedAt = (at: string) =>
-          versions.some(
-            (version) =>
-              Math.abs(Date.parse(version.at) - Date.parse(at)) < 5 * 60_000,
-          );
-        if (
-          Date.parse(node.updatedAt) - Date.parse(node.createdAt) > HOUR &&
-          !recordedByAgent(node.id, node.updatedAt) &&
-          !savedAt(node.updatedAt)
-        ) {
-          record({
-            id: `act-doc-update-${node.id}`,
-            at: node.updatedAt,
-            kind: 'doc',
-            title: `更新《${title}》`,
-            label: '更新',
-            docId: node.id,
-            docTitle: title,
-          });
-        }
-      }
-      for (const thought of data.thoughts) {
-        if (thought.spaceId !== spaceId || thought.deletedAt) continue;
-        const text = excerpt(htmlToText(thought.content), 36);
-        const title = text ? `记录随想「${text}」` : '记录了一条随想';
-        const note = thought.convertedDocId
-          ? notesById.get(thought.convertedDocId)
-          : undefined;
-        record({
-          id: `act-thought-${thought.id}`,
-          at: thought.createdAt,
-          kind: 'thought',
-          title,
-          label: title,
-          docId: thought.convertedDocId,
-          docTitle: note?.title || undefined,
-        });
-      }
-      for (const comment of data.comments) {
-        const note = notesById.get(comment.docId);
-        if (!note || note.deletedAt) continue;
-        const label = `${comment.author === 'alter' ? 'Alter ' : ''}评论`;
-        const docTitle = note.title || '未命名文档';
-        record({
-          id: `act-comment-${comment.id}`,
-          at: comment.createdAt,
-          kind: 'comment',
-          title: `${label}《${docTitle}》`,
-          label,
-          detail: excerpt(comment.body),
-          docId: note.id,
-          docTitle,
-        });
-      }
-      for (const task of data.tasks) {
-        if (task.spaceId !== spaceId) continue;
-        const title = `提出事项「${task.title}」`;
-        const note = task.docId ? notesById.get(task.docId) : undefined;
-        record({
-          id: `act-task-${task.id}`,
-          at: task.createdAt,
-          kind: 'task',
-          title,
-          label: title,
-          detail: task.detail,
-          docId: task.docId,
-          docTitle: note?.title || undefined,
-        });
-      }
-      for (const event of agentEvents) {
-        record({
-          id: `act-agent-${event.id}`,
-          at: event.at,
-          kind: 'agent',
-          title: event.title,
-          detail: event.detail,
-          docId: event.docId,
-          agentEventId: event.id,
-        });
-      }
-
-      events.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
       const daily = new Map<string, SpaceActivityEvent[]>();
       for (const event of events) {
         const date = localDayKey(event.at);

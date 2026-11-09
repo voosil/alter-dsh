@@ -40,8 +40,11 @@ export const DEFAULT_SPACE_ID = 'sp-inbox';
 /** Default space name. */
 export const DEFAULT_SPACE_NAME = '日常';
 
-const FORMAT_VERSION = 1;
+const FORMAT_VERSION = 2;
 const ORDER_PREFIX = 'order:';
+/** Sidecar table owning the Space ↔ DSH workspace binding (schema v2). */
+const WORKSPACE_LINKS_TABLE = 'workspace_links';
+const CREATE_WORKSPACE_LINKS = `CREATE TABLE IF NOT EXISTS ${WORKSPACE_LINKS_TABLE} (space_id TEXT PRIMARY KEY, data TEXT NOT NULL) STRICT;`;
 /** Corruption copies kept on disk at most. */
 const MAX_CORRUPT_BACKUPS = 2;
 /** Total bytes corruption copies may occupy at most. */
@@ -83,6 +86,26 @@ export interface OpenSpaceStoreOptions {
   logger?: SpaceStoreLogger;
 }
 
+/**
+ * One persisted Space ↔ DSH workspace binding.
+ *
+ * The binding is plugin-owned sidecar data, never part of the vendored Space
+ * entity: the workspace is a Host-level DSH concept, while the Space database
+ * must stay interchangeable with the upstream format.
+ */
+export interface SpaceWorkspaceLink {
+  /** Owning Space id. */
+  spaceId: string;
+  /** DSH workspace id created or adopted for the Space's primary directory. */
+  workspaceId: string;
+  /** Canonical absolute primary directory the workspace owns. */
+  path: string;
+  /** Workspace title last applied by this plugin (marker included). */
+  appliedTitle: string;
+  /** ISO-8601 instant of the last applied binding. */
+  updatedAt: string;
+}
+
 /** Persisted authority, plus the operations the Host lifecycle needs. */
 export interface SpaceStoreHandle extends SpaceStore {
   /** Absolute database file path. */
@@ -91,6 +114,14 @@ export interface SpaceStoreHandle extends SpaceStore {
   getStorageSettings(): StorageSettings;
   /** Persist a storage policy; resolves after COMMIT. */
   setStorageSettings(settings: StorageSettings): Promise<void>;
+  /** Read one Space ↔ workspace binding. */
+  getWorkspaceLink(spaceId: string): SpaceWorkspaceLink | undefined;
+  /** Read every Space ↔ workspace binding in Space insertion order. */
+  listWorkspaceLinks(): SpaceWorkspaceLink[];
+  /** Persist one binding; resolves after COMMIT. */
+  setWorkspaceLink(link: SpaceWorkspaceLink): Promise<void>;
+  /** Drop one binding; resolves after COMMIT. */
+  deleteWorkspaceLink(spaceId: string): Promise<void>;
   /** Write a consistent, compacted copy of the database to `destination`. */
   snapshotInto(destination: string): Promise<void>;
   /** Drain queued writes and close the connection. */
@@ -104,6 +135,7 @@ const SCHEMA = [
   'CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;',
   ...COLLECTIONS.map((name) => CREATE_TABLE(name, 'id')),
   CREATE_TABLE('hub', 'space_id'),
+  CREATE_WORKSPACE_LINKS,
 ].join('\n');
 
 function defaultSpace(now: Date) {
@@ -376,6 +408,31 @@ function readDatabase(db: DatabaseSync, now: () => Date): SpaceStoreData {
   return data;
 }
 
+/** Rebuild the Space ↔ workspace bindings from their sidecar rows. */
+function readWorkspaceLinks(db: DatabaseSync): SpaceWorkspaceLink[] {
+  const rows = db
+    .prepare(`SELECT space_id, data FROM ${WORKSPACE_LINKS_TABLE}`)
+    .all() as Array<{ space_id: string; data: string }>;
+  const links: SpaceWorkspaceLink[] = [];
+  for (const row of rows) {
+    const parsed = parseJsonObject(row.data);
+    if (parsed === undefined) continue;
+    const { spaceId, workspaceId, path, appliedTitle, updatedAt } = parsed;
+    // A row that lost its shape is unusable, but must never break the whole
+    // database: the Space keeps working without its workspace binding.
+    if (
+      typeof spaceId !== 'string' ||
+      typeof workspaceId !== 'string' ||
+      typeof path !== 'string' ||
+      typeof appliedTitle !== 'string' ||
+      typeof updatedAt !== 'string'
+    )
+      continue;
+    links.push({ spaceId, workspaceId, path, appliedTitle, updatedAt });
+  }
+  return links;
+}
+
 function parseEntityRow(
   _collection: Collection,
   id: string,
@@ -564,6 +621,7 @@ function persistAll(db: DatabaseSync, data: SpaceStoreData): void {
       );
     }
     db.exec('DELETE FROM hub');
+    db.exec(`DELETE FROM ${WORKSPACE_LINKS_TABLE}`);
     const hubInsert = db.prepare('INSERT INTO hub (space_id, data) VALUES (?, ?)');
     try {
       for (const [spaceId, snapshot] of Object.entries(data.hub))
@@ -668,7 +726,16 @@ export async function openSpaceStore(
     db.exec(SCHEMA);
     db.exec(`PRAGMA user_version = ${FORMAT_VERSION}`);
     version = FORMAT_VERSION;
+  } else if (version < FORMAT_VERSION) {
+    // v1 → v2: add the Space ↔ workspace sidecar table. Business tables are
+    // untouched, so an in-place upgrade is a single idempotent CREATE.
+    db.exec(CREATE_WORKSPACE_LINKS);
+    db.exec(`PRAGMA user_version = ${FORMAT_VERSION}`);
+    version = FORMAT_VERSION;
   }
+  // Defensive: a v2 database whose sidecar table went missing is healed here
+  // instead of failing every later write.
+  db.exec(CREATE_WORKSPACE_LINKS);
 
   const storageSettings = parseStorageSettings(readStorageSettingsValue(db));
 
@@ -681,6 +748,9 @@ export async function openSpaceStore(
   } else {
     data = readDatabase(db, now);
   }
+
+  const workspaceLinks = new Map<string, SpaceWorkspaceLink>();
+  for (const link of readWorkspaceLinks(db)) workspaceLinks.set(link.spaceId, link);
 
   const persisted = snapshotPersisted(data);
   const orderSnapshot = new Map<Collection, string[]>();
@@ -742,6 +812,53 @@ export async function openSpaceStore(
     });
   }
 
+  function writeWorkspaceLink(link: SpaceWorkspaceLink): Promise<void> {
+    return enqueue(() => {
+      db.exec('BEGIN IMMEDIATE');
+      const statement = db.prepare(
+        `INSERT INTO ${WORKSPACE_LINKS_TABLE} (space_id, data) VALUES (?, ?)
+         ON CONFLICT(space_id) DO UPDATE SET data = excluded.data`,
+      );
+      try {
+        statement.run(link.spaceId, JSON.stringify(link));
+        db.exec('COMMIT');
+      } catch (error) {
+        try {
+          db.exec('ROLLBACK');
+        } catch {
+          // A failed transaction may already have been rolled back by SQLite.
+        }
+        throw error;
+      } finally {
+        closeStatement(statement);
+      }
+      workspaceLinks.set(link.spaceId, { ...link });
+    });
+  }
+
+  function removeWorkspaceLink(spaceId: string): Promise<void> {
+    return enqueue(() => {
+      db.exec('BEGIN IMMEDIATE');
+      const statement = db.prepare(
+        `DELETE FROM ${WORKSPACE_LINKS_TABLE} WHERE space_id = ?`,
+      );
+      try {
+        statement.run(spaceId);
+        db.exec('COMMIT');
+      } catch (error) {
+        try {
+          db.exec('ROLLBACK');
+        } catch {
+          // A failed transaction may already have been rolled back by SQLite.
+        }
+        throw error;
+      } finally {
+        closeStatement(statement);
+      }
+      workspaceLinks.delete(spaceId);
+    });
+  }
+
   return {
     file,
     read: () => data,
@@ -765,6 +882,13 @@ export async function openSpaceStore(
         currentSettings = value;
       });
     },
+    getWorkspaceLink(spaceId) {
+      const link = workspaceLinks.get(spaceId);
+      return link === undefined ? undefined : { ...link };
+    },
+    listWorkspaceLinks: () => [...workspaceLinks.values()].map((link) => ({ ...link })),
+    setWorkspaceLink: writeWorkspaceLink,
+    deleteWorkspaceLink: removeWorkspaceLink,
     snapshotInto(destination) {
       return enqueue(() => {
         const target = destination.replaceAll("'", "''");

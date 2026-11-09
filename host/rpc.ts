@@ -6,8 +6,9 @@
  * the Host/Origin fence. Requests carry `{ op, args }`; a result is
  * `{ value }` or `{ error: { code, message } }`.
  */
-import type { SpaceService } from '@alter/protocol';
+import type { NewSpaceInput, SpacePatch, SpaceService } from '@alter/protocol';
 import type { SpaceStorageApi } from './storage.js';
+import { WorkspaceSyncError, type SpaceWorkspaceSync } from './workspace-sync.js';
 import {
   STORAGE_LIMITS,
   type StorageSettings,
@@ -111,6 +112,13 @@ export type SpaceRpcHandler = (
 export interface SpaceRpcOptions {
   service: SpaceService;
   storage: SpaceStorageApi;
+  /**
+   * Lazy resolver for the Space ↔ DSH workspace bridge. It is absent while
+   * the Host has no `workspaceRegistry` service (the Space feature then keeps
+   * working without workspace sync), and may appear later when the service
+   * loads, hence the resolver form.
+   */
+  workspaceSync?: () => SpaceWorkspaceSync | undefined;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -179,6 +187,32 @@ export function createSpaceRpc(options: SpaceRpcOptions): SpaceRpcHandler {
         return { value: await storage.set(patch) };
       }
       if (group === 'space' && SPACE_METHOD_SET.has(method)) {
+        const sync = options.workspaceSync?.();
+        if (sync !== undefined) {
+          if (method === 'createSpace') {
+            const value = await sync.createSpace(
+              service,
+              args[0] as NewSpaceInput,
+            );
+            return { value: value === undefined ? null : value };
+          }
+          if (method === 'updateSpace') {
+            const value = await sync.updateSpace(
+              service,
+              String(args[0]),
+              args[1] as SpacePatch,
+            );
+            return { value: value === undefined ? null : value };
+          }
+          if (method === 'unarchiveSpace') {
+            const value = await sync.unarchiveSpace(service, String(args[0]));
+            return { value: value === undefined ? null : value };
+          }
+          if (method === 'deleteSpace') {
+            await sync.deleteSpace(service, String(args[0]));
+            return { value: null };
+          }
+        }
         const target = service as unknown as Record<
           string,
           (...callArgs: unknown[]) => unknown
@@ -196,6 +230,8 @@ export function createSpaceRpc(options: SpaceRpcOptions): SpaceRpcHandler {
       }
       throw new SpaceRpcError('space/not-found', `未知的接口 ${endpoint}`);
     } catch (error) {
+      if (error instanceof WorkspaceSyncError)
+        return { error: { code: error.code, message: error.message } };
       if (error instanceof SpaceRpcError)
         return { error: { code: error.code, message: error.message } };
       return {

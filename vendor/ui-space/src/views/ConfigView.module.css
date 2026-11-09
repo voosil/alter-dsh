@@ -1,94 +1,69 @@
-.settings {
+/* 空间配置。
+ *
+ * 与 DSH 设置页同一套语言：左侧标题栏 + 右侧内容，分区只靠留白与字重/颜色
+ * 对比，不用横向分割线；页尾的保存条用渐隐遮罩代替上边框。 */
+
+.form {
   display: flex;
   flex-direction: column;
+  gap: 44px;
 }
+
 .section {
   display: grid;
   grid-template-columns: 184px minmax(0, 1fr);
   gap: 40px;
-  padding: 30px 0 34px;
-  border-top: 1px solid var(--alter-border);
 }
-.section:first-child {
-  padding-top: 24px;
-  border-top: 0;
-}
+
 .sectionIntro {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
   align-self: start;
+  gap: 12px;
 }
+
 .sectionTitle {
   margin: 0;
   font-size: var(--alter-font-title-sm);
   font-weight: 600;
   line-height: var(--alter-line-display);
 }
-.sectionNote {
-  max-width: 24em;
-  margin: 8px 0 0;
-  color: var(--alter-text-muted);
-  font-size: var(--alter-font-caption);
-  line-height: var(--alter-line-body);
-}
+
 .sectionBody {
   min-width: 0;
   max-width: 680px;
 }
+
+.introAction {
+  margin-top: -2px;
+}
+
 .fields {
   display: flex;
   flex-direction: column;
   gap: 20px;
 }
-.saveBar {
-  position: sticky;
-  bottom: 0;
-  z-index: 2;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-top: 4px;
-  padding: 16px 0;
-  border-top: 1px solid var(--alter-border);
-  background: var(--alter-surface);
-}
-.saveNote {
-  color: var(--alter-text-muted);
-  font-size: var(--alter-font-caption);
-}
-.saveBar[data-dirty] .saveNote {
-  color: var(--alter-text-secondary);
-}
-.saveActions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.confirmBody {
+
+/* 协作者：整行可点，选中不靠边框而靠头像底色与勾选圈。 */
+.optionList {
   display: flex;
   flex-direction: column;
-  gap: 18px;
-}
-.confirmText {
+  gap: 2px;
   margin: 0;
-  font-size: var(--alter-font-body-sm);
-  line-height: var(--alter-line-body);
+  padding: 0;
+  list-style: none;
 }
-.sectionAction {
-  margin-top: 12px;
-}
-.optionList {
-  border-top: 1px solid var(--alter-border);
-}
+
 .collaborator {
   display: flex;
   align-items: center;
   gap: 12px;
   width: calc(100% + 20px);
-  min-height: 56px;
+  min-height: 48px;
   margin-inline: -10px;
   padding: 8px 10px;
   border: 0;
-  border-bottom: 1px solid var(--alter-border);
   border-radius: var(--alter-radius-control);
   background: transparent;
   color: var(--alter-text);
@@ -96,16 +71,16 @@
   text-align: left;
   cursor: pointer;
 }
+
 .collaborator:hover {
   background: var(--alter-surface-hover);
 }
-.collaborator[data-selected] {
-  background: var(--alter-surface-hover);
-}
+
 .collaborator:focus-visible {
   outline: var(--alter-focus-width) solid var(--alter-focus-ring);
   outline-offset: -2px;
 }
+
 .avatar {
   display: flex;
   align-items: center;
@@ -114,11 +89,17 @@
   width: 28px;
   height: 28px;
   border-radius: var(--alter-radius-control);
-  background: var(--alter-surface-raised);
+  background: var(--alter-surface-hover);
   color: var(--alter-text-secondary);
   font-size: var(--alter-font-caption);
   font-weight: 600;
 }
+
+.collaborator[data-selected] .avatar {
+  background: var(--alter-accent-soft);
+  color: var(--alter-accent-strong);
+}
+
 .optionText {
   display: flex;
   flex: 1;
@@ -126,14 +107,18 @@
   gap: 2px;
   min-width: 0;
 }
+
 .optionText > span:first-child {
   font-size: var(--alter-font-body-sm);
   font-weight: 500;
 }
+
 .optionMeta {
   color: var(--alter-text-muted);
   font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
 }
+
 .check {
   display: flex;
   align-items: center;
@@ -145,83 +130,119 @@
   border-radius: 50%;
   color: var(--alter-accent-strong);
 }
+
 .collaborator[data-selected] .check {
   border-color: var(--alter-accent);
   background: var(--alter-accent-soft);
 }
-.note {
-  margin: 0;
-  color: var(--alter-text-muted);
-  font-size: var(--alter-font-body-sm);
-  line-height: var(--alter-line-body);
-}
+
+/* 空间管理：两行危险操作，说明只留在确认弹窗里。 */
 .management {
-  border-top: 1px solid var(--alter-border);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
+
 .managementRow {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  min-height: 66px;
-  padding: 12px 0;
-  border-bottom: 1px solid var(--alter-border);
+  min-height: 48px;
+  padding: 6px 0;
 }
-.managementText {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-.managementTitle {
+
+.managementLabel {
+  color: var(--alter-text);
   font-size: var(--alter-font-body-sm);
-  font-weight: 500;
 }
-.managementNote {
-  color: var(--alter-text-muted);
-  font-size: var(--alter-font-caption);
-  line-height: var(--alter-line-ui);
-}
-.defaultNote {
-  margin: 12px 0 0;
+
+.note {
+  margin: 8px 0 0;
   color: var(--alter-text-muted);
   font-size: var(--alter-font-caption);
   line-height: var(--alter-line-body);
 }
+
 .error {
-  margin: 16px 0 0;
+  margin: 0;
   color: var(--alter-danger);
   font-size: var(--alter-font-body-sm);
   line-height: var(--alter-line-body);
 }
+
+/* 保存条：贴底常驻，用渐隐代替上边框，滚动时内容不会生硬地被切断。 */
+.saveBar {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 8px;
+  padding: 14px 0 22px;
+  background: var(--alter-surface);
+}
+
+.saveBar::before {
+  content: '';
+  position: absolute;
+  inset: auto 0 100%;
+  height: 36px;
+  background: linear-gradient(to bottom, transparent, var(--alter-surface));
+  pointer-events: none;
+}
+
+.saveNote {
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+}
+
+.saveBar[data-dirty] .saveNote {
+  color: var(--alter-text-secondary);
+}
+
+.saveActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.quietAction {
+  border: 1px solid var(--alter-control-border);
+}
+
+.confirmBody {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.confirmText {
+  margin: 0;
+  font-size: var(--alter-font-body-sm);
+  line-height: var(--alter-line-body);
+}
+
 @container (max-width: 860px) {
+  .form {
+    gap: 36px;
+  }
+
   .section {
     grid-template-columns: 1fr;
-    gap: 16px;
-    padding: 26px 0 30px;
+    gap: 14px;
   }
-  .sectionNote {
-    max-width: 34em;
+
+  .sectionIntro {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
   }
+
   .sectionBody {
     max-width: none;
-  }
-}
-@container (max-width: 560px) {
-  .saveBar {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-  .saveActions {
-    width: 100%;
-    justify-content: flex-end;
-  }
-  .managementRow {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 12px;
-  }
-  .managementRow > button {
-    align-self: flex-start;
   }
 }

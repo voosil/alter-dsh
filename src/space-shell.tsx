@@ -4,19 +4,23 @@
  * Upstream Alter mounts `SettingsPage` as a separate client module reached by
  * the `#/settings` route. The DSH port exposes one main panel for the whole
  * Space feature, so this shell routes the in-memory Space router instead:
- * `#/settings` renders the reused settings page (AI collaborators, archive
- * management, shortcuts, about), every other path renders `SpaceApp`. A
- * floating back control and Escape return to the route the user left, where
- * `SpaceApp` remounts and reloads the collaborator roster; a collaborator
- * created here can then be selected in a space's configuration.
+ * `#/settings` renders the Space settings page, every other path renders
+ * `SpaceApp`. Escape and the page's back control return to the route the user
+ * left, where `SpaceApp` remounts and reloads the collaborator roster.
+ *
+ * The shell also installs the host directory picker for the vendored working-
+ * directory field (see `src/native-directory-field.tsx`); the vendored app
+ * itself stays untouched.
  */
 import { useEffect, useRef, useSyncExternalStore } from 'react';
-import { ArrowLeft } from 'lucide-react';
 import { SpaceApp } from '@alter/ui-space/SpaceApp';
-import { SettingsPage } from '@alter/ui-settings/SettingsPage';
 import type { SpaceRouter } from '@alter/ui-space';
 import type { SpaceService } from '@alter/protocol';
-import { StorageSettingsSection } from './storage-settings';
+import { SpaceSettingsPage } from './settings-page';
+import {
+  DirectoryPickerProvider,
+  type DirectoryPicker,
+} from './native-directory-field';
 import type { SpaceStorageClient } from './storage-client';
 
 /** In-panel route that opens the Space settings page. */
@@ -33,9 +37,20 @@ export interface SpaceShellProps {
   router: SpaceRouter;
   /** Storage policy client; omitted only by tests that do not need it. */
   storage?: SpaceStorageClient;
+  /**
+   * Host directory picker used by the working-directory field. Omitted by
+   * tests and hosts without a picker (the vendored in-app browser is the
+   * fallback).
+   */
+  pickDirectory?: DirectoryPicker;
 }
 
-export function SpaceShell({ service, router, storage }: SpaceShellProps) {
+export function SpaceShell({
+  service,
+  router,
+  storage,
+  pickDirectory,
+}: SpaceShellProps) {
   const path = useSyncExternalStore(
     router.subscribe,
     router.getPath,
@@ -60,7 +75,7 @@ export function SpaceShell({ service, router, storage }: SpaceShellProps) {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key !== 'Escape' || event.defaultPrevented) return;
       // Keep Escape for the focused control (e.g. clearing an input) rather
-      // than leaving the page and dropping an unsaved collaborator draft.
+      // than leaving the page and dropping an unsaved storage draft.
       const target = event.target;
       if (
         target instanceof HTMLElement &&
@@ -77,22 +92,18 @@ export function SpaceShell({ service, router, storage }: SpaceShellProps) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   });
 
-  if (!settings) return <SpaceApp service={service} router={router} />;
+  if (!settings)
+    return (
+      <DirectoryPickerProvider pickDirectory={pickDirectory}>
+        <SpaceApp service={service} router={router} />
+      </DirectoryPickerProvider>
+    );
 
   return (
-    <div className="alter-space-settings">
-      <button
-        type="button"
-        className="alter-space-settings-back"
-        onClick={returnToSpace}
-      >
-        <ArrowLeft size={14} strokeWidth={1.8} aria-hidden="true" />
-        返回空间
-      </button>
-      <div className="alter-space-settings-scroll">
-        <SettingsPage service={service} />
-        {storage ? <StorageSettingsSection storage={storage} /> : null}
-      </div>
-    </div>
+    <SpaceSettingsPage
+      service={service}
+      storage={storage}
+      onBack={returnToSpace}
+    />
   );
 }

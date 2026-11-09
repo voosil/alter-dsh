@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -11,6 +11,11 @@ import {
 } from '../host/rpc.js';
 import { createSpaceStorage } from '../host/storage.js';
 import { openSpaceStore } from '../host/store.js';
+import {
+  createSpaceWorkspaceSync,
+  type SpaceWorkspaceSync,
+} from '../host/workspace-sync.js';
+import { FakeWorkspaceRegistry } from './workspace-fixtures.js';
 
 const dirs: string[] = [];
 const signal = new AbortController().signal;
@@ -27,13 +32,30 @@ afterEach(async () => {
 
 const fixedNow = () => new Date('2026-11-06T00:00:00.000Z');
 
-async function createHandler() {
+async function createHandler(options: { workspaceSync?: boolean } = {}) {
   const dir = await tempDir();
+  const home = join(dir, 'home');
+  await mkdir(home, { recursive: true });
   const store = await openSpaceStore({ directory: dir, now: fixedNow });
   const service = createSpaceAuthority(store, fixedNow);
   const storage = createSpaceStorage({ store, directory: dir });
-  const handler = createSpaceRpc({ service, storage });
-  return { dir, store, service, storage, handler };
+  let registry: FakeWorkspaceRegistry | undefined;
+  let sync: SpaceWorkspaceSync | undefined;
+  if (options.workspaceSync === true) {
+    registry = new FakeWorkspaceRegistry();
+    sync = createSpaceWorkspaceSync({
+      registry,
+      store,
+      homeDirectory: home,
+      now: fixedNow,
+    });
+  }
+  const handler = createSpaceRpc({
+    service,
+    storage,
+    workspaceSync: sync === undefined ? undefined : () => sync,
+  });
+  return { dir, home, store, service, storage, handler, registry, sync };
 }
 
 type HandlerResult = {
@@ -221,6 +243,78 @@ describe('Space RPC dispatch', () => {
       await handler('hub.get', { args: [spaceId] }, signal, {}),
     ) as { policy: string };
     expect(updated.policy).toBe('judge');
+    await store.close();
+  });
+});
+
+describe('Space RPC with the workspace bridge', () => {
+  it('rejects a new Space without a primary working directory', async () => {
+    const { store, handler } = await createHandler({ workspaceSync: true });
+    const result = await handler(
+      'space.createSpace',
+      { args: [{ name: '无目录' }] },
+      signal,
+      {},
+    );
+    expect(errorOf(result)?.code).toBe('space/workspace-required');
+    const spaces = valueOf(
+      await handler('space.listSpaces', { args: [] }, signal, {}),
+    ) as Array<{ name: string }>;
+    expect(spaces.map((space) => space.name)).not.toContain('无目录');
+    await store.close();
+  });
+
+  it('creates, renames and releases the workspace through the RPC seam', async () => {
+    const { home, store, handler, registry } = await createHandler({
+      workspaceSync: true,
+    });
+    await mkdir(join(home, 'work'), { recursive: true });
+    const created = valueOf(
+      await handler(
+        'space.createSpace',
+        { args: [{ name: 'RPC 空间', directories: ['~/work'] }] },
+        signal,
+        {},
+      ),
+    ) as { id: string };
+    expect(registry?.list()).toHaveLength(1);
+    expect(registry?.list()[0]?.title).toBe('🪐 RPC 空间');
+    expect(store.getWorkspaceLink(created.id)?.workspaceId).toBe(
+      registry?.list()[0]?.id,
+    );
+
+    valueOf(
+      await handler(
+        'space.updateSpace',
+        { args: [created.id, { name: '新名字' }] },
+        signal,
+        {},
+      ),
+    );
+    expect(registry?.list()[0]?.title).toBe('🪐 新名字');
+
+    valueOf(
+      await handler('space.deleteSpace', { args: [created.id] }, signal, {}),
+    );
+    expect(registry?.list()).toHaveLength(1);
+    expect(registry?.list()[0]?.title).toBe('新名字');
+    expect(store.getWorkspaceLink(created.id)).toBeUndefined();
+    await store.close();
+  });
+
+  it('keeps the legacy behaviour when no workspace registry is attached', async () => {
+    const { store, handler, registry } = await createHandler();
+    const created = valueOf(
+      await handler(
+        'space.createSpace',
+        { args: [{ name: '无工作区' }] },
+        signal,
+        {},
+      ),
+    ) as { id: string };
+    expect(created.id).toMatch(/^sp-/);
+    expect(registry).toBeUndefined();
+    expect(store.getWorkspaceLink(created.id)).toBeUndefined();
     await store.close();
   });
 });

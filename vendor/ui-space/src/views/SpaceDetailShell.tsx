@@ -110,6 +110,7 @@ export function SpaceDetailShell({
         >
           <div
             className={styles.body}
+            data-active={active}
             data-overview={active === 'overview' || undefined}
           >
             <header className={styles.head}>

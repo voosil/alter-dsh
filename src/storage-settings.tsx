@@ -1,19 +1,22 @@
 /**
  * "存储与备份" section of the Space settings page.
  *
- * The vendored upstream settings page is kept byte-identical, so this section
- * is composed by the DSH shell right below it. It edits the two bounded
- * storage policies (version history depth, daily snapshot ring), shows the
- * Host-computed footprint estimate for the current data, and updates the
- * estimate live while the inputs change.
+ * The Host owns the SQLite database, so retention depth and the daily snapshot
+ * ring are the two bounded policies a user can tune here. The form edits a
+ * draft, asks the Host to re-estimate the footprint while the draft changes,
+ * and commits both policies in one call.
  */
 import { useEffect, useId, useState } from 'react';
-import { Button, Field, Input } from '@alter/ui-system';
+import { Minus, Plus } from 'lucide-react';
+import { Button } from '@alter/ui-system';
+import { SettingsSection } from './settings-section';
 import {
   type SpaceStorageClient,
   type StorageEstimate,
   type StorageSettings,
+  type StorageState,
 } from './storage-client.js';
+import styles from './settings.module.css';
 
 /** Must mirror `host/settings.ts`; the Host still clamps malformed input. */
 const LIMITS = {
@@ -21,7 +24,8 @@ const LIMITS = {
   snapshotKeep: { min: 1, max: 30 },
 } as const;
 
-const DEFAULT_SETTINGS: StorageSettings = { historyLimit: 10, snapshotKeep: 3 };
+const DEFAULTS: StorageSettings = { historyLimit: 10, snapshotKeep: 3 };
+const SAVED_NOTICE_MS = 2400;
 
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
@@ -37,23 +41,14 @@ function formatBytes(bytes: number): string {
     : `${value.toFixed(1)} ${units[unit]}`;
 }
 
-function formatSigned(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes === 0) return '不变';
-  return `${bytes > 0 ? '+' : '-'}${formatBytes(Math.abs(bytes))}`;
+function clamp(value: number, key: keyof StorageSettings): number {
+  const { min, max } = LIMITS[key];
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, Math.round(value)));
 }
 
-function clampDraft(draft: StorageSettings): StorageSettings | undefined {
-  for (const key of ['historyLimit', 'snapshotKeep'] as const) {
-    const value = draft[key];
-    if (!Number.isInteger(value)) return undefined;
-    const limits = LIMITS[key];
-    if (value < limits.min || value > limits.max) return undefined;
-  }
-  return draft;
-}
-
-function describeError(cause: unknown): string {
-  return cause instanceof Error ? cause.message : '操作失败，请重试';
+function describeError(cause: unknown, fallback: string): string {
+  return cause instanceof Error && cause.message ? cause.message : fallback;
 }
 
 export interface StorageSettingsSectionProps {
@@ -62,17 +57,28 @@ export interface StorageSettingsSectionProps {
 
 export function StorageSettingsSection({ storage }: StorageSettingsSectionProps) {
   const historyId = useId();
-  const snapshotsId = useId();
-  const [loaded, setLoaded] = useState(false);
-  const [saved, setSaved] = useState<StorageSettings | null>(null);
-  /** Estimate for the saved policy (the baseline of the delta). */
-  const [baseline, setBaseline] = useState<StorageEstimate | null>(null);
-  /** Estimate for the draft policy shown in the inputs. */
+  const snapshotId = useId();
+  const [stored, setStored] = useState<StorageState | null>(null);
+  const [draft, setDraft] = useState<StorageSettings>(DEFAULTS);
   const [estimate, setEstimate] = useState<StorageEstimate | null>(null);
-  const [draft, setDraft] = useState<StorageSettings>(DEFAULT_SETTINGS);
   const [saving, setSaving] = useState(false);
-  const [notice, setNotice] = useState('');
+  const [saved, setSaved] = useState(false);
   const [error, setError] = useState('');
+  /** Bumped by the retry control after a failed initial read. */
+  const [attempt, setAttempt] = useState(0);
+
+  const loaded = stored !== null;
+  const valid =
+    Number.isInteger(draft.historyLimit) &&
+    Number.isInteger(draft.snapshotKeep) &&
+    draft.historyLimit >= LIMITS.historyLimit.min &&
+    draft.historyLimit <= LIMITS.historyLimit.max &&
+    draft.snapshotKeep >= LIMITS.snapshotKeep.min &&
+    draft.snapshotKeep <= LIMITS.snapshotKeep.max;
+  const dirty =
+    loaded &&
+    (stored.settings.historyLimit !== draft.historyLimit ||
+      stored.settings.snapshotKeep !== draft.snapshotKeep);
 
   useEffect(() => {
     let active = true;
@@ -80,31 +86,31 @@ export function StorageSettingsSection({ storage }: StorageSettingsSectionProps)
       .get()
       .then((state) => {
         if (!active) return;
-        setSaved(state.settings);
+        setStored(state);
         setDraft(state.settings);
-        setBaseline(state.estimate);
         setEstimate(state.estimate);
-        setLoaded(true);
       })
       .catch((cause: unknown) => {
-        if (!active) return;
-        setError(describeError(cause));
-        setLoaded(true);
+        if (active) setError(`读取失败：${describeError(cause, '请重试')}`);
       });
     return () => {
       active = false;
     };
-  }, [storage]);
+  }, [storage, attempt]);
 
-  const candidate = clampDraft(draft);
-
-  // Live estimate while the draft changes (250 ms debounce, latest wins).
+  // Live footprint while the draft changes: the saved policy keeps the last
+  // Host estimate, a valid draft asks again (250 ms debounce, latest wins).
   useEffect(() => {
-    if (!loaded || saving || !candidate) return;
+    if (!stored) return;
+    if (!dirty) {
+      setEstimate(stored.estimate);
+      return;
+    }
+    if (!valid) return;
     let active = true;
-    const timer = setTimeout(() => {
+    const timer = window.setTimeout(() => {
       void storage
-        .estimate(candidate)
+        .estimate(draft)
         .then((next) => {
           if (active) setEstimate(next);
         })
@@ -112,180 +118,233 @@ export function StorageSettingsSection({ storage }: StorageSettingsSectionProps)
     }, 250);
     return () => {
       active = false;
-      clearTimeout(timer);
+      window.clearTimeout(timer);
     };
-  }, [candidate, loaded, saving, storage]);
+  }, [draft, dirty, stored, valid, storage]);
 
-  const dirty =
-    saved !== null &&
-    (saved.historyLimit !== draft.historyLimit ||
-      saved.snapshotKeep !== draft.snapshotKeep);
-  const deltaBytes =
-    estimate !== null && baseline !== null
-      ? estimate.projectedBytes - baseline.projectedBytes
-      : null;
-  const current = estimate ?? baseline;
+  useEffect(() => {
+    if (!saved) return;
+    const timer = window.setTimeout(() => setSaved(false), SAVED_NOTICE_MS);
+    return () => window.clearTimeout(timer);
+  }, [saved]);
 
-  function change(key: keyof StorageSettings, raw: string) {
-    const value = Number.parseInt(raw, 10);
-    setDraft((previous) => ({
-      ...previous,
-      [key]: Number.isNaN(value) ? previous[key] : value,
-    }));
-    setNotice('');
+  function change(key: keyof StorageSettings, value: number) {
+    if (!Number.isInteger(value)) return;
+    setDraft((current) => ({ ...current, [key]: value }));
     setError('');
+    setSaved(false);
+  }
+
+  function nudge(key: keyof StorageSettings, step: number) {
+    change(key, clamp(draft[key] + step, key));
+  }
+
+  function normalize(key: keyof StorageSettings) {
+    setDraft((current) => ({ ...current, [key]: clamp(current[key], key) }));
+  }
+
+  function reset() {
+    if (!stored) return;
+    setDraft(stored.settings);
+    setEstimate(stored.estimate);
+    setError('');
+    setSaved(false);
   }
 
   async function save() {
-    if (!candidate) {
-      setError('请输入有效范围内的数值');
-      return;
-    }
     setSaving(true);
     setError('');
-    setNotice('');
     try {
-      const state = await storage.set(candidate);
-      setSaved(state.settings);
+      const state = await storage.set(draft);
+      setStored(state);
       setDraft(state.settings);
-      setBaseline(state.estimate);
       setEstimate(state.estimate);
-      setNotice('已保存，历史裁剪与备份保留已按新设置生效');
+      setSaved(true);
     } catch (cause) {
-      setError(describeError(cause));
+      setError(`保存失败：${describeError(cause, '请重试')}`);
     } finally {
       setSaving(false);
     }
   }
 
+  const shown = estimate ?? stored?.estimate ?? null;
+  const delta =
+    shown && stored && dirty
+      ? shown.projectedBytes - stored.estimate.projectedBytes
+      : 0;
+  const invalidHint = `版本历史 ${LIMITS.historyLimit.min}–${LIMITS.historyLimit.max}，每日快照 ${LIMITS.snapshotKeep.min}–${LIMITS.snapshotKeep.max}`;
+  const savedNote = saved && !dirty ? '已保存' : '';
+
   return (
-    <section
-      className="alter-space-storage"
-      id="settings-storage"
-      aria-labelledby="storage-title"
-    >
-      <div className="alter-space-storage-label" aria-hidden="true">
-        存储
-      </div>
-      <div className="alter-space-storage-body">
-        <div className="alter-space-storage-head">
-          <h2 className="alter-space-storage-title" id="storage-title">
-            存储与备份
-          </h2>
-          <p className="alter-space-storage-note">
-            每天自动生成一份整库快照；文档版本按篇裁剪。修改后立即按当前文档数量估算占用。
-          </p>
+    <SettingsSection id="settings-storage" title="存储与备份">
+      <div className={styles.rows}>
+        <div className={`${styles.row} ${styles.rowSetting}`}>
+          <label className={styles.rowLabel} htmlFor={historyId}>
+            版本历史
+          </label>
+          <div className={styles.rowControl}>
+            <span className={styles.stepper}>
+              <button
+                type="button"
+                className={styles.stepButton}
+                aria-label="减少版本历史"
+                disabled={
+                  !loaded ||
+                  saving ||
+                  draft.historyLimit <= LIMITS.historyLimit.min
+                }
+                onClick={() => nudge('historyLimit', -1)}
+              >
+                <Minus size={12} strokeWidth={2} aria-hidden="true" />
+              </button>
+              <input
+                id={historyId}
+                className={styles.stepInput}
+                type="number"
+                inputMode="numeric"
+                min={LIMITS.historyLimit.min}
+                max={LIMITS.historyLimit.max}
+                step={1}
+                value={draft.historyLimit}
+                disabled={!loaded || saving}
+                onChange={(event) =>
+                  change('historyLimit', Number.parseInt(event.target.value, 10))
+                }
+                onBlur={() => normalize('historyLimit')}
+              />
+              <button
+                type="button"
+                className={styles.stepButton}
+                aria-label="增加版本历史"
+                disabled={
+                  !loaded ||
+                  saving ||
+                  draft.historyLimit >= LIMITS.historyLimit.max
+                }
+                onClick={() => nudge('historyLimit', 1)}
+              >
+                <Plus size={12} strokeWidth={2} aria-hidden="true" />
+              </button>
+            </span>
+            <span className={styles.unit}>版/篇</span>
+          </div>
         </div>
 
-        <div className="alter-space-storage-fields">
-          <Field
-            label="版本历史上限（每篇文档）"
-            htmlFor={historyId}
-            hint={`${LIMITS.historyLimit.min}–${LIMITS.historyLimit.max} 版；单篇另有 64 KiB 字节上限`}
-          >
-            <Input
-              id={historyId}
-              type="number"
-              inputMode="numeric"
-              min={LIMITS.historyLimit.min}
-              max={LIMITS.historyLimit.max}
-              step={1}
-              value={draft.historyLimit}
-              disabled={saving}
-              onChange={(event) => change('historyLimit', event.target.value)}
-            />
-          </Field>
-          <Field
-            label="每日快照保留"
-            htmlFor={snapshotsId}
-            hint={`${LIMITS.snapshotKeep.min}–${LIMITS.snapshotKeep.max} 份；每天最多一份`}
-          >
-            <Input
-              id={snapshotsId}
-              type="number"
-              inputMode="numeric"
-              min={LIMITS.snapshotKeep.min}
-              max={LIMITS.snapshotKeep.max}
-              step={1}
-              value={draft.snapshotKeep}
-              disabled={saving}
-              onChange={(event) => change('snapshotKeep', event.target.value)}
-            />
-          </Field>
-        </div>
-
-        <dl className="alter-space-storage-estimate" aria-label="存储占用估算">
-          <div className="alter-space-storage-row">
-            <dt>当前数据</dt>
-            <dd>
-              {current
-                ? `${current.documentCount} 篇文档，平均 ${formatBytes(current.averageDocumentBytes)}`
-                : '正在读取…'}
-            </dd>
+        <div className={`${styles.row} ${styles.rowSetting}`}>
+          <label className={styles.rowLabel} htmlFor={snapshotId}>
+            每日快照
+          </label>
+          <div className={styles.rowControl}>
+            <span className={styles.stepper}>
+              <button
+                type="button"
+                className={styles.stepButton}
+                aria-label="减少每日快照"
+                disabled={
+                  !loaded ||
+                  saving ||
+                  draft.snapshotKeep <= LIMITS.snapshotKeep.min
+                }
+                onClick={() => nudge('snapshotKeep', -1)}
+              >
+                <Minus size={12} strokeWidth={2} aria-hidden="true" />
+              </button>
+              <input
+                id={snapshotId}
+                className={styles.stepInput}
+                type="number"
+                inputMode="numeric"
+                min={LIMITS.snapshotKeep.min}
+                max={LIMITS.snapshotKeep.max}
+                step={1}
+                value={draft.snapshotKeep}
+                disabled={!loaded || saving}
+                onChange={(event) =>
+                  change('snapshotKeep', Number.parseInt(event.target.value, 10))
+                }
+                onBlur={() => normalize('snapshotKeep')}
+              />
+              <button
+                type="button"
+                className={styles.stepButton}
+                aria-label="增加每日快照"
+                disabled={
+                  !loaded ||
+                  saving ||
+                  draft.snapshotKeep >= LIMITS.snapshotKeep.max
+                }
+                onClick={() => nudge('snapshotKeep', 1)}
+              >
+                <Plus size={12} strokeWidth={2} aria-hidden="true" />
+              </button>
+            </span>
+            <span className={styles.unit}>份</span>
           </div>
-          <div className="alter-space-storage-row">
-            <dt>当前实际占用</dt>
-            <dd>
-              {current
-                ? `${formatBytes(current.currentBytes)}（主库 ${formatBytes(current.currentMainBytes)} + 快照 ${formatBytes(current.currentSnapshotBytes)}）`
-                : '—'}
-            </dd>
-          </div>
-          <div className="alter-space-storage-row">
-            <dt>当前设置预计上限</dt>
-            <dd>{baseline ? formatBytes(baseline.projectedBytes) : '—'}</dd>
-          </div>
-          <div className="alter-space-storage-row alter-space-storage-row-strong">
-            <dt>修改后预计上限</dt>
-            <dd>
-              {estimate ? formatBytes(estimate.projectedBytes) : '—'}
-              {deltaBytes !== null ? (
-                <span
-                  className={
-                    deltaBytes > 0
-                      ? 'alter-space-storage-delta-up'
-                      : 'alter-space-storage-delta'
-                  }
-                >
-                  （较当前设置 {formatSigned(deltaBytes)}）
-                </span>
-              ) : null}
-            </dd>
-          </div>
-        </dl>
-
-        <p className="alter-space-storage-hint">
-          上限按每篇版本历史填满、快照按保守压缩比估算；不含 WAL（≤16
-          MiB）与损坏兜底副本（≤256 MiB）。
-        </p>
-
-        {notice ? (
-          <p className="alter-space-storage-notice" role="status">
-            {notice}
-          </p>
-        ) : null}
-        {error ? (
-          <p className="alter-space-storage-error" role="alert">
-            {error}
-          </p>
-        ) : null}
-
-        <div className="alter-space-storage-foot">
-          <span className="alter-space-storage-hint">
-            {saved
-              ? `当前设置：每篇 ${saved.historyLimit} 版历史，保留 ${saved.snapshotKeep} 份每日快照`
-              : '正在读取存储设置…'}
-          </span>
-          <Button
-            type="button"
-            variant="primary"
-            disabled={!loaded || !dirty || saving || !candidate}
-            onClick={() => void save()}
-          >
-            {saving ? '正在保存…' : '保存设置'}
-          </Button>
         </div>
       </div>
-    </section>
+
+      {error ? (
+        <div className={styles.errorBar}>
+          <span role="alert">{error}</span>
+          {loaded ? null : (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                setError('');
+                setAttempt((current) => current + 1);
+              }}
+            >
+              重试
+            </Button>
+          )}
+        </div>
+      ) : null}
+
+      {loaded ? (
+        <div className={styles.footer}>
+          {!valid ? (
+            <p className={styles.meta}>{invalidHint}</p>
+          ) : shown ? (
+            <p className={styles.meta}>
+              <span>{shown.documentCount} 篇文档</span>
+              <span className={styles.metaDot} aria-hidden="true" />
+              <span>当前 {formatBytes(shown.currentBytes)}</span>
+              <span className={styles.metaDot} aria-hidden="true" />
+              <span>
+                预计上限 {formatBytes(shown.projectedBytes)}
+                {delta !== 0 ? (
+                  <span className={styles.metaDelta}>
+                    （{delta > 0 ? '+' : '−'}
+                    {formatBytes(Math.abs(delta))}）
+                  </span>
+                ) : null}
+              </span>
+            </p>
+          ) : (
+            <span />
+          )}
+          <div className={styles.actions}>
+            <span className={styles.savedNote} role="status" aria-live="polite">
+              {savedNote}
+            </span>
+            {dirty && !saving ? (
+              <Button size="sm" variant="ghost" onClick={reset}>
+                取消
+              </Button>
+            ) : null}
+            <Button
+              size="sm"
+              variant={dirty ? 'primary' : 'secondary'}
+              className={dirty ? undefined : styles.quietAction}
+              disabled={!dirty || !valid || saving}
+              onClick={() => void save()}
+            >
+              {saving ? '正在保存…' : '保存'}
+            </Button>
+          </div>
+        </div>
+      ) : null}
+    </SettingsSection>
   );
 }

@@ -177,7 +177,9 @@ export function ContributionTimeline({
         </>
       ) : (
         <p className={styles.empty}>
-          {range ? '这段时间还没有活动记录。' : '这个空间还没有活动记录。'}
+          {range
+            ? '这段时间没有值得记录的事。'
+            : '这个空间还没有值得记录的事。日常编辑保存在文档的版本历史里。'}
         </p>
       )}
     </section>

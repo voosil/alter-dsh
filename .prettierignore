@@ -1,0 +1,22 @@
+node_modules
+dist
+coverage
+.vitest
+pnpm-lock.yaml
+playwright-report
+test-results
+
+.alter-dev
+
+# Frozen Agent Note snapshots and their append-only manifest
+.agents/notes/archived/
+
+# Impeccable skills and generated artifacts
+.agents/skills/impeccable/
+.github/skills/impeccable/
+.github/agents/impeccable-*.agent.md
+**/.impeccable/
+
+# DSH client plugin build artifacts
+plugins/dsh-space/client.js
+plugins/dsh-space/dist

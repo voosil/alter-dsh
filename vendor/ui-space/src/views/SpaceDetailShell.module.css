@@ -125,6 +125,16 @@ button.navItem[data-variant='ghost']:hover:not(:disabled) {
 .body[data-overview] {
   margin-top: 32px;
 }
+/* 配置页与设置页同一套无分割线语言：标题下不再画一条横线，页尾留白交给
+ * 常驻的保存条，避免它在滚到底时停在半空。 */
+.body[data-active='config'] {
+  margin-bottom: 0;
+}
+.body[data-active='config'] .head {
+  margin-bottom: 28px;
+  padding-bottom: 0;
+  border-bottom: 0;
+}
 .body[data-overview] .head {
   margin-bottom: 28px;
   padding-bottom: 0;

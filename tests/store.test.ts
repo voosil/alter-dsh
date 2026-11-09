@@ -8,6 +8,7 @@ import {
   SPACE_DB_FILE,
   openSpaceStore,
   type SpaceStoreHandle,
+  type SpaceWorkspaceLink,
 } from '../host/store.js';
 
 const dirs: string[] = [];
@@ -237,6 +238,85 @@ describe('SQLite Space store', () => {
     }
     const reopened = await openSpaceStore({ directory: dir, now: fixedNow });
     expect(reopened.read().nodes.map((node) => node.id)).toEqual(['node-keep']);
+    await reopened.close();
+  });
+
+  it('persists and deletes Space ↔ workspace links across reopens', async () => {
+    const dir = await tempDir();
+    const store = await openSpaceStore({ directory: dir, now: fixedNow });
+    expect(store.listWorkspaceLinks()).toEqual([]);
+    const link: SpaceWorkspaceLink = {
+      spaceId: 'sp-link',
+      workspaceId: 'ws-1',
+      path: '/tmp/space-link',
+      appliedTitle: '🪐 链接',
+      updatedAt: fixedNow().toISOString(),
+    };
+    await store.setWorkspaceLink(link);
+    expect(store.getWorkspaceLink('sp-link')).toEqual(link);
+    expect(store.listWorkspaceLinks()).toEqual([link]);
+    await store.close();
+
+    const reopened = await openSpaceStore({ directory: dir, now: fixedNow });
+    expect(reopened.getWorkspaceLink('sp-link')).toEqual(link);
+    await reopened.deleteWorkspaceLink('sp-link');
+    expect(reopened.listWorkspaceLinks()).toEqual([]);
+    await reopened.close();
+
+    const again = await openSpaceStore({ directory: dir, now: fixedNow });
+    expect(again.getWorkspaceLink('sp-link')).toBeUndefined();
+    await again.close();
+  });
+
+  it('upgrades a v1 database in place and keeps its business data', async () => {
+    const dir = await tempDir();
+    const file = join(dir, SPACE_DB_FILE);
+    const store = await openSpaceStore({ directory: dir, now: fixedNow });
+    await store.update((data) => {
+      (data.nodes as unknown as Array<Record<string, unknown>>).push(
+        note('node-v1', DEFAULT_SPACE_ID),
+      );
+    });
+    await store.close();
+
+    // Simulate a database written by the previous plugin release.
+    const legacy = new DatabaseSync(file);
+    legacy.exec('DROP TABLE workspace_links');
+    legacy.exec('PRAGMA user_version = 1');
+    legacy.close();
+
+    const upgraded = await openSpaceStore({ directory: dir, now: fixedNow });
+    expect(upgraded.read().nodes.map((node) => node.id)).toEqual(['node-v1']);
+    expect(upgraded.getWorkspaceLink('sp-missing')).toBeUndefined();
+    await upgraded.setWorkspaceLink({
+      spaceId: 'sp-upgraded',
+      workspaceId: 'ws-upgraded',
+      path: '/tmp/upgraded',
+      appliedTitle: '🪐 升级',
+      updatedAt: fixedNow().toISOString(),
+    });
+    await upgraded.close();
+
+    const probe = new DatabaseSync(file);
+    const version = probe.prepare('PRAGMA user_version').get() as {
+      user_version?: number;
+    };
+    expect(Number(version.user_version)).toBe(2);
+    probe.close();
+  });
+
+  it('ignores malformed workspace link rows instead of failing startup', async () => {
+    const dir = await tempDir();
+    const file = join(dir, SPACE_DB_FILE);
+    const store = await openSpaceStore({ directory: dir, now: fixedNow });
+    await store.close();
+    const db = new DatabaseSync(file);
+    db.prepare(
+      'INSERT INTO workspace_links (space_id, data) VALUES (?, ?)',
+    ).run('sp-broken', '{"spaceId":"sp-broken"}');
+    db.close();
+    const reopened = await openSpaceStore({ directory: dir, now: fixedNow });
+    expect(reopened.listWorkspaceLinks()).toEqual([]);
     await reopened.close();
   });
 

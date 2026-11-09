@@ -121,7 +121,7 @@ check(
       recursive: true,
     })
   ).includes('SettingsPage.tsx'),
-  'vendor/ui-settings/src must carry the reused settings page',
+  'vendor/ui-settings/src must stay vendored as the upstream reference',
 );
 check(
   (
@@ -270,24 +270,27 @@ check(
   escaped.includes('#/settings') && escaped.includes('返回空间'),
   'client bundle must carry the in-panel settings route and its back control',
 );
+
 check(
-  escaped.includes('alter-space-settings-back'),
-  'client bundle must carry the settings back control styles',
-);
-check(
-  escaped.includes('.alter-space-host kbd'),
-  'bare kbd selector from the copied CSS must be scoped to the host container',
+  !/(^|[}])\s*kbd\s*\{/.test(escaped),
+  'bare kbd selectors from copied CSS must stay scoped to the host container',
 );
 check(
   escaped.includes('存储与备份') &&
-    escaped.includes('版本历史上限') &&
-    escaped.includes('每日快照保留'),
+    escaped.includes('版本历史') &&
+    escaped.includes('每日快照') &&
+    escaped.includes('预计上限'),
   'client bundle must carry the storage policy settings UI',
 );
 check(
-  escaped.includes('alter-space-settings-scroll') &&
-    escaped.includes('alter-space-storage'),
-  'stylesheet must carry the storage settings section layout',
+  escaped.includes('min-height:48px') &&
+    escaped.includes('container-type:inline-size'),
+  'stylesheet must carry the settings page row and container layout',
+);
+check(
+  !escaped.includes('alter-space-settings-scroll') &&
+    !escaped.includes('创建与设置已移到空间详情'),
+  'the reused two-column settings composition must stay removed',
 );
 check(
   !escaped.includes('100dvh'),
@@ -300,6 +303,11 @@ check(
 check(
   escaped.includes('alter-space'),
   'client bundle must reference the /alter-space RPC channel',
+);
+check(
+  escaped.includes('data-directory-picker') &&
+    escaped.includes('directory-picker-unavailable'),
+  'client bundle must route working-directory picking through the native picker override',
 );
 check(
   !escaped.includes('保存中'),
@@ -324,6 +332,9 @@ const localSources = [
   'src/router.js',
   'src/space-client.ts',
   'src/space-shell.tsx',
+  'src/settings-page.tsx',
+  'src/settings-section.tsx',
+  'src/settings.module.css',
   'src/storage-client.ts',
   'src/storage-settings.tsx',
   'host/authority.ts',

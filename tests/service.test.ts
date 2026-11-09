@@ -156,6 +156,154 @@ describe('Space business service over SQLite', () => {
     await reopened.close();
   });
 
+  it('records only noteworthy changes in the overview activity feed', async () => {
+    const dir = await tempDir();
+    let current = new Date('2026-11-01T09:00:00.000Z');
+    const clock = () => current;
+    const store = await openSpaceStore({ directory: dir, now: clock });
+    const service = createSpaceAuthority(store, clock);
+    const space = await service.createSpace({ name: '研究' });
+
+    current = new Date('2026-11-01T09:05:00.000Z');
+    const doc = await service.createNode({
+      spaceId: space.id,
+      kind: 'note',
+      title: '访谈整理',
+    });
+    current = new Date('2026-11-01T09:10:00.000Z');
+    await service.saveNode(doc.id, { content: '<p>第一版</p>' });
+    current = new Date('2026-11-01T09:20:00.000Z');
+    await service.saveNode(doc.id, { content: '<p>第二版</p>' });
+
+    current = new Date('2026-11-01T10:00:00.000Z');
+    const comment = await service.addComment({
+      docId: doc.id,
+      body: '这里的判断需要再确认',
+    });
+    current = new Date('2026-11-01T10:05:00.000Z');
+    await service.updateComment(comment.id, { body: '这里的判断需要再确认。' });
+    current = new Date('2026-11-01T10:10:00.000Z');
+    await service.resolveComment(comment.id);
+
+    current = new Date('2026-11-01T11:00:00.000Z');
+    const thought = await service.createThought({
+      spaceId: space.id,
+      content: '先记下一个想法',
+    });
+    current = new Date('2026-11-01T11:30:00.000Z');
+    const converted = await service.convertThought(thought.id);
+
+    current = new Date('2026-11-01T12:00:00.000Z');
+    const old = await service.createNode({
+      spaceId: space.id,
+      kind: 'note',
+      title: '旧稿',
+    });
+    await service.saveNode(old.id, { content: '<p>旧内容</p>' });
+    current = new Date('2026-11-01T12:05:00.000Z');
+    await service.setArchived(old.id, true);
+
+    // 点开新建但从未写下内容的草稿，不算「值得记」。
+    current = new Date('2026-11-01T13:00:00.000Z');
+    await service.createNode({ spaceId: space.id, kind: 'note' });
+
+    // 文档编辑确实产生了版本历史，只是不进活动记录。
+    expect((await service.listVersions(doc.id)).length).toBeGreaterThanOrEqual(
+      2,
+    );
+
+    current = new Date('2026-11-01T15:00:00.000Z');
+    const overview = await service.getOverview(space.id);
+    const entries = overview.activity.flatMap((day) => day.events);
+    const titles = entries.map((event) => event.title);
+
+    expect(titles).toContain('创建了空间「研究」');
+    expect(titles).toContain('新建《访谈整理》');
+    expect(titles).toContain('记录随想「先记下一个想法」');
+    expect(titles).toContain('评论《访谈整理》');
+    expect(titles).toContain('结束讨论《访谈整理》');
+    expect(titles).toContain('归档《旧稿》');
+    // 随想转文档只保留「整理成文档」这一条，不再重复记成新建文档。
+    expect(titles).toContain('把随想整理成《未命名文档》');
+    expect(
+      entries.some((event) => event.id === `act-doc-create-${converted.node.id}`),
+    ).toBe(false);
+    // 编辑、改字与空白草稿都不进入活动记录。
+    expect(titles.some((title) => title.includes('更新'))).toBe(false);
+    expect(
+      entries.some((event) => event.id.startsWith('act-doc-create-')),
+    ).toBe(true);
+    expect(
+      titles.filter((title) => title.includes('未命名文档') && title.includes('新建')),
+    ).toHaveLength(0);
+    // 热力图的计数只统计这些值得记的事件。
+    expect(
+      overview.activity.reduce((sum, day) => sum + day.count, 0),
+    ).toBe(entries.length);
+
+    await store.close();
+  });
+
+  it('folds Alter-reported work into its event and ignores idle auto-archiving', async () => {
+    const dir = await tempDir();
+    let current = new Date('2026-11-02T09:00:00.000Z');
+    const clock = () => current;
+    const store = await openSpaceStore({ directory: dir, now: clock });
+    const service = createSpaceAuthority(store, clock);
+    const space = await service.createSpace({ name: '研究' });
+
+    const doc = await service.createNode({
+      spaceId: space.id,
+      kind: 'note',
+      title: '资料',
+    });
+    await service.saveNode(doc.id, { content: '<p>内容</p>' });
+    const idle = await service.createNode({
+      spaceId: space.id,
+      kind: 'note',
+      title: '沉底旧文',
+    });
+    await service.saveNode(idle.id, { content: '<p>内容</p>' });
+
+    await store.update((data) => {
+      const node = data.nodes.find((item) => item.id === doc.id);
+      if (!node) throw new Error('missing doc');
+      // 同一个动作：Alter 的 AgentEvent 已经概括，文档新建不再重复记。
+      data.events.push({
+        id: 'ev-research',
+        spaceId: space.id,
+        title: '整理了《资料》',
+        detail: 'Alter 读完资料并整理出三条判断',
+        at: node.createdAt,
+        docId: doc.id,
+        taskId: null,
+      });
+      const stale = data.nodes.find((item) => item.id === idle.id);
+      if (!stale) throw new Error('missing idle doc');
+      // 闲置自动归档由系统清理触发，不是用户的决定。
+      stale.archived = true;
+      stale.archivedBy = 'agent';
+      stale.archivedAt = new Date('2026-11-02T10:00:00.000Z').toISOString();
+      stale.activity = 0;
+      stale.activityAt = stale.archivedAt;
+    });
+
+    current = new Date('2026-11-02T11:00:00.000Z');
+    const overview = await service.getOverview(space.id);
+    const entries = overview.activity.flatMap((day) => day.events);
+    const titles = entries.map((event) => event.title);
+
+    expect(titles).toContain('整理了《资料》');
+    expect(
+      entries.some((event) => event.id === `act-doc-create-${doc.id}`),
+    ).toBe(false);
+    expect(
+      entries.some((event) => event.id === `act-doc-archive-${idle.id}`),
+    ).toBe(false);
+
+    await store.close();
+  });
+
   it('keeps the default space immutable and rejects invalid operations', async () => {
     const dir = await tempDir();
     const store = await openSpaceStore({ directory: dir, now: fixedNow });

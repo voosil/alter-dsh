@@ -1,0 +1,425 @@
+/* Space settings page.
+ *
+ * One surface for the DSH Space feature: the storage policy form, archived
+ * space recovery, the collaborator roster, shortcuts and about. It follows the
+ * space configuration page's grammar (184px intro column + 680px body, hairline
+ * separated sections) so settings and configuration read as one product.
+ *
+ * The page is its own size container: the panel width, not the window width,
+ * decides when the intro column collapses. */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  background: var(--alter-surface);
+  container-type: inline-size;
+}
+
+.toolbar {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  height: 56px;
+  padding: 0 24px;
+}
+
+.back {
+  margin-left: -9px;
+}
+
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.body {
+  width: min(100%, 1100px);
+  margin: 20px auto 72px;
+  padding: 0 40px;
+}
+
+.head {
+  margin-bottom: 40px;
+}
+
+.title {
+  margin: 0;
+  font-size: var(--alter-font-title);
+  font-weight: 600;
+  line-height: var(--alter-line-display);
+  letter-spacing: -0.01em;
+}
+
+/* One section = left intro column (title) + right body. Sections are told
+ * apart by distance and by the weight of their titles; no horizontal rules. */
+.sections {
+  display: flex;
+  flex-direction: column;
+  gap: 44px;
+}
+
+.section {
+  display: grid;
+  grid-template-columns: 184px minmax(0, 1fr);
+  gap: 40px;
+}
+
+.sectionIntro {
+  align-self: start;
+}
+
+.sectionTitle {
+  margin: 0;
+  font-size: var(--alter-font-title-sm);
+  font-weight: 600;
+  line-height: var(--alter-line-display);
+}
+
+.sectionBody {
+  min-width: 0;
+  max-width: 600px;
+}
+
+/* Rows: one per setting or list item. The same class is a <ul>, a <dl> and a
+ * plain block, so the browser's list padding must not leak in. Rows are
+ * separated by their own breathing room, not by rules. */
+.rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 10px 0;
+}
+
+.rowSetting {
+  min-height: 44px;
+  padding: 6px 0;
+}
+
+.rowCompact {
+  min-height: 36px;
+  padding: 6px 0;
+}
+
+.rowLabel {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  color: var(--alter-text);
+  font-size: var(--alter-font-body-sm);
+  line-height: var(--alter-line-ui);
+}
+
+.rowText {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.rowTitle {
+  overflow: hidden;
+  color: var(--alter-text);
+  font-size: var(--alter-font-body-sm);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowMeta {
+  overflow: hidden;
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowControl {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.rowValue {
+  flex-shrink: 0;
+  margin: 0;
+  color: var(--alter-text-secondary);
+  font-size: var(--alter-font-body-sm);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.tile {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--alter-radius-control);
+  background: var(--alter-surface-hover);
+  color: var(--alter-text-secondary);
+  font-size: var(--alter-font-caption);
+  font-weight: 600;
+}
+
+.empty {
+  margin: 0;
+  padding: 2px 0;
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-body-sm);
+  line-height: var(--alter-line-body);
+}
+
+.error {
+  margin: 10px 0 0;
+  color: var(--alter-danger);
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+}
+
+/* A failed read keeps a retry next to the message; a successful save never
+ * shows one. */
+.errorBar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: space-between;
+  margin: 0 0 28px;
+  color: var(--alter-danger);
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+}
+
+.sectionBody > .errorBar {
+  margin: 10px 0 0;
+}
+
+/* Storage policy control: [−] value [+] with its unit, so the two numbers can
+ * only move inside the Host's accepted range. */
+.stepper {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  border: 1px solid var(--alter-control-border);
+  border-radius: var(--alter-radius-control);
+  background: var(--alter-surface);
+}
+
+.stepper:focus-within {
+  border-color: var(--alter-focus-ring);
+  box-shadow: 0 0 0 1px var(--alter-focus-ring);
+}
+
+.stepButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: calc(var(--alter-radius-control) - 1px);
+  background: transparent;
+  color: var(--alter-text-muted);
+  cursor: pointer;
+  transition:
+    background-color var(--alter-duration-fast),
+    color var(--alter-duration-fast);
+}
+
+.stepButton:hover:not(:disabled) {
+  background: var(--alter-surface-hover);
+  color: var(--alter-text);
+}
+
+.stepButton:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.stepButton:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: 1px;
+}
+
+.stepInput {
+  width: 40px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--alter-text);
+  font: inherit;
+  font-size: var(--alter-font-body-sm);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.stepInput:focus-visible {
+  outline: none;
+}
+
+.stepInput::-webkit-outer-spin-button,
+.stepInput::-webkit-inner-spin-button {
+  margin: 0;
+  appearance: none;
+}
+
+.unit {
+  min-width: 38px;
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+}
+
+/* Footprint line: the facts separated by dots instead of a labelled table. */
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin: 0;
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+  font-variant-numeric: tabular-nums;
+}
+
+.metaDot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--alter-text-faint);
+}
+
+.metaDelta {
+  margin-left: 4px;
+  color: var(--alter-text-secondary);
+}
+
+/* Footer: the footprint facts and the save action share one line, so the
+ * button sits beside data instead of floating alone under the section. */
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  margin-top: 18px;
+}
+
+.footer .meta {
+  flex: 1 1 auto;
+}
+
+.actions {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.savedNote {
+  margin-right: 2px;
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+}
+
+/* Save is part of the form at rest, so it keeps its outline while there is
+ * nothing to commit and turns into the primary action once the draft differs. */
+.quietAction {
+  border: 1px solid var(--alter-control-border);
+}
+
+.keys {
+  display: flex;
+  flex-shrink: 0;
+  gap: 4px;
+  margin: 0;
+}
+
+.keys kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--alter-control-border);
+  border-radius: var(--alter-radius-xs);
+  background: var(--alter-surface);
+  color: var(--alter-text-secondary);
+  font-family: var(--alter-font-mono);
+  font-size: var(--alter-font-micro);
+  line-height: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stepButton {
+    transition: none;
+  }
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  border: 0;
+  clip: rect(0 0 0 0);
+}
+
+/* The panel is the container: below ~900px the intro column folds above its
+ * body, and the page keeps the same rhythm with tighter insets. */
+@container (max-width: 900px) {
+  .body {
+    padding: 0 28px;
+  }
+
+  .sections {
+    gap: 36px;
+  }
+
+  .head {
+    margin-bottom: 32px;
+  }
+
+  .section {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+
+  .sectionBody {
+    max-width: none;
+  }
+}
+
+@container (max-width: 620px) {
+  .toolbar {
+    padding: 0 18px;
+  }
+
+  .body {
+    margin-top: 10px;
+    padding: 0 18px;
+  }
+}

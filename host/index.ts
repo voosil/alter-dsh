@@ -17,6 +17,11 @@ import { withVersionRetention } from './retention.js';
 import { RPC_ROUTE_PATH, createSpaceFetchRoute } from './rpc.js';
 import { createSpaceStorage } from './storage.js';
 import {
+  createSpaceWorkspaceSync,
+  isWorkspaceRegistryLike,
+  type SpaceWorkspaceSync,
+} from './workspace-sync.js';
+import {
   openSpaceStore,
   type SpaceStoreLogger,
 } from './store.js';
@@ -54,9 +59,46 @@ export interface HostContextLike {
   effect(execute: () => unknown, label?: string): Promise<unknown>;
   /**
    * Run `callback` on a child context that has the named services injected.
-   * The Connection RPC registry needs a context that can read `webServer`.
+   * The callback runs once the services are available, so the Space plugin can
+   * attach the workspace bridge without making the registry a hard dependency.
    */
-  inject(names: string[], callback: (child: HostContextLike) => void): unknown;
+  inject?(names: string[], callback: (child: HostContextLike) => void): unknown;
+  /** Optional service read; used only when `inject` is unavailable (tests). */
+  get?(name: string): unknown;
+  /** Injected DSH workspace registry (present on the `inject` child). */
+  workspaceRegistry?: unknown;
+}
+
+/** Describe a caught error for one log line. */
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Reconcile every Space ↔ workspace binding. The workspace registry can still
+ * be starting when the bridge attaches, so a failed pass gets one delayed
+ * retry; user-triggered operations reconcile on their own path as well.
+ */
+function reconcileWorkspaces(
+  sync: SpaceWorkspaceSync,
+  logger: SpaceStoreLogger,
+  attempt: number,
+): void {
+  void sync.reconcileAll().catch((error: unknown) => {
+    try {
+      logger.warn?.(
+        `[alter-dsh-space] 工作区对账失败（第 ${attempt} 次）：${describeError(error)}`,
+      );
+    } catch {
+      // Diagnostics must never break activation.
+    }
+    if (attempt >= 2) return;
+    const timer = setTimeout(
+      () => reconcileWorkspaces(sync, logger, attempt + 1),
+      3_000,
+    );
+    timer.unref?.();
+  });
 }
 
 /** Resolve the data directory from config, then `DSH_HOME`, then `~/.dsh`. */
@@ -110,7 +152,44 @@ export async function apply(
     );
     const service = createSpaceAuthority(retainedStore, now);
     const storage = createSpaceStorage({ store, directory });
-    const route = createSpaceFetchRoute({ service, storage });
+    let workspaceSync: SpaceWorkspaceSync | undefined;
+    const route = createSpaceFetchRoute({
+      service,
+      storage,
+      workspaceSync: () => workspaceSync,
+    });
+    const attachWorkspaceSync = (child: HostContextLike): void => {
+      const registry =
+        child.workspaceRegistry ?? child.get?.('workspaceRegistry');
+      if (!isWorkspaceRegistryLike(registry)) {
+        logger.warn?.(
+          '[alter-dsh-space] DSH 工作区服务不可用：空间工作区同步未启用',
+        );
+        return;
+      }
+      const sync = createSpaceWorkspaceSync({
+        registry,
+        store,
+        logger,
+        homeDirectory: homedir(),
+        now,
+      });
+      workspaceSync = sync;
+      const dispose = () => {
+        if (workspaceSync === sync) workspaceSync = undefined;
+      };
+      try {
+        void child.effect(() => dispose, 'alter-dsh-space: workspace sync');
+      } catch {
+        // A missing child effect just leaves the bridge attached until unload.
+      }
+      reconcileWorkspaces(sync, logger, 1);
+    };
+    if (typeof ctx.inject === 'function') {
+      ctx.inject(['workspaceRegistry'], (child) => attachWorkspaceSync(child));
+    } else if (ctx.get !== undefined) {
+      attachWorkspaceSync(ctx);
+    }
     const disposeRoute = ctx.connection.fetch.register({
       path: RPC_ROUTE_PATH,
       methods: ['POST'],
@@ -128,6 +207,7 @@ export async function apply(
       `[alter-dsh-space] 数据目录 ${directory}（${store.file}）`,
     );
     return async () => {
+      workspaceSync = undefined;
       disposeRoute();
       await snapshots.dispose();
       await store.close();

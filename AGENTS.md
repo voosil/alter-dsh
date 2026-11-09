@@ -27,18 +27,28 @@ pnpm check        # build + verify + typecheck + test
 ## 结构
 
 - `host/store.ts`：SQLite 持久化（每实体一行 JSON、meta 顺序数组、单写者队列、
-  事务提交、损坏备份）。`PRAGMA user_version` 记录当前结构版本（目前只有 v1）。
+  事务提交、损坏备份）。`PRAGMA user_version` 记录当前结构版本（v2：新增
+  `workspace_links` 侧表；v1 库启动时原地加表升级）。
 - `host/retention.ts`：文档版本历史上限（每篇默认 10 版 / 64 KiB，随设置生效）。
 - `host/backup.ts`：每日整库快照（VACUUM INTO + gzip + 保留最近 N 份）。
 - `host/storage.ts` + `host/settings.ts`：存储策略的默认值、校验、占用估算与设置持久化。
 - `host/rpc.ts`：`/api/alter-space` Fetch 路由（Connection 负责鉴权）、端点白名单、
   参数/结果信封。
 - `host/authority.ts`：用 store 组合上游 hub + content service。
+- `host/workspace-sync.ts`：Space ↔ DSH 工作区映射（`ctx.inject(['workspaceRegistry'])` 可选接入）：
+  新建空间用主目录 `directories[0]` 创建/接管工作区（标题 `🪐 空间名`），改名同步，删除只解绑不删注册。
+  绑定落在 `workspace_links` 侧表，**不要写进 `vendor/` 的 Space 实体**。
+- `src/native-directory-field.tsx`：工作目录字段的 port 覆盖：点击「选择目录」直接调
+  `ctx.uiWorkspace.pickDirectory()`（桌面=系统文件夹对话框，Web=DSH 浏览）；无选择器时回退 vendored
+  目录浏览器。`build/build.mjs` 把 vendored `DirectoryField` 的两处导入重定向到这里，vendor 文件不改。
 - `src/space-client.ts`：浏览器端 `SpaceService`；通道常量是
   `('/api', 'alter-space')`，与 `host/rpc.ts` 的 `RPC_ROUTE_PATH`/`RPC_ENDPOINT` 保持同步。
+- `src/space-shell.tsx` + `src/settings-page.tsx`：`#/settings` 由 DSH 自己渲染的设置页
+  （存储与备份、已归档空间、协作者、快捷键、关于），不挂载 `vendor/ui-settings` 的上游页面；
+  分区外壳在 `src/settings-section.tsx`，样式在 `src/settings.module.css`（`container` 查询按面板宽度折叠）。
 - `vendor/`：从 Alter 仓库复制的源码，**逐字节一致，不要直接改**；来源与同步方法见
   `vendor/VENDOR.md`。
-- `tests/`：store/service/rpc/space-client/host-apply 测试。
+- `tests/`：store/service/rpc/space-client/workspace-sync/host-apply 测试。
 
 ## 约定
 
@@ -53,5 +63,10 @@ pnpm check        # build + verify + typecheck + test
   `{type:'server-response', rpcId, result:{ok:true, value:{value}|{error}}}`。
   新增端点必须同时加入 `host/rpc.ts` 白名单与 `src/space-client.ts` 映射。
   `storage.*` 是 DSH 扩展端点，客户端映射在 `src/storage-client.ts`。
-- 构建期对复制样式的适配只在 `build/build.mjs` 的 `adaptCss` 中进行，不改原样式文件。
+- 构建期对复制源码的适配集中在 `build/build.mjs`：样式在 `adaptCss` 中处理；模块级覆盖目前只有
+  `DirectoryField → src/native-directory-field.tsx`（系统目录选择）。`vendor/` 文件保持逐字节一致，
+  新增覆盖须在 `VENDOR.md` 登记。
 - 客户端 bundle 外置依赖仅限 react 族；新增第三方库必须打进 bundle。
+- **空间工作区约定**：一个空间只有主目录映射一个 DSH 工作区；工作区以 canonical 路径为唯一身份，
+  同一目录只能归属一个空间（含已归档空间）；侧栏图标保持原生文件夹，空间身份用标题前缀 `🪐 `。
+  验收清单见 `docs/space-workspace-acceptance.md`。
