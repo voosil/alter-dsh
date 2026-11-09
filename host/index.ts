@@ -13,6 +13,11 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createSpaceAuthority } from './authority.js';
 import { createSnapshotScheduler } from './backup.js';
+import { createDocumentService } from './document/service.js';
+import {
+  registerDocumentTools,
+  type ToolsLike,
+} from './document/tools.js';
 import { withVersionRetention } from './retention.js';
 import { RPC_ROUTE_PATH, createSpaceFetchRoute } from './rpc.js';
 import { createSpaceStorage } from './storage.js';
@@ -34,6 +39,8 @@ export const inject = ['connection'];
 export interface SpacePluginConfig {
   /** Directory that owns `space.db`; defaults to `${DSH_HOME}/data/space`. */
   dataDir?: unknown;
+  /** Set `false` to keep the Agent document tools unregistered. */
+  documentTools?: unknown;
 }
 
 interface LoggerLike {
@@ -67,6 +74,14 @@ export interface HostContextLike {
   get?(name: string): unknown;
   /** Injected DSH workspace registry (present on the `inject` child). */
   workspaceRegistry?: unknown;
+  /** Injected DSH tool registry (present on the `inject` child). */
+  tools?: unknown;
+}
+
+function isToolsLike(value: unknown): value is ToolsLike {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.register === 'function';
 }
 
 /** Describe a caught error for one log line. */
@@ -152,12 +167,40 @@ export async function apply(
     );
     const service = createSpaceAuthority(retainedStore, now);
     const storage = createSpaceStorage({ store, directory });
+    const document = createDocumentService({ store, now });
     let workspaceSync: SpaceWorkspaceSync | undefined;
+    let disposeDocumentTools: (() => void) | undefined;
     const route = createSpaceFetchRoute({
       service,
       storage,
       workspaceSync: () => workspaceSync,
+      document,
     });
+    const attachDocumentTools = (child: HostContextLike): void => {
+      const tools = child.tools ?? child.get?.('tools');
+      if (!isToolsLike(tools)) {
+        logger.warn?.('[alter-dsh-space] DSH 工具服务不可用：文档模型工具未注册');
+        return;
+      }
+      const dispose = registerDocumentTools(tools, { service: document });
+      disposeDocumentTools = dispose;
+      const cleanup = () => {
+        if (disposeDocumentTools === dispose) disposeDocumentTools = undefined;
+        dispose();
+      };
+      try {
+        void child.effect(() => cleanup, 'alter-dsh-space: document tools');
+      } catch {
+        // A missing child effect keeps the tools registered until unload.
+      }
+    };
+    if (config.documentTools !== false) {
+      if (typeof ctx.inject === 'function') {
+        ctx.inject(['tools'], (child) => attachDocumentTools(child));
+      } else if (ctx.get !== undefined) {
+        attachDocumentTools(ctx);
+      }
+    }
     const attachWorkspaceSync = (child: HostContextLike): void => {
       const registry =
         child.workspaceRegistry ?? child.get?.('workspaceRegistry');
@@ -208,6 +251,7 @@ export async function apply(
     );
     return async () => {
       workspaceSync = undefined;
+      disposeDocumentTools?.();
       disposeRoute();
       await snapshots.dispose();
       await store.close();

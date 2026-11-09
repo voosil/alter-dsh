@@ -197,3 +197,69 @@ export function createSpaceClient(rpc: SpaceRpcCaller): SpaceService {
     listDirectories: (path) => spaceCall('listDirectories', [path ?? '~']),
   };
 }
+
+/** One node reference produced by the document projection. */
+export interface SpaceDocumentBlockRef {
+  id: string;
+  type: string;
+}
+
+/** Document client mirror of the Host `doc.*` RPC endpoints. */
+export interface SpaceDocumentClient {
+  outline(docId: string): Promise<unknown>;
+  read(docId: string, options?: Record<string, unknown>): Promise<unknown>;
+  search(input: {
+    query: string;
+    docId?: string;
+    spaceId?: string;
+    limit?: number;
+  }): Promise<unknown>;
+  applyOperations(input: {
+    docId: string;
+    baseRevision: number;
+    ops: unknown[];
+    dryRun?: boolean;
+    idempotencyKey?: string;
+  }): Promise<unknown>;
+  generate(input: {
+    docId?: string;
+    spaceId?: string;
+    title?: string;
+    parent?: string | null;
+    after?: string;
+    markdown: string;
+  }): Promise<unknown>;
+  getObject(objectId: string): Promise<unknown>;
+}
+
+/**
+ * Build the browser-side document client over the same Connection RPC
+ * channel as the Space service.
+ * @param rpc - the client Connection RPC caller.
+ */
+export function createSpaceDocumentClient(
+  rpc: SpaceRpcCaller,
+): SpaceDocumentClient {
+  async function request<T>(endpoint: string, args: unknown[]): Promise<T> {
+    const result = await rpc.call(SPACE_RPC_CHANNEL, SPACE_RPC_ENDPOINT, {
+      op: endpoint,
+      args: trimTrailingUndefined(args),
+    });
+    if (!result.ok) throw remoteError(result.error);
+    const body = result.value;
+    if (body !== null && typeof body === 'object') {
+      const record = body as Record<string, unknown>;
+      if (record.error !== undefined) throw remoteError(record.error);
+      return (record.value ?? undefined) as T;
+    }
+    return undefined as T;
+  }
+  return {
+    outline: (docId) => request('doc.outline', [docId]),
+    read: (docId, options) => request('doc.read', [docId, options]),
+    search: (input) => request('doc.search', [input]),
+    applyOperations: (input) => request('doc.applyOps', [input]),
+    generate: (input) => request('doc.generate', [input]),
+    getObject: (objectId) => request('object.get', [objectId]),
+  };
+}

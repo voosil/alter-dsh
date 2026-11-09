@@ -1,72 +1,60 @@
 # AGENTS.md — Alter-dsh
 
-本仓库是「空间」（Space）功能的自包含 DSH 插件（包名 `@alter-dsh/space`），分两半：
+「空间」（Space）功能的自包含 DSH 插件（包名 `@alter-dsh/space`），分 Host 与客户端两半：
+Host 半侧（`host/` → `lib/`）是 Cordis 插件，持有 SQLite 与业务服务，经 `/api/alter-space`
+暴露给浏览器；客户端半侧（`src/` → `client.js`）把 `vendor/ui-space` 的 `SpaceApp` 挂到面板。
+业务数据只存在于 Host。
 
-- **Host 半侧**（`host/` → `lib/`）：Cordis 插件，打开 SQLite 数据库、组合
-  `vendor/service` 的业务服务、通过 DSH Connection 的 `/api/alter-space`
-  Fetch 路由暴露给浏览器。
-- **客户端半侧**（`src/` → `client.js`）：把 `vendor/ui-space` 的 `SpaceApp`
-  挂到面板，`src/space-client.ts` 用 RPC 实现 `SpaceService`；业务数据只存在于 Host。
+本文件只写入口、硬约束与交付要求。**文档规则与索引以 [docs/README.md](docs/README.md) 为准**，
+不要在本文件复制细节或实现说明。
+
+## 硬约束（违反即返工）
+
+- **数据权威在 Host**：业务数据只写 SQLite（`${DSH_HOME:-~/.dsh}/data/space/space.db`）；
+  localStorage 只存 UI 偏好。不要手工编辑/移动运行中的数据库；备份用每日快照或 `sqlite3 .backup`。
+- **新增 RPC 端点**必须同时改 `host/rpc.ts` 白名单与 `src/space-client.ts` 映射；通道常量
+  `('/api', 'alter-space')` 两处保持同步。传输信封与端点语义以 spec 为准。
+- **`vendor/` 可改但克制**：新增逻辑优先放 `host/`、`src/`；确实要改 `vendor/` 时保持行为与
+  既有约定一致。构建期模块覆盖集中在 `build/build.mjs`，当前生效的覆盖写在 `vendor/README.md`。
+- **客户端 bundle 自包含**：外置依赖仅限 react 族；新增第三方库必须打进 bundle。
+- **空间 ↔ 工作区不变量**：一个空间只把主工作目录（`directories[0]`）映射为一个 DSH 工作区；
+  工作区以 canonical 路径为唯一身份；同一目录只能归属一个空间（含已归档空间）；标题前缀 `🪐 `；
+  绑定只落 `workspace_links` 侧表，**不要写进 Space 实体**。
+- **文档有预算**：单文档、单目录数量、关键文档体量都有硬上限（见 docs/README.md），
+  由 `pnpm docs:check` 强制；关键文档只放导航、规则与约束，不写实现细节、源码说明、变更历史。
+- **版本历史与快照**是恢复底线：改动写入路径时必须保留归属（`me` / `alter`）、事务与裁剪语义。
 
 ## 常用命令
 
 ```sh
-pnpm install      # 首次或依赖变化后
-pnpm build        # client.js + lib/（生成产物，不入库）
-pnpm verify       # 静态校验
-pnpm typecheck    # 客户端与 Host 两套 tsconfig
-pnpm test         # vitest
-pnpm check        # build + verify + typecheck + test
+pnpm install       # 首次或依赖变化后
+pnpm build         # client.js + lib/（生成产物，不入库）
+pnpm verify        # 插件包静态校验
+pnpm docs:check    # 文档体系校验（分类/体量/索引/链接）
+pnpm typecheck     # 客户端与 Host 两套 tsconfig
+pnpm test          # vitest
+pnpm check         # build + verify + docs:check + typecheck + test（提交前全绿）
 ```
 
-安装/更新到当前 DSH profile：用 `plugin_manager` 的 `remove_bundle` 移除同名
-旧包（首次可跳过），再 `install_bundle` 目标为本仓库绝对路径。不要手写 profile
-的 `package.json` / `cordis.patch.yml`。Host 代码改动后需要让 Loader 行重启
-（`set_bundle` 先禁用再启用）；客户端代码由 client-HMR 自动替换。
+## 安装、更新与生效
 
-## 结构
+- 安装/更新到当前 DSH profile：用 `plugin_manager` 的 `remove_bundle` 移除同名旧包（首次可跳过），
+  再 `install_bundle` 目标为本仓库绝对路径。不要手写 profile 的 `package.json` / `cordis.patch.yml`。
+- Host 半侧改动后需要让 Loader 行重启（`set_bundle` 先禁用再启用）；客户端改动由 client-HMR 自动替换。
+- 生成的 `client.js` 与 `lib/` 不入库；安装或更新前必须先构建。
 
-- `host/store.ts`：SQLite 持久化（每实体一行 JSON、meta 顺序数组、单写者队列、
-  事务提交、损坏备份）。`PRAGMA user_version` 记录当前结构版本（v2：新增
-  `workspace_links` 侧表；v1 库启动时原地加表升级）。
-- `host/retention.ts`：文档版本历史上限（每篇默认 10 版 / 64 KiB，随设置生效）。
-- `host/backup.ts`：每日整库快照（VACUUM INTO + gzip + 保留最近 N 份）。
-- `host/storage.ts` + `host/settings.ts`：存储策略的默认值、校验、占用估算与设置持久化。
-- `host/rpc.ts`：`/api/alter-space` Fetch 路由（Connection 负责鉴权）、端点白名单、
-  参数/结果信封。
-- `host/authority.ts`：用 store 组合 hub + content service。
-- `host/workspace-sync.ts`：Space ↔ DSH 工作区映射（`ctx.inject(['workspaceRegistry'])` 可选接入）：
-  新建空间用主目录 `directories[0]` 创建/接管工作区（标题 `🪐 空间名`），改名同步，删除只解绑不删注册。
-  绑定落在 `workspace_links` 侧表，**不要写进 `vendor/` 的 Space 实体**。
-- `src/native-directory-field.tsx`：工作目录字段的构建期覆盖：点击「选择目录」直接调
-  `ctx.uiWorkspace.pickDirectory()`（桌面=系统文件夹对话框，Web=DSH 浏览）；无选择器时回退内置
-  目录浏览器。`build/build.mjs` 把 `DirectoryField` 的两处导入重定向到这里。
-- `src/space-client.ts`：浏览器端 `SpaceService`；通道常量是
-  `('/api', 'alter-space')`，与 `host/rpc.ts` 的 `RPC_ROUTE_PATH`/`RPC_ENDPOINT` 保持同步。
-- `src/space-shell.tsx` + `src/settings-page.tsx`：`#/settings` 由 DSH 自己渲染的设置页
-  （存储与备份、已归档空间、协作者、快捷键、关于），不挂载 `vendor/ui-settings` 的源码页面；
-  分区外壳在 `src/settings-section.tsx`，样式在 `src/settings.module.css`（`container` 查询按面板宽度折叠）。
-- `vendor/`：Space 的协议、业务服务与 UI 源码（项目自有），可直接修改；每次修改需在
-  `vendor/README.md` 的「本地变更记录」登记。新增逻辑优先放 `host/`、`src/`。
-- `tests/`：store/service/rpc/space-client/workspace-sync/host-apply 测试。
+## 知识库导航
 
-## 约定
+| 想知道 | 入口 |
+| --- | --- |
+| 数据模型、Operations、Agent 工具契约、系统架构与持久化边界 | [docs/specs/README.md](docs/specs/README.md) |
+| 为什么这样设计、方向与已做决策 | [docs/designs/README.md](docs/designs/README.md) |
+| 外部调研证据与候选方案 | [docs/research/README.md](docs/research/README.md) |
+| 验收清单与验证记录 | [docs/acceptance/README.md](docs/acceptance/README.md) |
+| 文档分类、体量预算、写作与变更规则 | [docs/README.md](docs/README.md) |
 
-- **数据文件**：`${DSH_HOME:-~/.dsh}/data/space/space.db`，每日快照在
-  `<dataDir>/backups/space-YYYYMMDD.db.gz`。运行中的 DSH 会持有连接，不要手工
-  编辑/移动数据库；备份用 `sqlite3 .backup`、退出后复制，或直接用每日快照。
-- **存储设置**：版本历史上限 / 每日快照份数存在 SQLite `meta` 表（`settings:storage`），
-  由设置页「存储与备份」经 `storage.get/estimate/set` RPC 修改；改完立即裁剪历史并清理快照。
-- 浏览器 localStorage 只存 UI 偏好；业务数据不写回 localStorage。
-- 传输协议：浏览器 → `POST /api/alter-space`，Connection 信封
-  `{type:'client-request', rpcId, method, payload:{op,args}}`；响应
-  `{type:'server-response', rpcId, result:{ok:true, value:{value}|{error}}}`。
-  新增端点必须同时加入 `host/rpc.ts` 白名单与 `src/space-client.ts` 映射。
-  `storage.*` 是 DSH 扩展端点，客户端映射在 `src/storage-client.ts`。
-- 构建期适配集中在 `build/build.mjs`：样式在 `adaptCss` 中处理；模块级覆盖目前只有
-  `DirectoryField → src/native-directory-field.tsx`（系统目录选择）。新增覆盖须在
-  `vendor/README.md` 登记。
-- 客户端 bundle 外置依赖仅限 react 族；新增第三方库必须打进 bundle。
-- **空间工作区约定**：一个空间只有主目录映射一个 DSH 工作区；工作区以 canonical 路径为唯一身份，
-  同一目录只能归属一个空间（含已归档空间）；侧栏图标保持原生文件夹，空间身份用标题前缀 `🪐 `。
-  验收清单见 `docs/space-workspace-acceptance.md`。
+## 交付要求
+
+- 行为或契约变更时，代码、测试、spec 与索引在同一变更里更新；不要让文档与实现分叉。
+- 提交前 `pnpm check` 全绿（其中含 `pnpm docs:check`）。
+- 文档只写当前有效内容；变更历史交给 git，不写流水账、不贴源码、不写逐文件实现说明。

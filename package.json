@@ -40,7 +40,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.host.json --noEmit",
     "test": "vitest run",
     "verify": "node scripts/verify.mjs",
-    "check": "node build/build.mjs && tsc -p tsconfig.host.json && node scripts/verify.mjs && tsc -p tsconfig.json --noEmit && tsc -p tsconfig.host.json --noEmit && vitest run"
+    "docs:check": "node scripts/docs-check.mjs",
+    "check": "node build/build.mjs && tsc -p tsconfig.host.json && node scripts/verify.mjs && node scripts/docs-check.mjs && tsc -p tsconfig.json --noEmit && tsc -p tsconfig.host.json --noEmit && vitest run"
   },
   "engines": {
     "node": ">=24.0.0"

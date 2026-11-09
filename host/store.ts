@@ -25,6 +25,14 @@ import type {
   SpaceStore,
   SpaceStoreData,
 } from '../vendor/service/src/contracts.js';
+
+export type { SpaceStoreData } from '../vendor/service/src/contracts.js';
+import type {
+  DocumentAssetRecord,
+  DocumentObjectRecord,
+  DocumentOpRecord,
+  DocumentSidecar,
+} from './document/types.js';
 import {
   STORAGE_SETTINGS_KEY,
   WAL_SIZE_LIMIT,
@@ -40,11 +48,25 @@ export const DEFAULT_SPACE_ID = 'sp-inbox';
 /** Default space name. */
 export const DEFAULT_SPACE_NAME = '日常';
 
-const FORMAT_VERSION = 2;
+const FORMAT_VERSION = 3;
 const ORDER_PREFIX = 'order:';
 /** Sidecar table owning the Space ↔ DSH workspace binding (schema v2). */
 const WORKSPACE_LINKS_TABLE = 'workspace_links';
 const CREATE_WORKSPACE_LINKS = `CREATE TABLE IF NOT EXISTS ${WORKSPACE_LINKS_TABLE} (space_id TEXT PRIMARY KEY, data TEXT NOT NULL) STRICT;`;
+/** Document-model sidecar tables (schema v3). */
+const DOCUMENT_OBJECTS_TABLE = 'document_objects';
+const DOCUMENT_ASSETS_TABLE = 'document_assets';
+const DOCUMENT_OPS_TABLE = 'document_ops';
+const CREATE_DOCUMENT_OBJECTS = `CREATE TABLE IF NOT EXISTS ${DOCUMENT_OBJECTS_TABLE} (id TEXT PRIMARY KEY, doc_id TEXT NOT NULL, data TEXT NOT NULL) STRICT;`;
+const CREATE_DOCUMENT_ASSETS = `CREATE TABLE IF NOT EXISTS ${DOCUMENT_ASSETS_TABLE} (id TEXT PRIMARY KEY, data TEXT NOT NULL) STRICT;`;
+const CREATE_DOCUMENT_OPS = `CREATE TABLE IF NOT EXISTS ${DOCUMENT_OPS_TABLE} (id TEXT PRIMARY KEY, doc_id TEXT NOT NULL, sequence INTEGER NOT NULL, idempotency_key TEXT, data TEXT NOT NULL) STRICT;`;
+const CREATE_DOCUMENT_OPS_INDEX = `CREATE UNIQUE INDEX IF NOT EXISTS ${DOCUMENT_OPS_TABLE}_idempotency ON ${DOCUMENT_OPS_TABLE} (doc_id, idempotency_key) WHERE idempotency_key IS NOT NULL;`;
+const DOCUMENT_SCHEMA = [
+  CREATE_DOCUMENT_OBJECTS,
+  CREATE_DOCUMENT_ASSETS,
+  CREATE_DOCUMENT_OPS,
+  CREATE_DOCUMENT_OPS_INDEX,
+].join('\n');
 /** Corruption copies kept on disk at most. */
 const MAX_CORRUPT_BACKUPS = 2;
 /** Total bytes corruption copies may occupy at most. */
@@ -122,6 +144,26 @@ export interface SpaceStoreHandle extends SpaceStore {
   setWorkspaceLink(link: SpaceWorkspaceLink): Promise<void>;
   /** Drop one binding; resolves after COMMIT. */
   deleteWorkspaceLink(spaceId: string): Promise<void>;
+  /** Read one structured/application object sidecar row. */
+  getDocumentObject(id: string): DocumentObjectRecord | undefined;
+  /** Read every object row owned by one document. */
+  listDocumentObjects(docId: string): DocumentObjectRecord[];
+  /** Read one asset sidecar row. */
+  getDocumentAsset(id: string): DocumentAssetRecord | undefined;
+  /** Read the operation log of one document, oldest first. */
+  listDocumentOps(docId: string, limit?: number): DocumentOpRecord[];
+  /** Find one operation-log row by idempotency key. */
+  findDocumentOpByKey(
+    docId: string,
+    idempotencyKey: string,
+  ): DocumentOpRecord | undefined;
+  /**
+   * Run one document write atomically: block-collection changes and document
+   * sidecar writes commit in the same transaction, or both roll back.
+   */
+  transactDocument<T>(
+    change: (value: SpaceStoreData, sidecar: DocumentSidecar) => T,
+  ): Promise<T>;
   /** Write a consistent, compacted copy of the database to `destination`. */
   snapshotInto(destination: string): Promise<void>;
   /** Drain queued writes and close the connection. */
@@ -136,6 +178,7 @@ const SCHEMA = [
   ...COLLECTIONS.map((name) => CREATE_TABLE(name, 'id')),
   CREATE_TABLE('hub', 'space_id'),
   CREATE_WORKSPACE_LINKS,
+  DOCUMENT_SCHEMA,
 ].join('\n');
 
 function defaultSpace(now: Date) {
@@ -433,6 +476,169 @@ function readWorkspaceLinks(db: DatabaseSync): SpaceWorkspaceLink[] {
   return links;
 }
 
+type DocumentSidecarWrite =
+  | { kind: 'object'; record: DocumentObjectRecord }
+  | { kind: 'asset'; record: DocumentAssetRecord }
+  | { kind: 'op'; record: DocumentOpRecord };
+
+function readDocumentObject(
+  db: DatabaseSync,
+  id: string,
+): DocumentObjectRecord | undefined {
+  const row = db
+    .prepare(`SELECT data FROM ${DOCUMENT_OBJECTS_TABLE} WHERE id = ?`)
+    .get(id) as { data: string } | undefined;
+  const parsed = row === undefined ? undefined : parseJsonObject(row.data);
+  if (
+    parsed === undefined ||
+    typeof parsed.id !== 'string' ||
+    typeof parsed.docId !== 'string' ||
+    (parsed.type !== 'mindmap' && parsed.type !== 'component') ||
+    typeof parsed.schemaVersion !== 'number' ||
+    parsed.payload === undefined ||
+    typeof parsed.createdAt !== 'string'
+  )
+    return undefined;
+  return parsed as unknown as DocumentObjectRecord;
+}
+
+function readDocumentObjects(
+  db: DatabaseSync,
+  docId: string,
+): DocumentObjectRecord[] {
+  const rows = db
+    .prepare(
+      `SELECT id FROM ${DOCUMENT_OBJECTS_TABLE} WHERE doc_id = ? ORDER BY rowid ASC`,
+    )
+    .all(docId) as Array<{ id: string }>;
+  const records: DocumentObjectRecord[] = [];
+  for (const row of rows) {
+    const record = readDocumentObject(db, row.id);
+    if (record !== undefined) records.push(record);
+  }
+  return records;
+}
+
+function readDocumentAsset(
+  db: DatabaseSync,
+  id: string,
+): DocumentAssetRecord | undefined {
+  const row = db
+    .prepare(`SELECT data FROM ${DOCUMENT_ASSETS_TABLE} WHERE id = ?`)
+    .get(id) as { data: string } | undefined;
+  const parsed = row === undefined ? undefined : parseJsonObject(row.data);
+  if (
+    parsed === undefined ||
+    typeof parsed.id !== 'string' ||
+    typeof parsed.sha256 !== 'string' ||
+    typeof parsed.mime !== 'string' ||
+    typeof parsed.bytes !== 'number' ||
+    typeof parsed.createdAt !== 'string'
+  )
+    return undefined;
+  return parsed as unknown as DocumentAssetRecord;
+}
+
+function readDocumentOp(
+  db: DatabaseSync,
+  id: string,
+): DocumentOpRecord | undefined {
+  const row = db
+    .prepare(`SELECT data FROM ${DOCUMENT_OPS_TABLE} WHERE id = ?`)
+    .get(id) as { data: string } | undefined;
+  const parsed = row === undefined ? undefined : parseJsonObject(row.data);
+  if (
+    parsed === undefined ||
+    typeof parsed.id !== 'string' ||
+    typeof parsed.docId !== 'string' ||
+    typeof parsed.revision !== 'number' ||
+    typeof parsed.actor !== 'string' ||
+    !Array.isArray(parsed.ops) ||
+    !Array.isArray(parsed.inverseOps) ||
+    typeof parsed.createdAt !== 'string'
+  )
+    return undefined;
+  return parsed as unknown as DocumentOpRecord;
+}
+
+function readDocumentOps(
+  db: DatabaseSync,
+  docId: string,
+  limit?: number,
+): DocumentOpRecord[] {
+  const rows = db
+    .prepare(
+      `SELECT id FROM ${DOCUMENT_OPS_TABLE} WHERE doc_id = ? ORDER BY sequence ASC, rowid ASC LIMIT ?`,
+    )
+    .all(docId, limit ?? -1) as Array<{ id: string }>;
+  const records: DocumentOpRecord[] = [];
+  for (const row of rows) {
+    const record = readDocumentOp(db, row.id);
+    if (record !== undefined) records.push(record);
+  }
+  return records;
+}
+
+function readDocumentOpByKey(
+  db: DatabaseSync,
+  docId: string,
+  idempotencyKey: string,
+): DocumentOpRecord | undefined {
+  const row = db
+    .prepare(
+      `SELECT id FROM ${DOCUMENT_OPS_TABLE} WHERE doc_id = ? AND idempotency_key = ?`,
+    )
+    .get(docId, idempotencyKey) as { id: string } | undefined;
+  return row === undefined ? undefined : readDocumentOp(db, row.id);
+}
+
+function flushDocumentWrites(
+  db: DatabaseSync,
+  writes: readonly DocumentSidecarWrite[],
+): void {
+  const putObject = db.prepare(
+    `INSERT INTO ${DOCUMENT_OBJECTS_TABLE} (id, doc_id, data) VALUES (?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET doc_id = excluded.doc_id, data = excluded.data`,
+  );
+  const putAsset = db.prepare(
+    `INSERT INTO ${DOCUMENT_ASSETS_TABLE} (id, data) VALUES (?, ?)
+     ON CONFLICT(id) DO UPDATE SET data = excluded.data`,
+  );
+  const appendOp = db.prepare(
+    `INSERT INTO ${DOCUMENT_OPS_TABLE} (id, doc_id, sequence, idempotency_key, data)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       doc_id = excluded.doc_id,
+       sequence = excluded.sequence,
+       idempotency_key = excluded.idempotency_key,
+       data = excluded.data`,
+  );
+  try {
+    for (const write of writes) {
+      if (write.kind === 'object')
+        putObject.run(
+          write.record.id,
+          write.record.docId,
+          JSON.stringify(write.record),
+        );
+      else if (write.kind === 'asset')
+        putAsset.run(write.record.id, JSON.stringify(write.record));
+      else
+        appendOp.run(
+          write.record.id,
+          write.record.docId,
+          write.record.revision,
+          write.record.idempotencyKey ?? null,
+          JSON.stringify(write.record),
+        );
+    }
+  } finally {
+    closeStatement(putObject);
+    closeStatement(putAsset);
+    closeStatement(appendOp);
+  }
+}
+
 function parseEntityRow(
   _collection: Collection,
   id: string,
@@ -535,6 +741,7 @@ function applyWritePlan(
   plan: WritePlan,
   persisted: PersistedSnapshot,
   data: SpaceStoreData,
+  beforeCommit?: () => void,
 ): void {
   const orders = new Map<Collection, string[]>();
   for (const collection of COLLECTIONS) {
@@ -569,6 +776,7 @@ function applyWritePlan(
     } finally {
       closeStatement(hubUpsert);
     }
+    beforeCommit?.();
     setMeta(db, 'updated_at', new Date().toISOString());
     db.exec('COMMIT');
   } catch (error) {
@@ -727,15 +935,17 @@ export async function openSpaceStore(
     db.exec(`PRAGMA user_version = ${FORMAT_VERSION}`);
     version = FORMAT_VERSION;
   } else if (version < FORMAT_VERSION) {
-    // v1 → v2: add the Space ↔ workspace sidecar table. Business tables are
-    // untouched, so an in-place upgrade is a single idempotent CREATE.
+    // v1 → v2: Space ↔ workspace sidecar; v2 → v3: document-model sidecars.
+    // Business tables are untouched, so every step is an idempotent CREATE.
     db.exec(CREATE_WORKSPACE_LINKS);
+    db.exec(DOCUMENT_SCHEMA);
     db.exec(`PRAGMA user_version = ${FORMAT_VERSION}`);
     version = FORMAT_VERSION;
   }
-  // Defensive: a v2 database whose sidecar table went missing is healed here
-  // instead of failing every later write.
+  // Defensive: sidecar tables missing from a current-version database are
+  // healed here instead of failing every later write.
   db.exec(CREATE_WORKSPACE_LINKS);
+  db.exec(DOCUMENT_SCHEMA);
 
   const storageSettings = parseStorageSettings(readStorageSettingsValue(db));
 
@@ -807,6 +1017,59 @@ export async function openSpaceStore(
           data = snapshot;
           throw error;
         }
+      }
+      return result;
+    });
+  }
+
+  function transactDocument<T>(
+    change: (value: SpaceStoreData, sidecar: DocumentSidecar) => T,
+  ): Promise<T> {
+    return enqueue(async () => {
+      const snapshot = structuredClone(data);
+      const writes: DocumentSidecarWrite[] = [];
+      const sidecar: DocumentSidecar = {
+        getObject: (id) => readDocumentObject(db, id),
+        listObjects: (docId) => readDocumentObjects(db, docId),
+        putObject(record) {
+          writes.push({ kind: 'object', record });
+        },
+        getAsset: (id) => readDocumentAsset(db, id),
+        putAsset(record) {
+          writes.push({ kind: 'asset', record });
+        },
+        listOps: (docId, limit) => readDocumentOps(db, docId, limit),
+        findOpByKey: (docId, key) => readDocumentOpByKey(db, docId, key),
+        appendOp(record) {
+          writes.push({ kind: 'op', record });
+        },
+      };
+      let result: T;
+      try {
+        result = change(data, sidecar);
+      } catch (error) {
+        data = snapshot;
+        throw error;
+      }
+      let plan: WritePlan;
+      try {
+        plan = planWrite(data, persisted, orderSnapshot);
+      } catch (error) {
+        data = snapshot;
+        throw error;
+      }
+      try {
+        applyWritePlan(db, plan, persisted, data, () =>
+          flushDocumentWrites(db, writes),
+        );
+        for (const collection of COLLECTIONS)
+          orderSnapshot.set(
+            collection,
+            data[collection].map((entity) => String(entity.id)),
+          );
+      } catch (error) {
+        data = snapshot;
+        throw error;
       }
       return result;
     });
@@ -889,6 +1152,12 @@ export async function openSpaceStore(
     listWorkspaceLinks: () => [...workspaceLinks.values()].map((link) => ({ ...link })),
     setWorkspaceLink: writeWorkspaceLink,
     deleteWorkspaceLink: removeWorkspaceLink,
+    getDocumentObject: (id) => readDocumentObject(db, id),
+    listDocumentObjects: (docId) => readDocumentObjects(db, docId),
+    getDocumentAsset: (id) => readDocumentAsset(db, id),
+    listDocumentOps: (docId, limit) => readDocumentOps(db, docId, limit),
+    findDocumentOpByKey: (docId, key) => readDocumentOpByKey(db, docId, key),
+    transactDocument,
     snapshotInto(destination) {
       return enqueue(() => {
         const target = destination.replaceAll("'", "''");

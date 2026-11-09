@@ -7,6 +7,12 @@
  * `{ value }` or `{ error: { code, message } }`.
  */
 import type { NewSpaceInput, SpacePatch, SpaceService } from '@alter/protocol';
+import type {
+  ApplyOperationsInput,
+  DocumentService,
+  GenerateDocumentInput,
+} from './document/service.js';
+import { DocumentError } from './document/types.js';
 import type { SpaceStorageApi } from './storage.js';
 import { WorkspaceSyncError, type SpaceWorkspaceSync } from './workspace-sync.js';
 import {
@@ -85,9 +91,14 @@ const HUB_METHODS = [
 
 const STORAGE_METHODS = ['get', 'estimate', 'set'] as const;
 
+const DOCUMENT_METHODS = ['outline', 'read', 'search', 'applyOps', 'generate'] as const;
+const OBJECT_METHODS = ['get'] as const;
+
 const SPACE_METHOD_SET: ReadonlySet<string> = new Set(SPACE_METHODS);
 const HUB_METHOD_SET: ReadonlySet<string> = new Set(HUB_METHODS);
 const STORAGE_METHOD_SET: ReadonlySet<string> = new Set(STORAGE_METHODS);
+const DOCUMENT_METHOD_SET: ReadonlySet<string> = new Set(DOCUMENT_METHODS);
+const OBJECT_METHOD_SET: ReadonlySet<string> = new Set(OBJECT_METHODS);
 
 const MAX_ARGS = 16;
 
@@ -119,6 +130,8 @@ export interface SpaceRpcOptions {
    * loads, hence the resolver form.
    */
   workspaceSync?: () => SpaceWorkspaceSync | undefined;
+  /** Document-model service; absent when the feature is disabled. */
+  document?: DocumentService;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -220,6 +233,49 @@ export function createSpaceRpc(options: SpaceRpcOptions): SpaceRpcHandler {
         const value = await target[method](...args);
         return { value: value === undefined ? null : value };
       }
+      if (group === 'doc' && DOCUMENT_METHOD_SET.has(method)) {
+        const document = options.document;
+        if (document === undefined)
+          throw new SpaceRpcError('doc/unavailable', '文档模型服务未启用');
+        switch (method) {
+          case 'outline':
+            return { value: await document.outline(String(args[0])) };
+          case 'read':
+            return {
+              value: await document.read(
+                String(args[0]),
+                (args[1] ?? {}) as Parameters<DocumentService['read']>[1],
+              ),
+            };
+          case 'search':
+            return {
+              value: await document.search(
+                (args[0] ?? {}) as Parameters<DocumentService['search']>[0],
+              ),
+            };
+          case 'applyOps':
+            return {
+              value: await document.applyOperations(
+                (args[0] ?? {}) as ApplyOperationsInput,
+              ),
+            };
+          case 'generate':
+            return {
+              value: await document.generate(
+                (args[0] ?? {}) as GenerateDocumentInput,
+              ),
+            };
+          default:
+            break;
+        }
+      }
+      if (group === 'object' && OBJECT_METHOD_SET.has(method)) {
+        const document = options.document;
+        if (document === undefined)
+          throw new SpaceRpcError('doc/unavailable', '文档模型服务未启用');
+        if (method === 'get')
+          return { value: (await document.getObject(String(args[0]))) ?? null };
+      }
       if (group === 'hub' && HUB_METHOD_SET.has(method)) {
         const target = service.hub as unknown as Record<
           string,
@@ -230,6 +286,8 @@ export function createSpaceRpc(options: SpaceRpcOptions): SpaceRpcHandler {
       }
       throw new SpaceRpcError('space/not-found', `未知的接口 ${endpoint}`);
     } catch (error) {
+      if (error instanceof DocumentError)
+        return { error: { code: error.code, message: error.message } };
       if (error instanceof WorkspaceSyncError)
         return { error: { code: error.code, message: error.message } };
       if (error instanceof SpaceRpcError)

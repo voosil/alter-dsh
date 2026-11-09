@@ -3,6 +3,7 @@ import {
   SPACE_RPC_CHANNEL,
   SPACE_RPC_ENDPOINT,
   createSpaceClient,
+  createSpaceDocumentClient,
   type SpaceRpcCaller,
 } from '../src/space-client.js';
 
@@ -85,5 +86,38 @@ describe('createSpaceClient', () => {
       endpoint: 'space.listDirectories',
       args: ['~'],
     });
+  });
+});
+
+describe('createSpaceDocumentClient', () => {
+  it('maps document and object reads to the Host doc/object endpoints', async () => {
+    const calls: Array<{ op: string; args: unknown[] }> = [];
+    const rpc: SpaceRpcCaller = {
+      async call(_channel, _endpoint, payload) {
+        const { op, args } = payload as { op: string; args: unknown[] };
+        calls.push({ op, args });
+        return { ok: true, value: { value: { ok: true } } };
+      },
+    };
+    const document = createSpaceDocumentClient(rpc);
+    await document.outline('doc-1');
+    await document.read('doc-1', { maxChars: 2000 });
+    await document.search({ query: 'x', docId: 'doc-1' });
+    await document.applyOperations({
+      docId: 'doc-1',
+      baseRevision: 1,
+      ops: [],
+    });
+    await document.generate({ spaceId: 'sp-1', markdown: '# x' });
+    await document.getObject('obj_1');
+    expect(calls.map((call) => call.op)).toEqual([
+      'doc.outline',
+      'doc.read',
+      'doc.search',
+      'doc.applyOps',
+      'doc.generate',
+      'object.get',
+    ]);
+    expect(calls[1]?.args).toEqual(['doc-1', { maxChars: 2000 }]);
   });
 });

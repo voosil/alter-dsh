@@ -24,6 +24,22 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
 });
 
+function fakeTools(): {
+  definitions: Map<string, unknown>;
+  tools: { register: (definition: { name: string }) => () => void };
+} {
+  const definitions = new Map<string, unknown>();
+  return {
+    definitions,
+    tools: {
+      register(definition: { name: string }) {
+        definitions.set(definition.name, definition);
+        return () => definitions.delete(definition.name);
+      },
+    },
+  };
+}
+
 interface Harness {
   ctx: HostContextLike;
   routePath: () => string | undefined;
@@ -31,7 +47,9 @@ interface Harness {
   teardown: () => Promise<void>;
 }
 
-function createHarness(options: { registry?: unknown } = {}): Harness {
+function createHarness(
+  options: { registry?: unknown; tools?: unknown } = {},
+): Harness {
   let registeredPath: string | undefined;
   let routeFetch: ((request: Request) => Promise<Response>) | undefined;
   const disposers: Array<() => unknown> = [];
@@ -56,12 +74,15 @@ function createHarness(options: { registry?: unknown } = {}): Harness {
     },
     logger: { info: () => undefined, warn: () => undefined },
     effect: childEffect,
-    ...(options.registry === undefined
+    ...(options.registry === undefined && options.tools === undefined
       ? {}
       : {
           inject(names: string[], callback: (child: unknown) => void) {
             callback({
-              workspaceRegistry: options.registry,
+              ...(options.registry === undefined
+                ? {}
+                : { workspaceRegistry: options.registry }),
+              ...(options.tools === undefined ? {} : { tools: options.tools }),
               effect: childEffect,
             });
           },
@@ -153,6 +174,77 @@ describe('host plugin apply', () => {
       workspace?.id,
     );
     await reopened.close();
+  });
+
+  it('registers document tools and serves the document RPC endpoints', async () => {
+    const dir = await tempDir();
+    const fake = fakeTools();
+    const harness = createHarness({ tools: fake.tools });
+    await apply(harness.ctx, { dataDir: dir });
+    expect([...fake.definitions.keys()].sort()).toEqual([
+      'space_doc_generate',
+      'space_doc_ops',
+      'space_doc_outline',
+      'space_doc_read',
+      'space_doc_search',
+      'space_object_get',
+      'space_object_update',
+    ]);
+
+    const generated = (await harness.call('doc.generate', [
+      {
+        spaceId: 'sp-inbox',
+        title: 'RPC 文档',
+        markdown: '# 标题\n\n正文段落\n',
+      },
+    ])) as { docId: string; revision: number; changed_block_ids?: unknown };
+    expect(generated.docId).toMatch(/^doc-/);
+    expect(generated.revision).toBe(1);
+
+    const outline = (await harness.call('doc.outline', [generated.docId])) as {
+      revision: number;
+      outline: Array<{ id: string; type: string }>;
+    };
+    expect(outline.revision).toBe(1);
+    expect(outline.outline.length).toBeGreaterThan(0);
+
+    const read = (await harness.call('doc.read', [generated.docId])) as {
+      revision: number;
+      markdown: string;
+      blocks: Array<{ id: string; type: string }>;
+    };
+    expect(read.markdown).toContain('# 标题');
+    const paragraph = read.blocks.find((block) => block.type === 'paragraph');
+    expect(paragraph).toBeDefined();
+
+    const applied = (await harness.call('doc.applyOps', [
+      {
+        docId: generated.docId,
+        baseRevision: 1,
+        ops: [
+          {
+            op: 'update_text',
+            target: paragraph!.id,
+            edits: [{ oldText: '正文段落', newText: '改过的正文' }],
+          },
+        ],
+      },
+    ])) as { revision: number; changedBlockIds: string[] };
+    expect(applied.revision).toBe(2);
+    expect(applied.changedBlockIds).toContain(paragraph!.id);
+
+    await expect(
+      harness.call('doc.applyOps', [
+        {
+          docId: generated.docId,
+          baseRevision: 1,
+          ops: [{ op: 'delete_block', target: paragraph!.id }],
+        },
+      ]),
+    ).rejects.toThrow('doc/conflict');
+
+    await harness.teardown();
+    expect(fake.definitions.size).toBe(0);
   });
 
   it('resolves the data directory from config, DSH_HOME or the home directory', () => {

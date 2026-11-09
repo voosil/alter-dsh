@@ -279,8 +279,11 @@ describe('SQLite Space store', () => {
     });
     await store.close();
 
-    // Simulate a database written by the previous plugin release.
+    // Simulate a database written by the v1 plugin release.
     const legacy = new DatabaseSync(file);
+    legacy.exec('DROP TABLE document_ops');
+    legacy.exec('DROP TABLE document_assets');
+    legacy.exec('DROP TABLE document_objects');
     legacy.exec('DROP TABLE workspace_links');
     legacy.exec('PRAGMA user_version = 1');
     legacy.close();
@@ -301,8 +304,70 @@ describe('SQLite Space store', () => {
     const version = probe.prepare('PRAGMA user_version').get() as {
       user_version?: number;
     };
-    expect(Number(version.user_version)).toBe(2);
+    expect(Number(version.user_version)).toBe(3);
     probe.close();
+  });
+
+  it('commits document sidecar rows atomically with entity writes', async () => {
+    const dir = await tempDir();
+    const store = await openSpaceStore({ directory: dir, now: fixedNow });
+    await store.transactDocument((data, sidecar) => {
+      (data.nodes as unknown as Array<Record<string, unknown>>).push(
+        note('node-doc', DEFAULT_SPACE_ID),
+      );
+      sidecar.putObject({
+        id: 'obj_1',
+        docId: 'node-doc',
+        type: 'mindmap',
+        schemaVersion: 1,
+        payload: { root: { id: 'n1', text: 'root' } },
+        createdAt: fixedNow().toISOString(),
+      });
+      sidecar.appendOp({
+        id: 'op_1',
+        docId: 'node-doc',
+        revision: 1,
+        actor: 'alter',
+        ops: [{ op: 'update_attrs', target: 'blk_1', attrs: {} }],
+        inverseOps: [],
+        changedBlockIds: ['blk_1'],
+        diff: { applied: [], changedBlockIds: ['blk_1'] },
+        createdAt: fixedNow().toISOString(),
+      });
+    });
+    expect(store.read().nodes.map((node) => node.id)).toContain('node-doc');
+    expect(store.getDocumentObject('obj_1')?.payload).toEqual({
+      root: { id: 'n1', text: 'root' },
+    });
+    expect(store.listDocumentOps('node-doc')).toHaveLength(1);
+
+    await expect(
+      store.transactDocument((data, sidecar) => {
+        (data.nodes as unknown as Array<Record<string, unknown>>).push(
+          note('node-rollback', DEFAULT_SPACE_ID),
+        );
+        sidecar.putObject({
+          id: 'obj_2',
+          docId: 'node-doc',
+          type: 'component',
+          schemaVersion: 1,
+          payload: { kind: 'declarative', renderer: 'chart', props: {} },
+          createdAt: fixedNow().toISOString(),
+        });
+        throw new Error('boom');
+      }),
+    ).rejects.toThrow('boom');
+    expect(store.read().nodes.map((node) => node.id)).not.toContain(
+      'node-rollback',
+    );
+    expect(store.getDocumentObject('obj_2')).toBeUndefined();
+
+    await store.close();
+    const reopened = await openSpaceStore({ directory: dir, now: fixedNow });
+    expect(reopened.getDocumentObject('obj_1')?.type).toBe('mindmap');
+    expect(reopened.listDocumentObjects('node-doc')).toHaveLength(1);
+    expect(reopened.listDocumentOps('node-doc')).toHaveLength(1);
+    await reopened.close();
   });
 
   it('ignores malformed workspace link rows instead of failing startup', async () => {
