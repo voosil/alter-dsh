@@ -16,7 +16,7 @@
   --alter-line-ui: 1.6;
   --alter-tracking-display: -0.022em;
   --alter-tracking-body: 0.006em;
-  /* Deprecated aliases kept for apps/web and ui-overview during migration. */
+  /* Deprecated aliases kept during migration. */
   --alter-font-headline-sm: var(--alter-font-title);
   --alter-font-label: var(--alter-font-body-sm);
   /* Corner radius scale: five semantic steps only — inline marks, controls,

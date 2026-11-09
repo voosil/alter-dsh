@@ -13,7 +13,7 @@ function resolve(source: string, importer: string): string | null {
 }
 
 describe('build-time directory field override', () => {
-  it('redirects the two vendored import sites to the native field', () => {
+  it('redirects the two import sites to the native field', () => {
     expect(
       resolve(
         './DirectoryField',

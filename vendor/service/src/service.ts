@@ -1,4 +1,4 @@
-/** Real Space content business service, ported from the design-stage mock. */
+/** Space content business service. */
 import { randomUUID } from 'node:crypto';
 import type { Dirent } from 'node:fs';
 import { readdir } from 'node:fs/promises';
@@ -99,17 +99,9 @@ function localDayKey(value: string) {
   return `${date.getFullYear()}-${month}-${day}`;
 }
 
-function excerpt(value: string, max = 48) {
-  const text = value.replace(/\s+/g, ' ').trim();
-  return text.length > max ? `${text.slice(0, max)}…` : text;
-}
-
 interface ActivitySource {
   space: Space;
   nodes: SpaceNode[];
-  thoughts: Thought[];
-  comments: Comment[];
-  tasks: SpaceTask[];
   agentEvents: AgentEvent[];
   /** 活动窗口起点（含）。 */
   since: Date;
@@ -120,27 +112,25 @@ interface ActivitySource {
 /**
  * 「什么值得记」——空间详情活动记录的产品口径。
  *
- * 活动流由实体当前状态推导，不是系统日志：这里只留下回看空间时真正关心的
- * 变化；编辑过程、使用统计与系统行为交给版本历史、数据库和运行日志。
+ * 「值得记」= 没有别的视图承载、且改变了空间面貌的事。活动流由实体当前状态
+ * 推导，不是系统日志：
  *
  * 记：
  * - 空间的创建；
  * - 文档的新建（空白草稿不算；Alter 的同一动作由 AgentEvent 呈现，不重复记）；
  * - 用户主动归档文档（闲置自动归档是系统清理，不是用户决定，不记）；
- * - 随想的记录，以及随想被整理成文档；
- * - 评论的发起与讨论了结；
- * - 事项的提出；
  * - Alter 的行动（AgentEvent 本身已是整理过的结果摘要）。
  *
- * 不记：文档每次编辑、自动保存与版本快照；评论改字；随想改动；打开文档与
- * 活跃度；系统 / 存储 / 同步行为。以上仍完整保存在数据库与版本历史里。
+ * 不记（各自有更合适的去处，数据库与版本历史仍保留全部细节）：
+ * - 文档每次编辑、自动保存与版本快照 → 版本历史；
+ * - 随想及其修改 → 随想视图（随想转成文档时按「新建文档」记一条）；
+ * - 评论的发起、改字与了结 → 文档评论栏；
+ * - 事项 → 端口里仍是占位，没有真实数据源；
+ * - 打开文档与活跃度、闲置自动归档、系统 / 存储 / 同步行为。
  */
 function buildActivityEvents({
   space,
   nodes,
-  thoughts,
-  comments,
-  tasks,
   agentEvents,
   since,
   now,
@@ -156,7 +146,6 @@ function buildActivityEvents({
   const notes = nodes.filter(
     (node) => node.spaceId === space.id && node.kind === 'note',
   );
-  const notesById = new Map(notes.map((node) => [node.id, node]));
 
   // Alter 的 AgentEvent 已经概括了同一动作，5 分钟内的文档新建不再单独记。
   const agentDocTimes = new Map<string, number[]>();
@@ -178,27 +167,12 @@ function buildActivityEvents({
     title: `创建了空间「${space.name}」`,
   });
 
-  // 随想转文档时，文档的新建由「把随想整理成」这条记录承担，避免重复。
-  const convertedDocIds = new Set(
-    thoughts
-      .filter(
-        (thought) =>
-          thought.spaceId === space.id &&
-          !thought.deletedAt &&
-          thought.convertedDocId,
-      )
-      .map((thought) => thought.convertedDocId as string),
-  );
-
   for (const node of notes) {
     if (node.deletedAt) continue;
     const title = node.title || '未命名文档';
     // 空白草稿只是「点了一下新建」，还没有内容，不值得记；后来写了字自然补记。
     if (!node.title.trim() && !htmlToText(node.content).trim()) continue;
-    if (
-      !convertedDocIds.has(node.id) &&
-      !recordedByAgent(node.id, node.createdAt)
-    ) {
+    if (!recordedByAgent(node.id, node.createdAt)) {
       const label = node.creator === 'alter' ? 'Alter 新建了' : '新建';
       record({
         id: `act-doc-create-${node.id}`,
@@ -223,79 +197,6 @@ function buildActivityEvents({
         docTitle: title,
       });
     }
-  }
-
-  for (const thought of thoughts) {
-    if (thought.spaceId !== space.id || thought.deletedAt) continue;
-    const text = excerpt(htmlToText(thought.content), 36);
-    const title = text ? `记录随想「${text}」` : '记录了一条随想';
-    record({
-      id: `act-thought-${thought.id}`,
-      at: thought.createdAt,
-      kind: 'thought',
-      title,
-      label: title,
-    });
-    const converted = thought.convertedDocId
-      ? notesById.get(thought.convertedDocId)
-      : undefined;
-    if (!converted || converted.deletedAt) continue;
-    const docTitle = converted.title || '未命名文档';
-    const label = '把随想整理成';
-    record({
-      id: `act-thought-convert-${thought.id}`,
-      at: converted.createdAt,
-      kind: 'doc',
-      title: `${label}《${docTitle}》`,
-      label,
-      docId: converted.id,
-      docTitle,
-    });
-  }
-
-  for (const comment of comments) {
-    const note = notesById.get(comment.docId);
-    if (!note || note.deletedAt) continue;
-    const docTitle = note.title || '未命名文档';
-    const prefix = comment.author === 'alter' ? 'Alter ' : '';
-    record({
-      id: `act-comment-${comment.id}`,
-      at: comment.createdAt,
-      kind: 'comment',
-      title: `${prefix}评论《${docTitle}》`,
-      label: `${prefix}评论`,
-      detail: excerpt(comment.body),
-      docId: note.id,
-      docTitle,
-    });
-    if (!comment.resolvedAt) continue;
-    const label = `${prefix}结束讨论`;
-    record({
-      id: `act-comment-resolved-${comment.id}`,
-      at: comment.resolvedAt,
-      kind: 'comment',
-      title: `${label}《${docTitle}》`,
-      label,
-      detail: excerpt(comment.body),
-      docId: note.id,
-      docTitle,
-    });
-  }
-
-  for (const task of tasks) {
-    if (task.spaceId !== space.id) continue;
-    const title = `提出事项「${task.title}」`;
-    const note = task.docId ? notesById.get(task.docId) : undefined;
-    record({
-      id: `act-task-${task.id}`,
-      at: task.createdAt,
-      kind: 'task',
-      title,
-      label: title,
-      detail: task.detail,
-      docId: task.docId,
-      docTitle: note?.title || undefined,
-    });
   }
 
   for (const event of agentEvents) {
@@ -1116,9 +1017,6 @@ export function createContentService(
       const events = buildActivityEvents({
         space,
         nodes: data.nodes,
-        thoughts: data.thoughts,
-        comments: data.comments,
-        tasks: data.tasks,
         agentEvents,
         since,
         now: timestamp,

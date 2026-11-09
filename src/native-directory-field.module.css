@@ -1,6 +1,6 @@
 /*
- * Port-owned styles for the native directory field override. The rest of the
- * field reuses the vendored DirectoryField CSS module so the two variants keep
+ * Styles for the native directory field override. The rest of the
+ * field reuses the DirectoryField CSS module so the two variants keep
  * one visual language.
  */
 .error {

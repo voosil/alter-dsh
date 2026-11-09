@@ -1,8 +1,8 @@
 /**
  * Host half of the self-contained Space plugin.
  *
- * Opens the SQLite-backed Space authority, composes the vendored business
- * service over it, and exposes it to the browser through the DSH Connection
+ * Opens the SQLite-backed Space authority, composes the business service
+ * over it, and exposes it to the browser through the DSH Connection
  * RPC channel. Data lives in `${dataDir}/space.db` (default
  * `${DSH_HOME:-~/.dsh}/data/space/space.db`) and survives page and Host
  * restarts.

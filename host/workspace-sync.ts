@@ -20,8 +20,8 @@
  *   so sessions keep their grouping.
  *
  * The binding itself lives in the plugin-owned SQLite sidecar
- * (`workspace_links`), never in the vendored Space entity: DSH workspaces are
- * a Host-level concept and the Space database must stay upstream-compatible.
+ * (`workspace_links`), never in the Space entity: DSH workspaces are a
+ * Host-level concept and the Space database keeps its own format.
  */
 import { realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';

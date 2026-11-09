@@ -1,8 +1,8 @@
 /**
  * Space settings page.
  *
- * Replaces the upstream `SettingsPage` composition in the DSH port: the reused
- * upstream page owned one layout while the appended storage section owned
+ * Replaces the reused `SettingsPage` composition: the reused page owned one
+ * layout while the appended storage section owned
  * another, so the two columns collided and every section carried its own
  * explanatory copy. This page renders the settings of the whole Space feature
  * on one surface — the DSH-only storage policy, archived space recovery, the

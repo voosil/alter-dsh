@@ -2,7 +2,7 @@
  * Browser implementation of the Space `SpaceService`, backed by the Host over
  * the DSH Connection RPC channel.
  *
- * The vendored `SpaceApp` only knows the `SpaceService` interface, so this
+ * `SpaceApp` only knows the `SpaceService` interface, so this
  * module is the seam that turns each product call into one RPC endpoint. The
  * Host owns the data; the browser keeps no business state.
  */

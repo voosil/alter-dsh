@@ -7,13 +7,13 @@
 - 评审摘要（先读）：[design-agent-space-documents-review.md](./design-agent-space-documents-review.md)
 - 相关文档：[AGENTS.md](../AGENTS.md)、[README.md](../README.md)、[docs/research-agent-creation.md](./research-agent-creation.md)
 
-> **2026-11-09 更新**：上游 Alter 仓库已废弃，`Alter-dsh` 是唯一事实源。本文中「`vendor/` 不可修改/逐字节一致」的旧表述应理解为：**`vendor/` 是自持基线，可修改但需在 `vendor/VENDOR.md` 登记；能用 `host/`/`src/` 实现的不改 vendor**。文档格式与 Agent 工具契约以 [spec-document-model-v0.md](./spec-document-model-v0.md) 为准（本文的 HTML 精确替换设计已被取代）。
+> **2026-11-09 更新**：本文中「`vendor/` 不可修改」的旧表述应理解为：**`vendor/` 是项目自有源码目录，可修改，变更登记在 `vendor/README.md`；能用 `host/`/`src/` 实现的不改 vendor**。文档格式与 Agent 工具契约以 [spec-document-model-v0.md](./spec-document-model-v0.md) 为准（本文的 HTML 精确替换设计已被取代）。
 
 ---
 
 ## 0. 结论摘要
 
-1. **采用 Host 原生工具（方案 A）**：在 `@alter-dsh/space` 的 Host 半侧用 `ctx.tools.register()` 注册 6 个 `space_*` 工具，直接调用进程内的 `SpaceService`。不新增网络链路、不新增运行时依赖、不修改 `vendor/`（逐字节上游拷贝）。
+1. **采用 Host 原生工具（方案 A）**：在 `@alter-dsh/space` 的 Host 半侧用 `ctx.tools.register()` 注册 6 个 `space_*` 工具，直接调用进程内的 `SpaceService`。不新增网络链路、不新增运行时依赖；Prompt/工具逻辑放在 `host/` 与 `src/`。
 2. **写路径的三件套**：
    - **归属**：所有 Agent 写入在同一个 store 事务里标记为 `creator/author = 'alter'`（复用现有 `'me' | 'alter'` 产品语义，活动流/版本历史自然显示「Alter 更新了」）。
    - **CAS**：`space_read` 返回 `updated_at`，`space_edit` 必须回传 `base_updated_at`；门禁与业务写入在同一 `store.update` 事务内比较，冲突时**不落盘**，返回可操作的重读提示。
@@ -117,7 +117,7 @@ DSH Host 进程                                  浏览器（DSH Web GUI）
 
 ### 2.5 设计约束
 
-1. `vendor/` 逐字节一致，不可修改（`vendor/VENDOR.md`）；所有新逻辑放 `host/` 与 `src/`。
+1. `vendor/` 为项目自有源码目录（可改，变更登记在 `vendor/README.md`）；新逻辑优先放 `host/` 与 `src/`。
 2. 自包含构建：Host 产物只允许 `node:`/相对路径说明符（`scripts/verify.mjs:166-179`）；`package.json` 不新增运行时依赖。
 3. `host/index.ts` 的 `HostContextLike` 结构化类型需扩展 `tools`/`on`，或改用 `ctx.get('tools')` 可选发现。
 4. 单写者队列同步执行；禁止在 `store.update` 回调里 `await` 同一 store 的另一笔 `update`（会自我死锁，`host/store.ts:697-705`）。
@@ -467,7 +467,7 @@ interface ResolvedAgentToolsConfig {
 
 ### 7.1 归属（attribution）
 
-**问题**：`createNode`/`recordVersion`/`addComment`/`addCommentSupplement`/`convertThought` 都把作者硬编码为 `'me'`（`vendor/service/src/service.ts:221/396/574/615/765`），而 `vendor/` 不能改；产品活动流/历史靠 `creator/author` 区分「我 / Alter」。
+**问题**：`createNode`/`recordVersion`/`addComment`/`addCommentSupplement`/`convertThought` 都把作者硬编码为 `'me'`（`vendor/service/src/service.ts:221/396/574/615/765`），`vendor/` 可修改但需登记，归属仍是问题；产品活动流/历史靠 `creator/author` 区分「我 / Alter」。
 
 **方案**：`withWriteScope` 包在业务服务最外层、`withVersionRetention` 之外（service → writeScope → retention → raw；即 `retained = withVersionRetention(rawStore)`，`scope = withWriteScope(retained)`，`createSpaceAuthority(scope)`）。这样归属打标与强制版本先发生，随后 retention 在同一事务里按策略裁剪；反过来（scope 在 retention 内）虽可工作，但强制版本会晚于裁剪追加，本次事务最多超出一版，且版本字节统计少算 `'alter'` 的 3 字节。在每次 `update` 里：
 
@@ -648,7 +648,7 @@ Agent 生成的 HTML 会被产品 UI 以 `innerHTML` 渲染（`vendor/ui-space/s
 
 - **客户端**（`src/space-client.ts`）：维护 `Map<docId, updatedAt>`，在 `listNodes/getNode/createNode/saveNode/moveNode/restoreVersion/...` 返回值上记录；`saveNode(id, patch)` 调 RPC 时附加第三参 `baseUpdatedAt`（未知时不带）。
 - **Host**（`host/rpc.ts`）：`space.saveNode` 有 base 时走 `scope.run({origin:'browser', guard: nodeUnchangedGuard(id, base)}, () => service.saveNode(id, patch))`；冲突返回 `SpaceRpcError('space/conflict', …)`。
-- **UI**：`DocumentView` 的 `catch` 已显示「保存失败，重试」（vendor 不显示「保存中」，VENDOR.md 有记录）；冲突时客户端额外通知 shell：显示横幅「文档已在别处更新」+「载入最新（放弃我的修改）」。点击 → 换 service 身份/重挂载 → 旧组件 cleanup 的 flush 带过期 base 会再次冲突、不会覆盖 → 新内容加载。
+- **UI**：`DocumentView` 的 `catch` 已显示「保存失败，重试」（编辑器不显示「保存中」，记录见 `vendor/README.md`）；冲突时客户端额外通知 shell：显示横幅「文档已在别处更新」+「载入最新（放弃我的修改）」。点击 → 换 service 身份/重挂载 → 旧组件 cleanup 的 flush 带过期 base 会再次冲突、不会覆盖 → 新内容加载。
 - 不做自动 merge/覆盖按钮（需要拿到草稿内容，首期从简）。
 - 代价：用户可能丢失未保存的本地编辑（有明确提示，且 Agent 写入在版本历史中）。
 
@@ -933,4 +933,4 @@ const liveService = useMemo(() => ({ ...service }), [service, reloadToken]);
 
 - README「已知边界」：单 Host 实例、无跨窗口实时推送、`node:sqlite` 同步 API；本方案不改变这些边界（P2 仅进程内轮询）。
 - `docs/research-agent-creation.md`：Space 协作者是产品数据，不驱动真实 DSH Agent；本方案把 Agent 写入统一归属 `'alter'`，不假装协作者身份；P3 的映射是可选增强。
-- `vendor/VENDOR.md`：`vendor/` 逐字节一致；本方案所有改动在 `host/`、`src/`、`tests/`、`scripts/`。
+- `vendor/README.md`：`vendor/` 的目录说明与本地变更记录。

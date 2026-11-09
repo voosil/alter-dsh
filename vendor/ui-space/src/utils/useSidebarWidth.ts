@@ -33,7 +33,7 @@ function storeWidth(width: number | null) {
     if (width === null) window.localStorage.removeItem(SIDEBAR_WIDTH_KEY);
     else window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(width));
   } catch {
-    // Local persistence is best-effort in the mock.
+    // Local persistence is best-effort.
   }
 }
 

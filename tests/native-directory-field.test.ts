@@ -9,7 +9,7 @@ import {
 import { SpaceContext } from '../vendor/ui-space/src/runtime';
 import type { SpaceContextValue } from '../vendor/ui-space/src/runtime';
 
-/** The vendored fallback only reads `service.listDirectories` in effects. */
+/** The built-in fallback only reads `service.listDirectories` in effects. */
 const fallbackContext = {
   service: { listDirectories: async () => ({ path: '~', entries: [] }) },
 } as unknown as SpaceContextValue;
@@ -44,11 +44,11 @@ describe('native directory field', () => {
     expect(html).toContain('~/reference');
     expect(html).toContain('工作目录可编辑和读写，其他目录将作为资料库来源');
     expect(html).toContain('移除 /Users/me/work');
-    // The vendored in-app browser must not render on the native path.
+    // The built-in in-app browser must not render on the native path.
     expect(html).not.toContain('可以选择多个目录');
   });
 
-  it('falls back to the vendored browser when the host has no picker', () => {
+  it('falls back to the built-in browser when the host has no picker', () => {
     const html = render(undefined);
     expect(html).not.toContain('data-directory-picker="native"');
     expect(html).toContain('可以选择多个目录');

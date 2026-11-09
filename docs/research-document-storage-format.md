@@ -209,7 +209,7 @@ doc_assets(
 
 偏「长文、暂不协作、引用要求低、要互操作」→ A；偏「块编辑、要协作、要引用、可接受导出」→ B。
 
-**本项目的信号**：Alter 的 `PRODUCT.md` 明确写「内容组织参考 Notion 的易理解性」，当前编辑器已经是块式 UX（slash 菜单、标题/列表/引用/代码/表格/图片/文件/分割线），未来又要 mindmap/交互组件——这组信号偏向 **B**；但「AI 是主要作者、需要 Markdown 导出」偏向 **A**。所以不建议拍脑袋，按 §9 做 A/B spike 用数据决定。
+**本项目的信号**：产品设计上「内容组织参考 Notion 的易理解性」，当前编辑器已经是块式 UX（slash 菜单、标题/列表/引用/代码/表格/图片/文件/分割线），未来又要 mindmap/交互组件——这组信号偏向 **B**；但「AI 是主要作者、需要 Markdown 导出」偏向 **A**。所以不建议拍脑袋，按 §9 做 A/B spike 用数据决定。
 
 ### 4.5 路线 B：JSON AST 方案详解
 
@@ -314,7 +314,7 @@ MDX = Markdown + JSX + import/export，需要编译、可执行任意 JS。用�
 | 路线 A：指令语法 round-trip 保真 | Markdown ↔ 编辑器规范化可能改变空白/标记 | 固定 canonical 序列化器 + 语料回归测试（golden corpus） |
 | 路线 B：schema 演进 | block 类型/属性升级需要迁移旧文档与旧版本 | schemaVersion + 迁移函数 + fixture 回归；未知类型按占位保留 |
 | 路线 B：版本体积 | AST JSON 比 Markdown 大 1.5–2 倍，快照/版本成本上升 | 对象/资产外置；规范化紧凑序列化；重估 64 KiB 预算或改块级增量 |
-| 路线 B：Markdown 投影有损 | 富块无法无损导出/回灌 | 投影只用于「读」和导出；写一律走 block/对象工具，不做整篇回灌 |
+| 路线 B：Markdown 投影有损 | 富块无法无损导出/回写 | 投影只用于「读」和导出；写一律走 block/对象工具，不做整篇回写 |
 | 编辑器改造成本 | 两条路线都要换掉 contentEditable，B 的 node view 更多 | 用成熟底座（Milkdown/BlockNote/Tiptap）；先做文字/图片/callout，再补 mindmap/组件 |
 | 对象生命周期 | 不可变对象 + 版本引用会积累 | 按「被版本引用 + 保留期」GC；对象表加引用计数视图 |
 | 组件安全 | AI 生成代码 | 默认声明式组件；代码组件仅沙箱 iframe + CSP + 能力白名单 + provenance 审核 |
@@ -475,7 +475,7 @@ v0 op 集：`insert_node` / `insert_markdown` / `update_text`（支持 range）/
 ### 11.9 与本仓库的映射
 
 - `SpaceNode.content` 从 HTML 改为 AST JSON（`contentFormat: 'alter-doc/1'`）；新增旁表 `doc_objects` / `doc_assets` / `component_specs` / `doc_ops`。
-- 客户端：Tiptap 替换 contentEditable；新编辑器/渲染器放 `src/document/`（`build.mjs` 以模块覆盖替换 vendored `DocumentView`）；`SpaceService` 增加 projection / ops 方法（走 RPC）。**上游 Alter 已废弃，所有实现闭合在本仓库**（详见 spec §9.1）。
+- 客户端：Tiptap 替换 contentEditable；新编辑器/渲染器放 `src/document/`（`build.mjs` 以模块覆盖替换 `DocumentView`）；`SpaceService` 增加 projection / ops 方法（走 RPC）。**所有实现闭合在本仓库**（详见 spec §9.1）。
 - Host：新增 Document Service（projection / validation / ops / audit）与 Schema Registry；store 仍是 SQLite 单写者事务。
 - Agent 工具改为 `space_outline / space_read / space_ops / space_generate / space_object_*`；之前的 HTML 精确替换设计作废。
 - 版本/备份：AST 快照 + 对象/资产 + op 日志；64 KiB 预算调整；资产目录纳入备份。

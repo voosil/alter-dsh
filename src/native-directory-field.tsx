@@ -1,14 +1,14 @@
 /**
- * Port-owned replacement for the vendored working-directory field.
+ * Replacement for the working-directory field used by the Space views.
  *
- * Upstream `vendor/ui-space/src/components/DirectoryField.tsx` browses
+ * `vendor/ui-space/src/components/DirectoryField.tsx` browses
  * directories through the Space RPC (`service.listDirectories`) in a hand-made
- * popover. The DSH port opens the **host directory picker** instead
+ * popover. The plugin opens the **host directory picker** instead
  * (`ctx.uiWorkspace.pickDirectory()`), so the desktop app shows its native
  * folder dialog and the browser profile shows the DSH browse dialog — exactly
  * the picker DSH's own "add workspace" flow uses.
  *
- * `vendor/` stays byte-identical: `build/build.mjs` redirects the two vendored
+ * `build/build.mjs` redirects the two
  * import sites (`CreateSpaceDialog`, `ConfigView`) here at bundle time. The
  * provider is installed by `src/space-shell.tsx`; when the host exposes no
  * picker (or the picker reports itself unavailable) this component falls back
@@ -28,7 +28,7 @@ export const DIRECTORY_PICKER_UNAVAILABLE = 'directory-picker-unavailable';
 
 const DirectoryPickerContext = createContext<DirectoryPicker | null>(null);
 
-/** Install the host picker for every vendored directory field on the panel. */
+/** Install the host picker for every directory field on the panel. */
 export function DirectoryPickerProvider({
   pickDirectory,
   children,

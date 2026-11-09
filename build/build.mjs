@@ -2,9 +2,9 @@
 /**
  * Build the self-contained Space client plugin bundle.
  *
- * The Space UI sources are vendored into this repository (`vendor/`) and the
- * plugin seam lives in `src/`; this script only compiles the browser half into
- * the DSH client bundle format:
+ * The Space UI sources live under `vendor/` and the plugin seam lives in
+ * `src/`; this script compiles the browser half into the DSH client bundle
+ * format:
  *
  *   window.__ModuleLoader__.load({ id, factory: (require) => exports })
  *
@@ -33,10 +33,10 @@ const pkg = JSON.parse(
   await readFile(path.join(pluginRoot, 'package.json'), 'utf8'),
 );
 
-/** Source root of a vendored package, e.g. `vendorSrc('ui-space')`. */
+/** Source root of a package under vendor/, e.g. `vendorSrc('ui-space')`. */
 const vendorSrc = (name) => path.join(vendor, name, 'src');
 
-/** Vendored packages keep their own source layout and relative imports. */
+/** These packages keep their own source layout and relative imports. */
 const alias = [
   {
     find: /^@alter\/ui-space\/(.*)$/,
@@ -55,9 +55,9 @@ const alias = [
     replacement: path.join(vendorSrc('ui-system'), 'index.ts'),
   },
   {
-    // Kept resolvable for parity with the vendored tree: the DSH port renders
-    // its own settings page (`src/settings-page.tsx`) because that page also
-    // owns the DSH-only storage policy, so the upstream page is not mounted.
+    // Kept resolvable: the panel renders its own settings page
+    // (`src/settings-page.tsx`) because that page also owns the DSH-only
+    // storage policy, so this source page is not mounted.
     find: /^@alter\/ui-settings\/SettingsPage$/,
     replacement: path.join(vendorSrc('ui-settings'), 'SettingsPage.tsx'),
   },
@@ -119,7 +119,7 @@ if (!bundleFile) throw new Error(`Vite emitted no CJS bundle: ${emitted}`);
 const bundle = await readFile(path.join(distDir, bundleFile), 'utf8');
 
 /**
- * Adapt the vendored stylesheets to a panel inside the host document:
+ * Adapt the Space stylesheets to a panel inside the host document:
  * - the app measured itself against the viewport (`100dvh`); a panel is a flex
  *   item, so the percentage resolves against the panel box instead;
  * - `tokens.css` keeps `color-scheme: light` at the document root, which would

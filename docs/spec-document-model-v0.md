@@ -3,7 +3,7 @@
 - 状态：v0 草案（实现/spike 基准，待评审）
 - 日期：2026-11-09
 - 上位文档：[research-document-storage-format.md](./research-document-storage-format.md) §11（终局架构：JSON AST 权威 + Markdown 投影 + Document Operations）
-- 适用范围：Alter 产品文档模型（Space 文档）。实现落点：**`Alter-dsh` 单仓库**（上游 Alter 已废弃，本仓库为唯一事实源；`vendor/` 是自持基线，必要时可直接修改并在 `vendor/VENDOR.md` 登记）。
+- 适用范围：Alter 产品文档模型（Space 文档）。实现落点：**`Alter-dsh` 单仓库**；`vendor/` 为项目自有源码目录，必要时可直接修改并在 `vendor/README.md` 登记。
 - 本规范冻结的内容：节点模型、ID/版本语义、Markdown 投影规则、Operation 集、对象/资产模型、Agent 工具契约、存储映射。**不包含**：完整编辑器实现、组件运行时沙箱细节、迁移脚本细节（各自另立文档）。
 
 ---
@@ -449,17 +449,16 @@ v0 限制：
 
 迁移策略：双格式共存（`contentFormat` 标记），旧文档按需/批量转换；旧版本快照保留 HTML 渲染；转换不保像素只保语义。
 
-### 9.1 单仓库策略（重要：上游 Alter 已废弃）
+### 9.1 单仓库策略
 
-- **`Alter-dsh` 是唯一事实源**：上游 `Alter` 仓库不再维护，**没有 re-vendor 流程**；协议、服务、编辑器、UI、Host 全部闭合在本仓库实现。
-- **`vendor/` 是自持基线**：最初从上游复制的快照，现归本项目所有。**可以修改**，但每次修改需在 `vendor/VENDOR.md` 的「本地变更记录」登记（日期/文件/原因）；能用 `host/`/`src/` 实现的不改 vendor。
+- **`Alter-dsh` 是唯一事实源**：协议、服务、编辑器、UI、Host 全部在本仓库实现。
+- **`vendor/` 是项目自有源码目录**：**可以修改**，但每次修改需在 `vendor/README.md` 的「本地变更记录」登记（日期/文件/原因）；能用 `host/`/`src/` 实现的不改 vendor。
 - **实现落点**：
   - 协议类型：`vendor/protocol/src/space.ts` 小步扩展（如 `contentFormat`），保持旧 HTML 文档可读；
   - Host：新增 `host/document/`（Schema Registry、projection、ops、对象/资产、op log）+ `host/store.ts` 新表 + `host/rpc.ts` 新端点 + Agent 工具注册；
-  - 客户端：新增 `src/document/`（Tiptap 编辑器与渲染器）；用 `build/build.mjs` 的模块覆盖把 vendored `DocumentView`/`Editor` 指向新模块（沿用 `DirectoryField` 覆盖模式，见 `VENDOR.md`「Build-time module override」），必要时再小范围修改 `vendor/ui-space` 的引用；
+  - 客户端：新增 `src/document/`（Tiptap 编辑器与渲染器）；用 `build/build.mjs` 的模块覆盖把 `DocumentView`/`Editor` 指向新模块（沿用 `DirectoryField` 覆盖模式，见 `vendor/README.md`「构建期模块覆盖」），必要时再小范围修改 `vendor/ui-space` 的引用；
   - 构建：Tiptap/remark 等第三方库必须打进 client bundle（外置依赖仅 react 族）；Host 侧校验器可手写或加依赖，但**不要引入 `@deepseek-ai/*` 运行时依赖**（保持自包含）。
 - **双格式过渡**：旧 HTML 文档继续可读；新文档 `contentFormat: 'alter-doc/1'`；Host 按格式路由读写/搜索/渲染；存量迁移脚本后续单独做。
-- **建议同步更新仓库约定**：`AGENTS.md` 的「vendor 逐字节一致，不要直接改」与 `VENDOR.md` 的「Syncing from upstream / 待回灌上游」已与现实冲突，应改为「自持基线 + 本地变更记录」；否则后续协作者会按旧规则行事。
 
 ---
 

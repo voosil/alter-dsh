@@ -1,7 +1,7 @@
 /**
  * The overview activity feed answers "what happened in this space that is worth
  * remembering", not "what changed in the database" (record policy in
- * `vendor/VENDOR.md`). These server-rendered checks keep the empty-state
+ * `vendor/README.md`). These server-rendered checks keep the empty-state
  * explanation and the milestone entry shapes from drifting back into a raw
  * edit log.
  */
@@ -28,11 +28,11 @@ const entries: SpaceActivityEvent[] = [
     docTitle: '访谈整理',
   },
   {
-    id: 'act-comment-c1',
+    id: 'act-doc-archive-d2',
     at: '2026-11-02T09:00:00.000Z',
-    kind: 'comment',
-    title: '评论《访谈整理》',
-    label: '评论',
+    kind: 'doc',
+    title: '归档《访谈整理》',
+    label: '归档',
     docId: 'd1',
     docTitle: '访谈整理',
   },
@@ -58,12 +58,12 @@ describe('overview activity timeline', () => {
     expect(html).toContain('版本历史');
   });
 
-  it('renders the milestone entries produced by the Host', () => {
+  it('renders the space and document milestones produced by the Host', () => {
     const html = render(entries);
     expect(html).toContain('创建了空间「研究」');
     expect(html).toContain('新建');
+    expect(html).toContain('归档');
     expect(html).toContain('访谈整理');
-    expect(html).toContain('评论');
     expect(html).toContain('3 次');
   });
 });

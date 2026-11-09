@@ -1,7 +1,7 @@
 /**
  * Browser client for the Host's storage settings API.
  *
- * Separate from `space-client.ts` on purpose: `SpaceService` is the vendored
+ * Separate from `space-client.ts` on purpose: `SpaceService` is the
  * product contract (space/content/hub), while storage policy is a DSH-port
  * extension used only by the settings page. Both ride the same Connection RPC
  * channel and envelope.

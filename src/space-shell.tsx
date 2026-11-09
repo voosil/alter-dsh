@@ -1,15 +1,15 @@
 /**
- * DSH panel shell around the vendored Space app.
+ * DSH panel shell around the Space app.
  *
- * Upstream Alter mounts `SettingsPage` as a separate client module reached by
- * the `#/settings` route. The DSH port exposes one main panel for the whole
+ * The Space settings page is mounted as a client module reached by
+ * the `#/settings` route. The plugin exposes one main panel for the whole
  * Space feature, so this shell routes the in-memory Space router instead:
  * `#/settings` renders the Space settings page, every other path renders
  * `SpaceApp`. Escape and the page's back control return to the route the user
  * left, where `SpaceApp` remounts and reloads the collaborator roster.
  *
- * The shell also installs the host directory picker for the vendored working-
- * directory field (see `src/native-directory-field.tsx`); the vendored app
+ * The shell also installs the host directory picker for the working-
+ * directory field (see `src/native-directory-field.tsx`); the app
  * itself stays untouched.
  */
 import { useEffect, useRef, useSyncExternalStore } from 'react';
@@ -39,7 +39,7 @@ export interface SpaceShellProps {
   storage?: SpaceStorageClient;
   /**
    * Host directory picker used by the working-directory field. Omitted by
-   * tests and hosts without a picker (the vendored in-app browser is the
+   * tests and hosts without a picker (the built-in in-app browser is the
    * fallback).
    */
   pickDirectory?: DirectoryPicker;

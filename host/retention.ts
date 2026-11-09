@@ -1,7 +1,7 @@
 /**
  * Bounded document-version history.
  *
- * The vendored business service appends one full-content version per recorded
+ * The business service appends one full-content version per recorded
  * edit (at most one per document per five minutes) and never prunes. The Host
  * wraps the store it hands to that service: after a write that appended
  * versions, only the affected documents are trimmed to the user's policy
@@ -83,8 +83,7 @@ export function trimAllVersions(
 
 /**
  * Trim only the documents that received a version in the write that just
- * finished. Callers pass the pre-write length; the vendored service only
- * appends (`recordVersion` → `push`), so the new versions are the tail.
+ * finished. Callers pass the pre-write length; the service only appends (`recordVersion` → `push`), so the new versions are the tail.
  */
 export function trimTouchedVersions(
   data: SpaceStoreData,

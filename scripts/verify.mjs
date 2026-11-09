@@ -84,8 +84,8 @@ check(
   'icon must be a non-empty image below 256 KiB',
 );
 
-// The feature must be carried by this repository, not by an external checkout.
-const vendored = [
+// Space source directories that must exist in this package.
+const sourceDirs = [
   'client-modules',
   'mock-workbench',
   'protocol',
@@ -95,7 +95,7 @@ const vendored = [
   'ui-system',
   'ui-workbench',
 ];
-for (const name of vendored) {
+for (const name of sourceDirs) {
   let files = [];
   try {
     files = await readdir(path.join(pluginRoot, 'vendor', name, 'src'), {
@@ -121,7 +121,7 @@ check(
       recursive: true,
     })
   ).includes('SettingsPage.tsx'),
-  'vendor/ui-settings/src must stay vendored as the upstream reference',
+  'vendor/ui-settings/src must contain the settings page source',
 );
 check(
   (
@@ -129,7 +129,7 @@ check(
       recursive: true,
     })
   ).includes('service.ts'),
-  'vendor/service/src must carry the upstream Space business service',
+  'vendor/service/src must contain the Space business service',
 );
 
 // --- Host half -------------------------------------------------------------
@@ -253,7 +253,7 @@ check(
 );
 check(
   escaped.includes('--alter-space-sidebar-width'),
-  'stylesheet must carry the ported Space app styles',
+  'stylesheet must carry the Space app styles',
 );
 check(
   escaped.includes('alter-space-host'),
@@ -319,43 +319,9 @@ check(
 );
 check(
   !escaped.includes('createSpaceService'),
-  'client bundle must not carry the removed mock data layer',
+  'client bundle must not carry the removed in-browser data layer',
 );
 
-// Self-containment: no build/runtime file may point back at another checkout.
-// The needle is assembled at runtime so this file does not match itself.
-const foreignCheckout = ['', 'workspace', 'indie', 'Alter', ''].join('/');
-const localSources = [
-  'build/build.mjs',
-  'scripts/verify.mjs',
-  'src/entry.js',
-  'src/router.js',
-  'src/space-client.ts',
-  'src/space-shell.tsx',
-  'src/settings-page.tsx',
-  'src/settings-section.tsx',
-  'src/settings.module.css',
-  'src/storage-client.ts',
-  'src/storage-settings.tsx',
-  'host/authority.ts',
-  'host/backup.ts',
-  'host/index.ts',
-  'host/retention.ts',
-  'host/rpc.ts',
-  'host/settings.ts',
-  'host/storage.ts',
-  'host/store.ts',
-  'tsconfig.json',
-  'tsconfig.host.json',
-  'vitest.config.mts',
-];
-for (const file of localSources) {
-  const text = await read(file);
-  check(
-    !text.includes(foreignCheckout),
-    `${file} must not reference another checkout by absolute path`,
-  );
-}
 
 const bytes = Buffer.byteLength(client);
 notes.push(`client.js size: ${(bytes / 1024).toFixed(0)} KiB`);

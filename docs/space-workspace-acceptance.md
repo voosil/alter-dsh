@@ -69,13 +69,13 @@
       `uiWorkspace.pickDirectory()`。
 - [x] **H2** 选中的路径直接追加到已选目录：取消不改动；重复选择同一目录去重；可多次点击添加多个目录。
       按钮文案随状态变化：还没有目录时是「选择工作区」，已有目录后是「选择资料库」。
-- [x] **H3** 空间配置页的「工作目录」走同一选择器（vendored `ConfigView` 与 `CreateSpaceDialog` 都指向覆盖组件）。
+- [x] **H3** 空间配置页的「工作目录」走同一选择器（`ConfigView` 与 `CreateSpaceDialog` 都指向覆盖组件）。
 - [x] **H4** 已选目录的 chips、名称/路径、移除按钮、错误提示与原先视觉一致；提示文案为
       「工作目录可编辑和读写，其他目录将作为资料库来源」，不再暴露「主目录 / 参考目录」的内部映射术语。
-- [~] **H5** 宿主没有 `uiWorkspace.pickDirectory` 时：字段直接渲染 vendored 目录浏览器；选择过程中才报告
-      不可用时（`directory-picker-unavailable`）点击后退回 vendored 浏览器。无 provider 的 SSR 回退已测，
+- [~] **H5** 宿主没有 `uiWorkspace.pickDirectory` 时：字段直接渲染内置目录浏览器；选择过程中才报告
+      不可用时（`directory-picker-unavailable`）点击后退回内置浏览器。无 provider 的 SSR 回退已测，
       `directory-picker-unavailable` 的点击回退只做代码审查（无 DOM 测试环境）。
-- [x] **H6** 构建隔离：`vendor/` 文件逐字节未改；`build/build.mjs` 只重定向两个导入点（构建产物中
+- [x] **H6** 构建隔离：`build/build.mjs` 只重定向两个导入点（构建产物中
       `CreateSpaceDialog`/`ConfigView` 引用覆盖组件，原组件仅作为回退被引用），`scripts/verify.mjs` 校验 bundle 标记，
       `tests/directory-field-override.test.ts` 校验重定向规则本身。
 
@@ -98,8 +98,8 @@
   store 迁移与侧表 3 例、RPC 桥接 3 例、host apply 装配 1 例、`tests/host-cordis.test.ts` 2 例
   （真实 Cordis `Context` + 假 `connection`/`workspaceRegistry` 服务，验证插件激活、`ctx.inject` 附加、
   RPC 创建/改名/删除全链路与无 registry 降级）、`tests/native-directory-field.test.ts` 5 例
-  （系统选择器字段的 SSR 结构、vendored 回退、路径去重）、`tests/directory-field-override.test.ts` 3 例
-  （构建期导入重定向只作用于两个 vendored 入口、不递归）。
+  （系统选择器字段的 SSR 结构、内置回退、路径去重）、`tests/directory-field-override.test.ts` 3 例
+  （构建期导入重定向只作用于两个入口、不递归）。
 - `vendor/` 未改动（`git status` 可核对）。
 - **未做浏览器联调**：A3/F1/F2 依赖运行中的 DSH 页面（侧栏渲染 / 原生建工作区），
   本环境没有带鉴权 token 的 Web 入口；对应实现依赖 DSH 既有链路（workspace feed、slot 布局），

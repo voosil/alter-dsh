@@ -6,15 +6,12 @@
 
 ## 已执行
 
-1. **vendor 一致性**
-   - `vendor/ui-settings/src` 与 `/Users/yifan/workspace/indie/Alter/packages/client/ui-settings/src`
-     逐字节一致（`diff -r` 无输出）。
-   - 其余 vendored 包仅 `vendor/ui-space/src/views/DocumentView.tsx` 与上游不同：该文件在
-     本次会话进行中被外部写入（mtime 15:48，改动为隐藏「保存中…」），**不是本任务改动**；
-     已在 `vendor/VENDOR.md` 的 Working tree 行记录，需回退或同步上游。
+1. **源码与构建**
+   - `vendor/ui-settings/src` 含设置页源码（`SettingsPage.tsx`、`SettingsPage.module.css`、
+     `index.ts`），构建期通过 `@alter/ui-settings/SettingsPage` 别名参与编译。
 2. **`pnpm check` 全绿**
    - `build`：client.js 838 KiB / CSS 153 KiB；`lib/` 重新生成。
-   - `verify`：PASS（manifest/loader/外置依赖/Host 产物/自包含性；新增 ui-settings vendored
+   - `verify`：PASS（manifest/loader/外置依赖/Host 产物/自包含性；新增 ui-settings 源码
      断言、`AI 协作者`/`创建协作者`/`#/settings`/`返回空间`/`alter-space-settings-back` 产物断言）。
    - `typecheck`：客户端（含新增 `src/space-shell.tsx`、`vendor/ui-settings`）与 Host 两套通过。
    - `test`：6 个文件 / **27 个测试全部通过**（其中本任务新增 5 个用例）：
@@ -44,7 +41,7 @@
   渲染，用构建/静态断言覆盖产物，但**未做浏览器点击验证**。
 - 已安装的是 link 包，`client.js` 在最后一次 `pnpm check`（16:02）更新；当前已打开的页面
   需要刷新（或等待 client-HMR）后才会加载新客户端产物。Host 行已重启过。
-- 修复外部 `DocumentView.tsx` 漂移后需要重新构建并刷新页面。
+- 改动 `DocumentView.tsx` 后需要重新构建并刷新页面。
 
 ## 并发写入说明（重要）
 

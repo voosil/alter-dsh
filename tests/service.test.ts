@@ -219,23 +219,25 @@ describe('Space business service over SQLite', () => {
 
     expect(titles).toContain('创建了空间「研究」');
     expect(titles).toContain('新建《访谈整理》');
-    expect(titles).toContain('记录随想「先记下一个想法」');
-    expect(titles).toContain('评论《访谈整理》');
-    expect(titles).toContain('结束讨论《访谈整理》');
     expect(titles).toContain('归档《旧稿》');
-    // 随想转文档只保留「整理成文档」这一条，不再重复记成新建文档。
-    expect(titles).toContain('把随想整理成《未命名文档》');
+    // 随想转成文档只按「新建文档」记一条，不单独记随想动作。
     expect(
       entries.some((event) => event.id === `act-doc-create-${converted.node.id}`),
-    ).toBe(false);
-    // 编辑、改字与空白草稿都不进入活动记录。
-    expect(titles.some((title) => title.includes('更新'))).toBe(false);
-    expect(
-      entries.some((event) => event.id.startsWith('act-doc-create-')),
     ).toBe(true);
+    expect(titles).toContain('新建《未命名文档》');
+    // 编辑、随想、评论与事项都不进入活动记录。
+    expect(titles.some((title) => title.includes('更新'))).toBe(false);
+    expect(titles.some((title) => title.includes('随想'))).toBe(false);
     expect(
-      titles.filter((title) => title.includes('未命名文档') && title.includes('新建')),
-    ).toHaveLength(0);
+      titles.some((title) => title.includes('评论') || title.includes('讨论')),
+    ).toBe(false);
+    expect(titles.some((title) => title.includes('事项'))).toBe(false);
+    // 空白草稿不记；唯一的「未命名文档」来自随想转文档。
+    expect(
+      titles.filter(
+        (title) => title.includes('新建') && title.includes('未命名文档'),
+      ),
+    ).toHaveLength(1);
     // 热力图的计数只统计这些值得记的事件。
     expect(
       overview.activity.reduce((sum, day) => sum + day.count, 0),

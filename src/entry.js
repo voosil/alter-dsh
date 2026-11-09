@@ -1,8 +1,8 @@
 /**
  * The Space feature as a self-contained DSH Web client plugin.
  *
- * The Space UI and data-layer sources are vendored into this repository under
- * `vendor/`; the Host half (`lib/host`) owns a SQLite-backed Space authority.
+ * The Space UI and data-layer sources live under `vendor/`; the Host half
+ * (`lib/host`) owns a SQLite-backed Space authority.
  * This file is the client assembly seam: it mounts `SpaceApp` on the Host via
  * `ctx.connection.rpc` and registers the panel/sidebar entry.
  *
@@ -55,7 +55,7 @@ function SpacePanel({ service, storage, router, pickDirectory }) {
  * DSH's client workspace domain owns the same picker its own "add workspace"
  * flow uses: native folder dialog on desktop, DSH browse dialog in the web
  * profile. The service is read lazily (apply may run before it is active) and
- * a dedicated error code lets the field fall back to the vendored browser.
+ * a dedicated error code lets the field fall back to the built-in browser.
  * @param ctx - the client plugin context.
  */
 function createHostDirectoryPicker(ctx) {

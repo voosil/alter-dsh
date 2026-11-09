@@ -61,7 +61,7 @@ function writeLastDoc(spaceId: string, docId: string) {
   try {
     localStorage.setItem(LAST_DOC_PREFIX + spaceId, docId);
   } catch {
-    // Local persistence is best-effort in the mock.
+    // Local persistence is best-effort.
   }
 }
 
@@ -137,7 +137,7 @@ export function SpaceApp({
       try {
         localStorage.setItem(LAST_SPACE_KEY, activeSpace.id);
       } catch {
-        // Local persistence is best-effort in the mock.
+        // Local persistence is best-effort.
       }
   }, [activeSpace]);
 

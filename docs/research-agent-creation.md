@@ -8,7 +8,7 @@
 
 1. **Space 的这次诉求没有可直接复用的现成插件**：Space 协作者是产品级实体
    （`Agent { id, name, role, createdAt }`，落在 `space.db` 的 `agents` 表，协议与
-   业务服务都在上游 Alter 定义）；现有 DSH 插件管理的是 **DSH Agent 预设 / Team
+   业务服务分别在 `vendor/protocol` 与 `vendor/service` 中定义）；现有 DSH 插件管理的是 **DSH Agent 预设 / Team
    成员**（会话插件组合、模型路由），两者概念层级不同，也没有暴露供第三方产品插件
    创建 Space 协作者的扩展点。
 2. **DSH 原生「创建智能体」路径是 Creator 模式**：`@deepseek-ai/dsh-client-ui-agent-preset`
@@ -20,8 +20,8 @@
    是预设中心/分发器（从 dsh-market.com 安装、声明预设），`dsh-agent-team-presets`
    是可视化 Team 预设管理器（队长+成员的角色/提示词/模型/工具），`dsh-bot-team` 是
    长期 Bot 同事（独立会话/人格/模型），且只兼容 0.2.1-rc.x。
-4. **因此本次按 A 方案自研**：复用上游 Alter 已有的设置页
-   （`packages/client/ui-settings`），在 `@alter-dsh/space` 面板内补齐 `#/settings`
+4. **因此本次按 A 方案自研**：复用 `vendor/ui-settings` 的设置页源码，在
+   `@alter-dsh/space` 面板内补齐 `#/settings`
    路由，创建/列出 AI 协作者并可在空间配置中邀请。B 方案（把 Space 协作者动态注册
    为真实 DSH 预设）列为后续可选项，可借鉴 preset-center 已证明可行的
    `ctx.agentPresets.register` 动态声明模式。
@@ -77,15 +77,14 @@
   `vendor/ui-space/src/views/ConfigView.tsx` 均有「创建协作者 / 在设置中创建协作者」，
   点击执行 `router.navigate('#/settings')`。
 - `src/router.js` 是内存路由；`vendor/ui-space/src/SpaceApp.tsx` 只处理 `#/space`
-  路由，DSH 端口没有设置页 → 链接失效、协作者列表始终为空。
-- 上游 Alter 已有完整设置页：`/Users/yifan/workspace/indie/Alter/packages/client/ui-settings/src/SettingsPage.tsx`
-  （AI 协作者创建 + 归档空间恢复 + 快捷键 + 关于）。
+  路由，插件面板没有设置页 → 链接失效、协作者列表始终为空。
+- `vendor/ui-settings/src/SettingsPage.tsx` 已包含完整设置页（AI 协作者创建 + 归档空间恢复 + 快捷键 + 关于）。
 
 ## 方案对比
 
 | 方案 | 内容 | 优点 | 代价/风险 |
 | --- | --- | --- | --- |
-| **A（本次采用）** | 在 Space 面板内补齐 `#/settings`，复用上游 `SettingsPage` 创建产品级协作者（name+role，SQLite/RPC 持久化） | 与上游产品语义一致；改动小；无第三方依赖；立即修复死链；协作者可被空间创建/配置引用 | 协作者目前只是产品数据，不驱动真实 DSH Agent 执行（Workbench/Agent 运行时尚未接入，与仓库既有边界一致） |
+| **A（本次采用）** | 在 Space 面板内补齐 `#/settings`，复用 `SettingsPage` 创建产品级协作者（name+role，SQLite/RPC 持久化） | 与产品语义一致；改动小；无第三方依赖；立即修复死链；协作者可被空间创建/配置引用 | 协作者目前只是产品数据，不驱动真实 DSH Agent 执行（Workbench/Agent 运行时尚未接入，与仓库既有边界一致） |
 | **B（后续可选）** | Host 内用 `ctx.agentPresets.register(PresetDefinition)` 把协作者动态声明为 DSH 预设（persona + 工具/模型），Space 记录 preset id | 协作者可真正参与会话/团队；可借鉴 preset-center 的动态声明 + 惰性库模式 | 需要 Cordis 条目列表、模型路由、preset revision 生命周期、Remote/权限边界、`Agent` 模型扩展与迁移；预设即代码（信任边界高）；收益取决于 Workbench/真实执行链路何时接入 |
 | C | 安装/扩展社区插件（preset-center / agent-team-presets / bot-team） | 不重复造轮子（尤其 preset-center 88k/月） | 都不解决 Space 协作者；需改第三方源码或依赖其私有接口；bot-team 版本不兼容；引入新的信任面与 profile 依赖 |
 
@@ -101,14 +100,13 @@
 
 ## 本次实现（A）与验证口径
 
-- 新增 `vendor/ui-settings/`（上游 `packages/client/ui-settings/src` 逐字节复制，含
-  `SettingsPage.tsx`、`SettingsPage.module.css`、`index.ts`）。
+- 新增 `vendor/ui-settings/`（设置页源码，含 `SettingsPage.tsx`、`SettingsPage.module.css`、`index.ts`）。
 - 新增 `src/space-shell.tsx`：订阅同一内存 router，`#/settings` 渲染
   `<SettingsPage service={service} />`（不传 workbench），其余路径渲染原 `SpaceApp`；
   提供「返回空间」（恢复进入设置前的路由）与 Escape 返回。
 - `build/build.mjs` 增加 `@alter/ui-settings/SettingsPage` 别名；`scripts/verify.mjs`
-  增加 vendored 目录/设置页产物断言；`tsconfig.json` 覆盖 TSX 与 vendored 设置页类型检查；
-  `vendor/VENDOR.md`、`README.md` 更新。
+  增加源码目录/设置页产物断言；`tsconfig.json` 覆盖 TSX 与设置页类型检查；
+  `vendor/README.md`、`README.md` 更新。
 - 数据链路不变：`listAgents` / `createAgent` / `updateSpace(collaboratorIds)` 走既有
   `/api/alter-space` RPC 与 SQLite；新增单测覆盖创建协作者、空间引用与重开库持久化。
 - 验证：`pnpm check` 全绿（build + verify + typecheck + 27 个测试）；安装到 desktop

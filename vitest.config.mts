@@ -3,13 +3,13 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-/** Source root of a vendored package, e.g. `vendorSrc('ui-settings')`. */
+/** Source root of a package under vendor/, e.g. `vendorSrc('ui-settings')`. */
 const vendorSrc = (name: string) => path.join(root, 'vendor', name, 'src');
 
 export default defineConfig({
-  // Tests import the vendored Space/business packages by their upstream
-  // `@alter/*` names; mirror the build's aliases so unit tests exercise the
-  // same sources the client bundle compiles.
+  // Tests import the Space/business packages by their `@alter/*` names;
+  // mirror the build's aliases so unit tests exercise the same sources the
+  // client bundle compiles.
   resolve: {
     alias: [
       {

@@ -1,5 +1,5 @@
 /**
- * The Space settings page is owned by the DSH port (`src/settings-page.tsx`):
+ * The Space settings page is owned by the plugin (`src/settings-page.tsx`):
  * it puts the DSH-only storage policy, archived space recovery, the
  * collaborator roster, shortcuts and about on one surface. These tests render
  * it server-side to keep the wiring and the copy contract honest; the data

@@ -1,6 +1,6 @@
 /**
- * Space detail → 配置 is a vendored view the DSH port redesigned in place
- * (recorded in `vendor/VENDOR.md`). This server-rendered test keeps the
+ * Space detail → 配置 is a view redesigned in place
+ * (recorded in `vendor/README.md`). This server-rendered test keeps the
  * information architecture and the copy contract from drifting back: one
  * border-free section stack, no explanatory section notes, one-line policy
  * choice, and built-in plugins that are labelled instead of offered a disabled

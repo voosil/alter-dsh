@@ -1,7 +1,7 @@
 /**
  * SQLite-backed persistent authority for Space product data.
  *
- * The upstream Space business service (vendored under `vendor/service`) reads
+ * The Space business service (under `vendor/service`) reads
  * one `SpaceStoreData` value synchronously and mutates it inside
  * `store.update(change)`. This store keeps that exact shape in memory and
  * persists each entity as one JSON row, so a small edit writes only the rows
@@ -35,7 +35,7 @@ import {
 
 /** Business data file inside the configured data directory. */
 export const SPACE_DB_FILE = 'space.db';
-/** Default space id; identical to the upstream store and the mock seed. */
+/** Default space id. */
 export const DEFAULT_SPACE_ID = 'sp-inbox';
 /** Default space name. */
 export const DEFAULT_SPACE_NAME = '日常';
@@ -89,9 +89,9 @@ export interface OpenSpaceStoreOptions {
 /**
  * One persisted Space ↔ DSH workspace binding.
  *
- * The binding is plugin-owned sidecar data, never part of the vendored Space
- * entity: the workspace is a Host-level DSH concept, while the Space database
- * must stay interchangeable with the upstream format.
+ * The binding is plugin-owned sidecar data, never part of the Space entity:
+ * the workspace is a Host-level DSH concept, while the Space database keeps
+ * its own format.
  */
 export interface SpaceWorkspaceLink {
   /** Owning Space id. */

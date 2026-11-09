@@ -5,7 +5,7 @@
 
 - 状态：设计待评审（未实现）
 - 2026-11-09 评审更新：**写审批 = 直接执行（不询问）**；**首期不做浏览器实时刷新**；正文格式已收敛为 [spec-document-model-v0.md](./spec-document-model-v0.md) 的「JSON AST 权威 + Markdown 投影 + Document Operations」。
-- **上游 Alter 已废弃**：`Alter-dsh` 为唯一事实源，所有实现闭合在本仓库；`vendor/` 是自持基线（可改但需在 `vendor/VENDOR.md` 登记）。
+- **单仓库**：所有实现闭合在本仓库；`vendor/` 为项目自有源码目录（可改，变更在 `vendor/README.md` 登记）。
 - 一句话：**在 `@alter-dsh/space` 的 Host 半侧注册 6 个 `space_*` 模型工具，进程内直连现有 `SpaceService`；难点不是"调通 API"，而是让 Agent 的写入可归属、可恢复，并且不与用户编辑互相踩踏。**（注：工具契约将按 spec §8 改为 outline/read/ops/generate 模型。）
 
 ---
@@ -37,7 +37,7 @@
 
 | 难点 | 现状 | 解法 |
 | --- | --- | --- |
-| **归属** | vendor 把作者硬编码为 `'me'`（创建、版本、评论），而 `vendor/` 不能改 | 在 store 外层加 `withWriteScope` 包装器：Agent 写入在同一事务里把新增节点/版本/评论打标为 `'alter'`，活动流自然显示「Alter 更新了」 |
+| **归属** | vendor 把作者硬编码为 `'me'`（创建、版本、评论） | 在 store 外层加 `withWriteScope` 包装器：Agent 写入在同一事务里把新增节点/版本/评论打标为 `'alter'`，活动流自然显示「Alter 更新了」 |
 | **并发** | 浏览器自动保存是 700ms 防抖**整篇覆盖**；Agent 与用户可能互相覆盖 | 写工具强制 `base_updated_at`，CAS 门禁放在**同一个 `store.update` 事务内**（不是先查后写）；冲突不落盘，返回当前值让模型重读 |
 | **可恢复** | vendor 版本记录有 **5 分钟节流**，被覆盖的内容可能无历史可恢复 | Agent 写入时若本次没产生版本，宿主在同一事务补记一条 `'alter'` 版本（默认开，受既有 10 版/64KiB 裁剪约束） |
 

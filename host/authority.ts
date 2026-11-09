@@ -1,8 +1,8 @@
 /**
- * Compose the vendored Space business services over the local store.
+ * Compose the Space business services over the local store.
  *
- * Mirrors the upstream `createSpaceService` assembly, but takes an already
- * opened {@link SpaceStore} so the Host owns the SQLite lifecycle.
+ * Takes an already opened {@link SpaceStore} so the Host owns the SQLite
+ * lifecycle.
  */
 import type { SpaceHubReader } from '../vendor/service/src/contracts.js';
 import type { SpaceStore } from '../vendor/service/src/contracts.js';
