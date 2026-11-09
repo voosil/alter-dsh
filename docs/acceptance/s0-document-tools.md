@@ -31,6 +31,7 @@ DSH desktop profile 中的注册与读写链路。结论：**PASS（安装 / 工
 | 对象/资产 GC | 启动时扫描当前文档与保留版本的引用，删除未引用对象与资产元数据/字节；版本中仍引用的对象保留。 |
 | 资产备份 | 每日快照同时生成 `space-YYYYMMDD.assets.tar.gz`（无资产跳过），二者按同一 keep 策略保留；恢复流程同时覆盖。 |
 | 旧文档迁移 | `doc.migrate` / `space_doc_migrate`：旧 HTML 语义级转 AST（段落/标题/列表/引用/代码/表格/marks/内联图片），dataURL 图片导入资产；已迁移文档跳过、旧 HTML 版本保留但拒绝恢复；批量迁移逐篇隔离失败。 |
+| AST 文本抽取 | 全局搜索、概览活动与新文档内容判断按 `contentFormat` 提取正文：AST 文档取块树纯文本（含对象 alt/caption/title），不再命中 JSON 字段；旧 HTML 文档行为不变。 |
 
 真机测试文档：`doc-b16dc506-1186-45ab-bcf9-59e98291a2a4`（「S0 验收测试（可删除）」）。
 v0 没有删除工具，需在空间面板中手动删除。

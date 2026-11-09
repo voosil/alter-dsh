@@ -53,6 +53,8 @@ v0 非目标：
 - 节点模型不兼容变更时升 `schemaVersion`，旧数据由 Schema Registry 的 `migrate` 升级。
 - 存量迁移双格式共存：旧 HTML 文档继续可读，经 `doc.migrate` / `space_doc_migrate` 按需或批量
   转为 AST（只保语义、不保像素）；旧版本快照保留 HTML 渲染，且不能恢复到 AST 文档。
+- 文本抽取按 `contentFormat` 路由：旧 HTML 走 HTML 去标签，AST 走块树纯文本（text 节点与对象
+  alt/caption/title），搜索、概览与新文档判断都不把 AST JSON 当正文。
 
 ## 3. Block 节点
 

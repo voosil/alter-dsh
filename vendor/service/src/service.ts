@@ -80,6 +80,62 @@ function htmlToText(html: string) {
     .trim();
 }
 
+/** Extract the plain text of one AST block tree (alter-doc/1). */
+function astBlockText(block: unknown): string[] {
+  if (typeof block !== 'object' || block === null || Array.isArray(block))
+    return [];
+  const record = block as Record<string, unknown>;
+  const parts: string[] = [];
+  if (Array.isArray(record.content)) {
+    for (const inline of record.content) {
+      if (typeof inline !== 'object' || inline === null) continue;
+      const node = inline as Record<string, unknown>;
+      if (node.type === 'text' && typeof node.text === 'string')
+        parts.push(node.text);
+      else if (node.type === 'hardBreak') parts.push('\n');
+    }
+  }
+  if (Array.isArray(record.children))
+    for (const child of record.children) parts.push(...astBlockText(child));
+  for (const key of ['alt', 'caption', 'title', 'description']) {
+    const value = record.attrs;
+    if (typeof value !== 'object' || value === null) continue;
+    const text = (value as Record<string, unknown>)[key];
+    if (typeof text === 'string' && text.trim() !== '') parts.push(text);
+  }
+  return parts;
+}
+
+/**
+ * Read the searchable text of a document body. AST documents store JSON, so
+ * the HTML stripper would otherwise leak node types and ids into search.
+ */
+function contentText(content: string) {
+  const trimmed = content.trimStart();
+  if (trimmed.startsWith('{')) {
+    try {
+      const parsed: unknown = JSON.parse(content);
+      if (
+        typeof parsed === 'object' &&
+        parsed !== null &&
+        !Array.isArray(parsed) &&
+        (parsed as { format?: unknown }).format === 'alter-doc/1' &&
+        Array.isArray((parsed as { blocks?: unknown }).blocks)
+      ) {
+        const blocks = (parsed as { blocks: unknown[] }).blocks;
+        return blocks
+          .flatMap((block) => astBlockText(block))
+          .join('\n')
+          .replace(/\n{3,}/g, '\n\n')
+          .trim();
+      }
+    } catch {
+      // Not JSON: fall through to the legacy HTML path.
+    }
+  }
+  return htmlToText(content);
+}
+
 function excerptAround(text: string, query: string) {
   const normalized = text.replace(/\s+/g, ' ').trim();
   const index = normalized.toLowerCase().indexOf(query.toLowerCase());
@@ -171,7 +227,7 @@ function buildActivityEvents({
     if (node.deletedAt) continue;
     const title = node.title || '未命名文档';
     // 空白草稿只是「点了一下新建」，还没有内容，不值得记；后来写了字自然补记。
-    if (!node.title.trim() && !htmlToText(node.content).trim()) continue;
+    if (!node.title.trim() && !contentText(node.content).trim()) continue;
     if (!recordedByAgent(node.id, node.createdAt)) {
       const label = node.creator === 'alter' ? 'Alter 新建了' : '新建';
       record({
@@ -961,7 +1017,7 @@ export function createContentService(
       for (const node of data.nodes) {
         if (node.spaceId !== spaceId || node.deletedAt || node.kind !== 'note')
           continue;
-        const text = htmlToText(node.content);
+        const text = contentText(node.content);
         if (
           !node.title.toLowerCase().includes(normalized) &&
           !text.toLowerCase().includes(normalized)
@@ -983,10 +1039,10 @@ export function createContentService(
           thought.spaceId !== spaceId ||
           thought.deletedAt ||
           thought.convertedDocId ||
-          !htmlToText(thought.content).toLowerCase().includes(normalized)
+          !contentText(thought.content).toLowerCase().includes(normalized)
         )
           continue;
-        const text = htmlToText(thought.content);
+        const text = contentText(thought.content);
         thoughts.push({
           id: thought.id,
           type: 'thought',
