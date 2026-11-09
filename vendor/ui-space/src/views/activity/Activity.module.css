@@ -91,7 +91,7 @@
 .cell {
   width: 13px;
   height: 13px;
-  border-radius: 2px;
+  border-radius: var(--alter-radius-xs);
   background: var(--alter-heat-0);
   cursor: pointer;
   transition:
@@ -161,7 +161,7 @@
 .legend i {
   width: 10px;
   height: 10px;
-  border-radius: 2px;
+  border-radius: var(--alter-radius-xs);
   background: var(--alter-heat-0);
 }
 .legend i[data-level='1'] {
@@ -182,7 +182,7 @@
   width: min(280px, calc(100vw - 24px));
   padding: 10px 12px;
   border: 1px solid var(--alter-border);
-  border-radius: 8px;
+  border-radius: var(--alter-radius-control);
   background: var(--alter-surface-raised);
   box-shadow: var(--alter-shadow-popover);
   color: var(--alter-text);
@@ -359,7 +359,7 @@ button.clear[data-variant='ghost']:hover:not(:disabled) {
   margin-inline: 0 -2px;
   padding: 0 2px;
   border: 0;
-  border-radius: 3px;
+  border-radius: var(--alter-radius-xs);
   background: none;
   color: var(--alter-text);
   font: inherit;
@@ -390,7 +390,7 @@ button.clear[data-variant='ghost']:hover:not(:disabled) {
   min-width: 0;
   padding: 2px 8px;
   border: 1px solid var(--alter-control-border);
-  border-radius: 999px;
+  border-radius: var(--alter-radius-pill);
   background: transparent;
   color: var(--alter-text);
   font: inherit;

@@ -29,7 +29,7 @@
   white-space: nowrap;
   padding: 2px 4px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--alter-radius-xs);
   background: transparent;
   color: var(--alter-text-muted);
   font: inherit;

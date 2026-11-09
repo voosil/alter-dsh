@@ -25,7 +25,7 @@
   height: 36px;
   padding: 0 6px 0 0;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--alter-radius-control);
   background: transparent;
   color: var(--alter-text);
   font: inherit;
@@ -45,7 +45,7 @@
   flex-shrink: 0;
   width: 28px;
   height: 28px;
-  border-radius: 8px;
+  border-radius: var(--alter-radius-control);
   background: var(--alter-action-background);
   color: var(--alter-action-text);
   font-size: var(--alter-font-caption);
@@ -109,7 +109,7 @@
   right: 0;
   bottom: -1px;
   height: 2px;
-  border-radius: 1px;
+  border-radius: var(--alter-radius-xs);
   background: var(--alter-text);
 }
 .tab:hover {
@@ -167,7 +167,7 @@
   height: 26px;
   padding: 0;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--alter-radius-control);
   background: transparent;
   color: var(--alter-text-muted);
   cursor: pointer;
@@ -199,7 +199,7 @@
 }
 .directoryScroll::-webkit-scrollbar-thumb {
   border: 2px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--alter-radius-control);
   background: var(--alter-control-border);
   background-clip: content-box;
 }
@@ -223,7 +223,7 @@
   width: 30px;
   height: 30px;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--alter-radius-control);
   background: transparent;
   color: var(--alter-text-muted);
   cursor: pointer;
@@ -252,7 +252,7 @@
   left: 0;
   z-index: var(--alter-layer-popup);
   padding: 3px 8px;
-  border-radius: 8px;
+  border-radius: var(--alter-radius-control);
   background: var(--alter-action-background);
   color: var(--alter-action-text);
   font-size: var(--alter-font-caption);
@@ -279,7 +279,7 @@
   display: flex;
   align-items: center;
   gap: 2px;
-  border-radius: 8px;
+  border-radius: var(--alter-radius-control);
   padding-left: 2px;
 }
 .spaceRow:hover {
@@ -298,7 +298,7 @@
   left: 8px;
   right: 8px;
   height: 2px;
-  border-radius: 2px;
+  border-radius: var(--alter-radius-xs);
   background: var(--alter-focus-ring);
   z-index: 1;
 }
@@ -328,7 +328,7 @@
 .spaceMain:focus-visible {
   outline: var(--alter-focus-width) solid var(--alter-focus-ring);
   outline-offset: -1px;
-  border-radius: 6px;
+  border-radius: var(--alter-radius-xs);
 }
 .spaceText {
   display: flex;
@@ -372,7 +372,7 @@
   height: 30px;
   padding: 0 8px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--alter-radius-control);
   background: transparent;
   color: var(--alter-text-muted);
   font: inherit;

@@ -26,7 +26,7 @@
   min-width: 0;
   padding: 20px;
   border: 1px solid var(--alter-border);
-  border-radius: 12px;
+  border-radius: var(--alter-radius-panel);
   background: var(--alter-surface-raised);
 }
 .sectionHead {
@@ -98,7 +98,7 @@
   margin-inline: -10px;
   padding: 12px 10px;
   gap: 12px;
-  border-radius: 8px;
+  border-radius: var(--alter-radius-control);
   text-align: left;
   white-space: normal;
 }

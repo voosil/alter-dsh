@@ -23,7 +23,7 @@
   height: 32px;
   padding: 0;
   border: 1px solid var(--alter-border);
-  border-radius: 8px;
+  border-radius: var(--alter-radius-control);
   background: var(--alter-surface);
   color: var(--alter-text-muted);
   cursor: pointer;

@@ -5,7 +5,7 @@
   align-items: start;
   margin: 0 -8px;
   padding: 14px 8px;
-  border-radius: 7px;
+  border-radius: var(--alter-radius-control);
   cursor: pointer;
 }
 .row:hover {
@@ -48,7 +48,7 @@
 }
 .text code {
   padding: 1px 3px;
-  border-radius: 4px;
+  border-radius: var(--alter-radius-xs);
   background: var(--alter-code-surface);
   font-family: var(--alter-font-mono);
   font-size: var(--alter-font-body-sm);

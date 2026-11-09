@@ -95,7 +95,7 @@
 }
 .surface code {
   padding: 1px 4px;
-  border-radius: 4px;
+  border-radius: var(--alter-radius-xs);
   background: var(--alter-code-surface);
   font-family: var(--alter-font-mono);
   font-size: var(--alter-font-body-sm);
@@ -105,7 +105,7 @@
   padding: 0 1px;
   background: var(--alter-highlight);
   color: inherit;
-  border-radius: 3px;
+  border-radius: var(--alter-radius-xs);
 }
 .surface u {
   text-underline-offset: 3px;
@@ -121,7 +121,7 @@
   padding: 2px var(--doc-link-padding);
   /* Expand the hover area without leaving gaps in the comment underline. */
   margin-inline: calc(-1 * var(--doc-link-padding));
-  border-radius: 4px;
+  border-radius: var(--alter-radius-xs);
   box-decoration-break: clone;
   font-size: inherit;
   font-weight: inherit;
@@ -244,7 +244,7 @@
   gap: 5px;
   padding: 2px 8px;
   border: 1px solid var(--alter-border);
-  border-radius: 7px;
+  border-radius: var(--alter-radius-control);
   background-color: transparent;
   font-size: var(--alter-font-body-sm);
   cursor: pointer;
@@ -276,7 +276,7 @@
   height: 15px;
   margin-top: 7px;
   border: 1px solid var(--alter-control-border);
-  border-radius: 4px;
+  border-radius: var(--alter-radius-xs);
   background: var(--alter-surface);
   cursor: pointer;
 }
@@ -313,7 +313,7 @@
   margin: 10px 0;
   padding: 7px 0;
   cursor: pointer;
-  border-radius: 6px;
+  border-radius: var(--alter-radius-xs);
 }
 .surface [data-divider] hr {
   margin: 0;
@@ -331,7 +331,7 @@
   max-width: 100%;
   height: auto;
   margin: 14px 0;
-  border-radius: 6px;
+  border-radius: var(--alter-radius-xs);
 }
 .surface table {
   width: 100%;
@@ -360,7 +360,7 @@
   gap: 1px;
   padding: 4px;
   border: 1px solid var(--alter-border);
-  border-radius: 10px;
+  border-radius: var(--alter-radius-control);
   background: var(--alter-surface-raised);
   box-shadow: var(--alter-shadow-popover);
   animation: tool-in 100ms ease-out;
@@ -373,7 +373,7 @@
   height: 27px;
   padding: 0;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--alter-radius-xs);
   background: transparent;
   color: var(--alter-text-muted);
   cursor: pointer;
@@ -405,7 +405,7 @@
   position: fixed;
   z-index: 45;
   padding: 1px 5px;
-  border-radius: 6px;
+  border-radius: var(--alter-radius-xs);
   background: var(--alter-surface);
   color: var(--alter-text-muted);
   font-size: var(--alter-font-caption);
@@ -436,7 +436,7 @@
   height: 32px;
   padding: 0 9px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--alter-radius-control);
   background: transparent;
   color: var(--alter-text);
   font: inherit;
@@ -474,7 +474,7 @@
   align-items: center;
   gap: 1px;
   padding: 3px;
-  border-radius: 8px;
+  border-radius: var(--alter-radius-control);
   background: var(--alter-action-background);
   box-shadow: var(--alter-shadow-popover);
   animation: tool-in 100ms ease-out;
@@ -483,7 +483,7 @@
   height: 24px;
   padding: 0 8px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--alter-radius-xs);
   background: transparent;
   color: var(--alter-action-text);
   font: inherit;

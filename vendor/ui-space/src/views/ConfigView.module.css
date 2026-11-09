@@ -107,7 +107,7 @@
   padding: 8px 10px;
   border: 0;
   border-bottom: 1px solid var(--alter-border);
-  border-radius: 8px;
+  border-radius: var(--alter-radius-control);
   background: transparent;
   color: var(--alter-text);
   font: inherit;
@@ -131,7 +131,7 @@
   flex-shrink: 0;
   width: 28px;
   height: 28px;
-  border-radius: 8px;
+  border-radius: var(--alter-radius-control);
   background: var(--alter-surface-raised);
   color: var(--alter-text-secondary);
   font-size: var(--alter-font-caption);

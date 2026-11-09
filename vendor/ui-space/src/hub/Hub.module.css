@@ -46,7 +46,7 @@
   gap: 16px;
   padding: 24px 10px;
   border-bottom: 1px solid var(--alter-border);
-  border-radius: 8px;
+  border-radius: var(--alter-radius-control);
 }
 .rowMain {
   min-width: 0;
@@ -322,7 +322,7 @@
   padding: 8px 0;
 }
 .heatmap span {
-  border-radius: 2px;
+  border-radius: var(--alter-radius-xs);
   background: var(--alter-heat-0);
 }
 .heatmap [data-level='1'] {
@@ -415,7 +415,7 @@
   width: 8px;
   height: 8px;
   background: var(--alter-heat-0);
-  border-radius: 2px;
+  border-radius: var(--alter-radius-xs);
 }
 .heatLegend [data-level='1'] {
   background: var(--alter-heat-1);
@@ -728,7 +728,7 @@
   align-items: center;
   width: 28px;
   height: 17px;
-  border-radius: 10px;
+  border-radius: var(--alter-radius-control);
   background: var(--alter-control-border);
   padding: 2px;
 }

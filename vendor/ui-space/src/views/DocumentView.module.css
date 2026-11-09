@@ -40,7 +40,7 @@
   white-space: nowrap;
   padding: 2px 4px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--alter-radius-xs);
   background: transparent;
   color: var(--alter-text-muted);
   font: inherit;
@@ -90,7 +90,7 @@
 .saveError {
   padding: 3px 6px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--alter-radius-xs);
   background: transparent;
   color: var(--alter-danger);
   font: inherit;
@@ -118,7 +118,7 @@
   justify-content: center;
   background: var(--alter-surface-raised);
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--alter-radius-control);
   background: transparent;
   color: var(--alter-text-secondary);
   font: inherit;
@@ -147,7 +147,7 @@
   min-width: 15px;
   height: 15px;
   padding: 0 4px;
-  border-radius: 10px;
+  border-radius: var(--alter-radius-control);
   background: var(--alter-surface-selected);
   color: var(--alter-text-secondary);
   font-size: 10px;
@@ -166,7 +166,7 @@
 }
 .scroller::-webkit-scrollbar-thumb {
   border: 3px solid transparent;
-  border-radius: 10px;
+  border-radius: var(--alter-radius-control);
   background: var(--alter-control-border);
   background-clip: content-box;
 }
@@ -238,7 +238,7 @@
   margin-left: 4px;
   padding: 1px 6px;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--alter-radius-control);
   background: var(--alter-surface-selected);
   color: inherit;
   font: inherit;
@@ -307,7 +307,7 @@
   right: 0;
   bottom: -1px;
   height: 2px;
-  border-radius: 1px;
+  border-radius: var(--alter-radius-xs);
   background: var(--alter-text);
 }
 .footerTab:focus-visible {
@@ -321,7 +321,7 @@
   min-width: 15px;
   height: 15px;
   padding: 0 4px;
-  border-radius: 8px;
+  border-radius: var(--alter-radius-control);
   background: var(--alter-surface-selected);
   color: var(--alter-text-muted);
   font-size: var(--alter-font-caption);
@@ -348,7 +348,7 @@
   min-height: 38px;
   padding: 0 8px;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--alter-radius-control);
   background: transparent;
   color: var(--alter-text);
   font: inherit;
@@ -384,7 +384,7 @@
   min-height: 36px;
   padding: 0 8px;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--alter-radius-control);
   background: transparent;
   color: var(--alter-text-muted);
   font: inherit;

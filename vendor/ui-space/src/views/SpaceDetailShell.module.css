@@ -76,7 +76,7 @@ button.navItem[data-variant='ghost']:hover:not(:disabled) {
   align-items: center;
   min-width: 18px;
   padding: 0 4px;
-  border-radius: 4px;
+  border-radius: var(--alter-radius-xs);
   background: var(--alter-surface-selected);
   color: var(--alter-text-secondary);
   font-size: var(--alter-font-caption);

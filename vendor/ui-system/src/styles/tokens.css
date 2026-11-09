@@ -19,9 +19,13 @@
   /* Deprecated aliases kept for apps/web and ui-overview during migration. */
   --alter-font-headline-sm: var(--alter-font-title);
   --alter-font-label: var(--alter-font-body-sm);
-  --alter-radius-control: 8px;
-  --alter-radius-panel: 12px;
+  /* Corner radius scale: five semantic steps only — inline marks, controls,
+     panels, overlays and pills. Keep component styles on these tokens. */
+  --alter-radius-xs: 6px;
+  --alter-radius-control: 10px;
+  --alter-radius-panel: 16px;
   --alter-radius-overlay: 24px;
+  --alter-radius-pill: 999px;
   --alter-space-1: 4px;
   --alter-space-2: 8px;
   --alter-space-3: 12px;

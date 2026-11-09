@@ -30,7 +30,7 @@
   left: 0;
   width: 2px;
   height: 18px;
-  border-radius: 1px;
+  border-radius: var(--alter-radius-xs);
   background: var(--alter-accent);
   content: '';
 }

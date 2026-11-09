@@ -4,7 +4,7 @@
   min-width: 0;
   padding: 20px;
   border: 1px solid var(--alter-border);
-  border-radius: 12px;
+  border-radius: var(--alter-radius-panel);
   background: var(--alter-surface-raised);
 }
 .head {

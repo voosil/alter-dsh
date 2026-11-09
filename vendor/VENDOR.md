@@ -51,3 +51,5 @@ This repository only carries what the DSH Space panel needs.
 | 日期 | Issues 条目 | 改动文件 | 一句话说明 |
 | ---- | ----------- | -------- | ---------- |
 | 2026-11-06 | 文档行内高亮功能：选中文字是灰色的，点击高亮后显示的高亮颜色被选中文字时的灰色背景覆盖了，需要取消选中文字后才能看到高亮色，体验不是很好。 | `vendor/ui-space/src/components/editor/Editor.module.css` | 编辑器内文字选区背景改为半透明，选中时行内高亮（`mark`）等文字背景色仍可见，无需取消选中。回灌目标：`packages/client/ui-space/src/components/editor/Editor.module.css`。 |
+
+| 2026-11-09 | border-radius token规范化并调整，减少可选值数量，整体上采用比较圆润的风格 | `vendor/ui-system/src/styles/tokens.css`（新增 `--alter-radius-xs/pill`，control 8→10、panel 12→16），`vendor/ui-space/**/*.module.css`、`vendor/ui-settings/src/SettingsPage.module.css`、`vendor/ui-system/src/components/navigation-button/NavigationButton.module.css`（26 个文件、97 处字面圆角改为 token） | 圆角收敛为 xs/control/panel/overlay/pill 五级（2–6px→6、7–10px→10、12–16px→16、24 与 999 保留语义），整体调圆；`50%` 圆形与 `0` 不含在内，`src/host.css` 的 control 回退值同步为 10px。回灌目标：上游 `packages/client/ui-system/src/styles/tokens.css` 及对应 `packages/client/*/src/**/*.module.css`；回灌时需同步更新上游 `DESIGN.md` 的圆角规范（原写 control 8/7、panel 12、弹层 16、行内 3–4）。 |

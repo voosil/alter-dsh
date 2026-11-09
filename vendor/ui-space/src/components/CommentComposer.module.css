@@ -37,7 +37,7 @@
   margin-top: -2px;
   padding: 0;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--alter-radius-xs);
   background: transparent;
   color: var(--alter-text-muted);
   cursor: pointer;
@@ -99,7 +99,7 @@
   width: 25px;
   height: 24px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--alter-radius-control);
   background: var(--alter-action-background);
   color: var(--alter-action-text);
   cursor: pointer;

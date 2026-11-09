@@ -28,7 +28,7 @@
   width: 100%;
   padding: 8px 9px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--alter-radius-control);
   background: transparent;
   color: var(--alter-text);
   font: inherit;
@@ -85,7 +85,7 @@
 }
 .titleDiff ins {
   padding: 1px 5px;
-  border-radius: 4px;
+  border-radius: var(--alter-radius-xs);
   background: var(--alter-diff-add);
   color: var(--alter-diff-add-text);
   text-decoration: none;
@@ -129,7 +129,7 @@
 .diffRemoved {
   margin: 2px -8px;
   padding: 2px 8px;
-  border-radius: 6px;
+  border-radius: var(--alter-radius-xs);
 }
 .diffAdded {
   background: var(--alter-diff-add);

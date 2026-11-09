@@ -3,7 +3,7 @@
 
   padding: 18px 20px 14px;
   border: 1px solid var(--alter-border);
-  border-radius: 12px;
+  border-radius: var(--alter-radius-panel);
   background: var(--alter-surface-raised);
   transition: border-color var(--alter-duration-fast);
 }
@@ -36,7 +36,7 @@
 }
 .content code {
   padding: 1px 4px;
-  border-radius: 4px;
+  border-radius: var(--alter-radius-xs);
   background: var(--alter-code-surface);
   font-family: var(--alter-font-mono);
   font-size: var(--alter-font-body-sm);
@@ -76,7 +76,7 @@
   height: 25px;
   padding: 0 6px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--alter-radius-xs);
   background: transparent;
   color: var(--alter-text-muted);
   font: inherit;
@@ -103,7 +103,7 @@
 .wave i {
   width: 2px;
   height: 6px;
-  border-radius: 1px;
+  border-radius: var(--alter-radius-xs);
   background: currentColor;
   animation: voice-bar 0.9s ease-in-out infinite;
 }
