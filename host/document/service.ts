@@ -249,6 +249,24 @@ function countBlocks(blocks: readonly BlockNode[]): number {
   return count;
 }
 
+/** Preview around the matched query instead of the block's title attrs. */
+function searchPreview(text: string, query: string): string {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  const index = normalized.toLowerCase().indexOf(query);
+  if (index < 0) return normalized.slice(0, 60);
+  const budget = 60;
+  const before = Math.min(index, 20);
+  const start = Math.max(0, index - before);
+  const available = budget - before;
+  const end = Math.min(
+    normalized.length,
+    index + Math.max(query.length, available),
+  );
+  return `${start > 0 ? '…' : ''}${normalized.slice(start, end)}${
+    end < normalized.length ? '…' : ''
+  }`;
+}
+
 function previewOf(block: BlockNode): string {
   const text = plainTextOfBlock(block).replace(/\s+/g, ' ').trim();
   if (text !== '') return text.slice(0, OUTLINE_PREVIEW);
@@ -440,7 +458,7 @@ export function createDocumentService(
               title: node.title,
               blockId: block.id,
               type: block.type,
-              preview: previewOf(block).slice(0, 60),
+              preview: searchPreview(text, query),
             });
             if (hits.length >= limit) break;
           }

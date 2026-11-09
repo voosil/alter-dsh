@@ -15,7 +15,7 @@ updated: 2026-11-09
 | --- | --- | --- |
 | [space-workspace.md](space-workspace.md) | 空间 ↔ DSH 工作区映射：创建、改名、主目录变更、归档/恢复、删除、双向共存、数据与工程 | 已验收；依赖运行时联调项标 `[~]` |
 | [agent-collaborators.md](agent-collaborators.md) | Space AI 协作者创建：`#/settings` 设置页复用、协作者创建/选择链路、安装与产物 | 已验证（浏览器点击链路未自动化） |
-| [s0-document-tools.md](s0-document-tools.md) | Agent 文档工具 v0：安装/注册、generate/read/ops/search/object 的真机端到端 | 已验收（9 步全部通过） |
+| [s0-document-tools.md](s0-document-tools.md) | 文档模型 S0/S1：工具面、Tiptap 编辑器、资产、评论/历史、撤销、GC、备份、迁移 | 已验收（真机 8/8；浏览器视觉待人工） |
 
 ## 维护规则
 

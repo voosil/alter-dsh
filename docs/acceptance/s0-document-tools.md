@@ -36,15 +36,36 @@ DSH desktop profile 中的注册与读写链路。结论：**PASS（安装 / 工
 真机测试文档：`doc-b16dc506-1186-45ab-bcf9-59e98291a2a4`（「S0 验收测试（可删除）」）。
 v0 没有删除工具，需在空间面板中手动删除。
 
+| 真机 v1 复验 | 真实 Agent 8/8 步通过：资产导入去重、generate/read（图片 URI/粗体/callout）、update_text、`space_doc_undo` 恢复、search 命中、outline 计数；最终 revision=3。 |
+| UI 集成测试 | jsdom 挂载 `AlterDocumentView`：Tiptap 编辑器加载正文、标题可编辑、保存按钮就绪；打开「评论与历史」后评论列表与版本/恢复按钮正常加载。 |
+| 搜索预览 | 嵌套（callout 内）命中时 preview 返回命中上下文而不是父块标题；工具/服务测试覆盖。 |
+
+## 浏览器视觉验收限制
+
+- DSH Web GUI 需要 `dsh web` 打印的鉴权 URL；独立浏览器（agent-browser）直接访问会得到
+  `dsh web authentication required`，无法复用桌面 App 已登录会话，因此**未做真实浏览器点击/截图**。
+- 替代证据：jsdom 组件挂载测试 + 构建产物断言 + RPC/服务集成测试 + 真机 Agent 端到端。
+- 样式回归、拖拽/选区、真实图片加载仍需人工在面板中目验。
+
+## 验收产生的测试文档（需手动删除）
+
+- `doc-b16dc506-1186-45ab-bcf9-59e98291a2a4`「S0 验收测试（可删除）」
+- `doc-6bb3649d-7635-4403-85c2-f79180345e22`「Agent v1 冒烟（可删除）」
+- 资产 `asset_431ced6916a2a21a156e38701afe55bb`（随文档删除后可被 GC 回收）
+
 ## 复跑方式
 
 1. `pnpm check`；`plugin_manager` 重新安装本仓库到 desktop profile。
 2. 让 Agent 按本清单调用 `space_doc_generate → outline → read → ops(update_text) → 旧 revision 重放 → search → object_update → object_get`。
 3. 删除本次测试创建的文档。
 
+## 当前完成度
+
+S0 Host 工具面、S1 Tiptap 编辑器、评论/历史、资产、撤销、GC、备份、旧文档迁移与 AST 搜索结果均已实现并有测试覆盖；剩余仅上节的浏览器视觉验收与人工目验。
+
 ## 限制
 
-- 旧 HTML 文档对工具返回 `doc/legacy-format`；AST 文档已有 Tiptap 编辑器、图片资产渲染、评论/历史侧栏与资产/对象 GC、资产备份。
+- 旧 HTML 文档对工具返回 `doc/legacy-format`，可用 `space_doc_migrate` 迁移；AST 文档已有 Tiptap 编辑器、图片资产渲染、评论/历史侧栏与资产/对象 GC、资产备份。
 - `space_doc_outline` 的 `total_blocks` 计入嵌套块（示例 18），`outline` 只列顶层块（示例 7）。
 - 资产导入、undo 端点、对象 GC、组件运行时不在本切片。
 

@@ -275,6 +275,18 @@ describe('document service', () => {
     const hits = await service.search({ query: 'token', docId: created.docId });
     expect(hits.hits[0]?.blockId).toBeDefined();
 
+    const nested = await service.generate({
+      spaceId: DEFAULT_SPACE_ID,
+      title: '嵌套搜索',
+      markdown: ':::callout{tone="info" title="说明"}\n这是真实 Agent 复验。\n:::\n',
+    });
+    const nestedHits = await service.search({
+      query: '真实',
+      docId: nested.docId,
+    });
+    expect(nestedHits.hits.length).toBeGreaterThan(0);
+    for (const hit of nestedHits.hits) expect(hit.preview).toContain('真实');
+
     await store.update((data) => {
       (data.nodes as unknown as Array<Record<string, unknown>>).push({
         id: 'doc-legacy',
