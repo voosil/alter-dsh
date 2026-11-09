@@ -516,17 +516,21 @@ export function Directory({
         },
       });
     }
-    actions.push({
-      id: 'archive',
-      label: node.archived ? '取消归档' : '归档',
-      icon: node.archived ? <ArchiveRestore /> : <Archive />,
-      onSelect: () => {
-        void service.setArchived(node.id, !node.archived).then(() => {
-          refresh();
-          toast(node.archived ? '已取消归档' : '已归档');
-        });
-      },
-    });
+    // 归档已提升为行内一级操作（hover 直接点归档图标），菜单里只保留
+    // 归档文档的「取消归档」，避免同一动作出现两个入口。
+    if (node.archived) {
+      actions.push({
+        id: 'unarchive',
+        label: '取消归档',
+        icon: <ArchiveRestore />,
+        onSelect: () => {
+          void service.setArchived(node.id, false).then(() => {
+            refresh();
+            toast('已取消归档');
+          });
+        },
+      });
+    }
     actions.push({
       id: 'copy',
       label: '复制链接',
@@ -563,6 +567,7 @@ export function Directory({
     const dropZone = drop?.id === node.id ? drop.zone : undefined;
     const canCreate =
       node.kind === 'folder' || (node.kind === 'note' && !node.archived);
+    const canArchive = node.kind === 'note' && !node.archived;
     const editingFolder =
       node.kind === 'folder' &&
       (renameFolder?.id === node.id || renameTarget?.id === node.id);
@@ -581,7 +586,7 @@ export function Directory({
         className={styles.row}
         style={{ paddingLeft: depth * 13 }}
         data-active={isActive || undefined}
-        data-actions={canCreate ? 'two' : 'one'}
+        data-actions={canCreate ? (canArchive ? 'three' : 'two') : 'one'}
         data-archived={node.archived || undefined}
         data-dragging={dragId === node.id || undefined}
         data-drop={dropZone}
@@ -665,6 +670,32 @@ export function Directory({
                   event.stopPropagation();
                   expandSection(section, node.id);
                   void onCreateDoc(node.id);
+                }}
+              />
+            ) : null}
+            {canArchive ? (
+              <IconButton
+                label={`归档「${displayTitle(node.title)}」`}
+                tooltip="归档"
+                size="sm"
+                tooltipPlacement="top"
+                className={styles.archive}
+                icon={<Archive size={13} strokeWidth={1.8} />}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void service
+                    .setArchived(node.id, true)
+                    .then(() => {
+                      refresh();
+                      toast('已归档');
+                    })
+                    .catch((cause: unknown) => {
+                      toast(
+                        cause instanceof Error
+                          ? cause.message
+                          : '归档失败，请重试',
+                      );
+                    });
                 }}
               />
             ) : null}

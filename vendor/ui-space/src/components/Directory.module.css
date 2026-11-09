@@ -262,8 +262,13 @@
 .row[data-actions='one']:focus-within .rowActions {
   width: 24px;
 }
+.row[data-actions='three']:hover .rowActions,
+.row[data-actions='three']:focus-within .rowActions {
+  width: 72px;
+}
 .more,
-.quickAdd {
+.quickAdd,
+.archive {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -278,12 +283,14 @@
   cursor: pointer;
 }
 .more:hover,
-.quickAdd:hover {
+.quickAdd:hover,
+.archive:hover {
   background: var(--alter-surface-selected);
   color: var(--alter-text);
 }
 .more:focus-visible,
-.quickAdd:focus-visible {
+.quickAdd:focus-visible,
+.archive:focus-visible {
   outline: var(--alter-focus-width) solid var(--alter-focus-ring);
   outline-offset: -2px;
 }
