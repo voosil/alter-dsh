@@ -1,0 +1,61 @@
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.label {
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+}
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 0 11px;
+  border: 1px solid var(--alter-border);
+  border-radius: var(--alter-radius-control);
+  background: transparent;
+  color: var(--alter-text);
+  font: inherit;
+  font-size: var(--alter-font-caption);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.chip:hover {
+  background: var(--alter-surface-hover);
+}
+.chip[data-selected] {
+  border-color: var(--alter-control-border-hover);
+  background: var(--alter-surface-selected);
+}
+.chip:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: 1px;
+}
+.chip svg {
+  flex-shrink: 0;
+  color: var(--alter-accent-strong);
+}
+.note {
+  margin: 0;
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-body);
+}
+.error {
+  margin: 0;
+  color: var(--alter-danger);
+  font-size: var(--alter-font-body-sm);
+  line-height: var(--alter-line-body);
+}

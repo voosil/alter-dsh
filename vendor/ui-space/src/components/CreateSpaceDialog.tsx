@@ -16,7 +16,7 @@ export function CreateSpaceDialog({
   onClose: () => void;
   onCreated: (space: Space) => void;
 }) {
-  const { service, agents, router } = useSpaceContext();
+  const { service, agents } = useSpaceContext();
   const [name, setName] = useState('');
   const [goal, setGoal] = useState('');
   const [icon, setIcon] = useState('layers');
@@ -159,18 +159,10 @@ export function CreateSpaceDialog({
               })}
             </div>
           ) : (
-            <span className={styles.hint}>还没有 AI 协作者。</span>
+            <span className={styles.hint}>
+              还没有 AI 协作者。建好空间后可在空间配置中新建。
+            </span>
           )}
-          <button
-            type="button"
-            className={styles.settingsLink}
-            onClick={() => {
-              onClose();
-              router.navigate('#/settings');
-            }}
-          >
-            创建协作者
-          </button>
         </div>
 
         {error ? (

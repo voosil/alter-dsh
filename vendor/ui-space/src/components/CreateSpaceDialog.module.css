@@ -100,25 +100,6 @@
   font-size: var(--alter-font-caption);
   line-height: var(--alter-line-ui);
 }
-.settingsLink {
-  align-self: flex-start;
-  padding: 2px 0;
-  border: 0;
-  background: transparent;
-  color: var(--alter-text-muted);
-  font: inherit;
-  font-size: var(--alter-font-caption);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-  cursor: pointer;
-}
-.settingsLink:hover {
-  color: var(--alter-text);
-}
-.settingsLink:focus-visible {
-  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
-  outline-offset: 2px;
-}
 .error {
   margin: 0;
   color: var(--alter-danger);

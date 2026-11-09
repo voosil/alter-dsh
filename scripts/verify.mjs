@@ -260,8 +260,11 @@ check(
   'stylesheet must carry the host fit rules',
 );
 check(
-  escaped.includes('AI 协作者') && escaped.includes('创建协作者'),
-  'client bundle must carry the settings page collaborator creation UI',
+  escaped.includes('AI 协作者') &&
+    escaped.includes('新建协作者') &&
+    escaped.includes('创建协作者') &&
+    escaped.includes('使用的模型'),
+  'client bundle must carry the collaborator roster and its creation dialog',
 );
 check(
   escaped.includes('#/settings') && escaped.includes('返回空间'),

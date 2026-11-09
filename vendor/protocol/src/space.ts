@@ -16,11 +16,29 @@ export interface Space {
   archivedAt: string | null;
 }
 
+/** Capability keys a collaborator can be granted inside a space. */
+export type AgentPermission = 'read' | 'edit' | 'comment' | 'manage';
+
 export interface Agent {
   id: string;
   name: string;
   role: string;
+  /** Free-form description of what the collaborator is good at. */
+  description?: string;
+  /** Preferred model label; product metadata, not a runtime binding yet. */
+  model?: string;
+  /** Space-scoped capability grants; product metadata, not enforced yet. */
+  permissions?: AgentPermission[];
   createdAt: string;
+}
+
+/** Payload for creating a collaborator from a space's configuration page. */
+export interface CreateAgentInput {
+  name: string;
+  role: string;
+  description?: string;
+  model?: string;
+  permissions?: AgentPermission[];
 }
 
 export interface SpaceNode {
@@ -268,7 +286,7 @@ export interface SpaceService {
   getOverview(spaceId: string): Promise<SpaceOverview>;
 
   listAgents(): Promise<Agent[]>;
-  createAgent(input: { name: string; role: string }): Promise<Agent>;
+  createAgent(input: CreateAgentInput): Promise<Agent>;
 
   listDirectories(path: string): Promise<DirectoryListing>;
 }

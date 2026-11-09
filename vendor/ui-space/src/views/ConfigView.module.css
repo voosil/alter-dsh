@@ -73,26 +73,8 @@
   font-size: var(--alter-font-body-sm);
   line-height: var(--alter-line-body);
 }
-.link {
-  display: inline-block;
-  margin-top: 10px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--alter-text-muted);
-  font: inherit;
-  font-size: var(--alter-font-caption);
-  text-align: left;
-  cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-.link:hover {
-  color: var(--alter-text);
-}
-.link:focus-visible {
-  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
-  outline-offset: 2px;
+.sectionAction {
+  margin-top: 12px;
 }
 .optionList {
   border-top: 1px solid var(--alter-border);

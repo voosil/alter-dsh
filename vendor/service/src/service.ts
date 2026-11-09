@@ -6,7 +6,9 @@ import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import type {
   Agent,
+  AgentPermission,
   Comment,
+  CreateAgentInput,
   DirectoryEntry,
   DocVersion,
   Milestone,
@@ -38,6 +40,20 @@ function clone<T>(value: T): T {
 
 function createId(prefix: string) {
   return `${prefix}-${randomUUID()}`;
+}
+
+/** Known collaborator capability grants, in a stable display order. */
+const AGENT_PERMISSIONS: AgentPermission[] = [
+  'read',
+  'edit',
+  'comment',
+  'manage',
+];
+
+/** Drop unknown permission keys and duplicate grants from a creation payload. */
+function normalizeAgentPermissions(input: unknown): AgentPermission[] {
+  if (!Array.isArray(input)) return [];
+  return AGENT_PERMISSIONS.filter((permission) => input.includes(permission));
 }
 
 function toIso(date: Date) {
@@ -1086,7 +1102,7 @@ export function createContentService(
       return clone(store.read().agents);
     },
 
-    async createAgent(input: { name: string; role: string }) {
+    async createAgent(input: CreateAgentInput) {
       return store.update((data) => {
         const name = input.name.trim();
         if (!name) throw new Error('协作者名称不能为空');
@@ -1096,6 +1112,12 @@ export function createContentService(
           role: input.role.trim(),
           createdAt: toIso(now()),
         };
+        const description = input.description?.trim();
+        if (description) agent.description = description;
+        const model = input.model?.trim();
+        if (model) agent.model = model;
+        const permissions = normalizeAgentPermissions(input.permissions);
+        if (permissions.length) agent.permissions = permissions;
         data.agents.push(agent);
         return clone(agent);
       });

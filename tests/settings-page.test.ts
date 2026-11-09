@@ -42,24 +42,21 @@ const fakeStorage = {
 const fakeService = {
   listAgents: async () => [],
   listArchivedSpaces: async () => [],
-  createAgent: async () => {
-    throw new Error('not called during server rendering');
-  },
   unarchiveSpace: async () => {
     throw new Error('not called during server rendering');
   },
 } as unknown as SpaceService;
 
 describe('Space settings page', () => {
-  it('renders the AI collaborator list and creation form', () => {
+  it('lists collaborators and points creation to the space config page', () => {
     const html = renderToStaticMarkup(
       createElement(SettingsPage, { service: fakeService }),
     );
     expect(html).toContain('AI 协作者');
-    expect(html).toContain('空间配置中可以选择这些协作者');
-    expect(html).toContain('placeholder="例如：研究助手"');
-    expect(html).toContain('placeholder="例如：资料检索与事实核对"');
-    expect(html).toContain('创建协作者');
+    expect(html).toContain('创建与设置已移到空间详情');
+    expect(html).toContain('还没有 AI 协作者');
+    expect(html).not.toContain('placeholder="例如：研究助手"');
+    expect(html).not.toContain('创建协作者');
     expect(html).toContain('归档管理');
     expect(html).toContain('快捷键');
     expect(html).toContain('关于');
@@ -87,7 +84,7 @@ describe('Space panel shell', () => {
     );
     expect(html).toContain('返回空间');
     expect(html).toContain('AI 协作者');
-    expect(html).toContain('创建协作者');
+    expect(html).not.toContain('placeholder="例如：研究助手"');
     expect(html).not.toContain('正在打开空间');
   });
 

@@ -172,26 +172,6 @@
   font-size: var(--alter-font-micro);
   white-space: nowrap;
 }
-.agentForm {
-  margin-top: 22px;
-}
-.fields {
-  display: grid;
-  grid-template-columns: 1fr 1.4fr;
-  gap: var(--alter-space-3);
-}
-.formFoot {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--alter-space-4);
-  margin-top: 14px;
-}
-.hint {
-  color: var(--alter-text-muted);
-  font-size: var(--alter-font-caption);
-  line-height: var(--alter-line-ui);
-}
 .archiveList {
   margin-top: 18px;
   border-top: 1px solid var(--alter-border);
@@ -333,9 +313,6 @@ kbd {
     max-width: none;
     text-align: left;
   }
-  .fields {
-    grid-template-columns: 1fr;
-  }
   .agentDate {
     display: none;
   }
@@ -348,9 +325,5 @@ kbd {
   }
   .archiveRow > button {
     margin-left: 44px;
-  }
-  .formFoot {
-    align-items: flex-start;
-    flex-direction: column;
   }
 }

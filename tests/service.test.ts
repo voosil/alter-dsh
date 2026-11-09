@@ -112,11 +112,22 @@ describe('Space business service over SQLite', () => {
     const agent = await service.createAgent({
       name: '研究助手',
       role: '资料检索与事实核对',
+      description: '擅长公开资料检索与事实核对。',
+      model: 'deepseek-reasoner',
+      permissions: ['read', 'comment'],
     });
     expect(agent.id).toMatch(/^ag-/);
     expect(agent.name).toBe('研究助手');
     expect(agent.role).toBe('资料检索与事实核对');
-    expect(await service.listAgents()).toHaveLength(1);
+    expect(agent.description).toBe('擅长公开资料检索与事实核对。');
+    expect(agent.model).toBe('deepseek-reasoner');
+    expect(agent.permissions).toEqual(['read', 'comment']);
+
+    const minimal = await service.createAgent({ name: '轻量助手', role: '' });
+    expect(minimal.description).toBeUndefined();
+    expect(minimal.model).toBeUndefined();
+    expect(minimal.permissions).toBeUndefined();
+    expect(await service.listAgents()).toHaveLength(2);
 
     const updated = await service.updateSpace(space.id, {
       collaboratorIds: [agent.id],
@@ -129,9 +140,16 @@ describe('Space business service over SQLite', () => {
 
     const reopened = await openSpaceStore({ directory: dir, now: fixedNow });
     const restored = createSpaceAuthority(reopened, fixedNow);
-    expect((await restored.listAgents()).map((item) => item.name)).toEqual([
+    const restoredAgents = await restored.listAgents();
+    expect(restoredAgents.map((item) => item.name)).toEqual([
       '研究助手',
+      '轻量助手',
     ]);
+    expect(restoredAgents[0]).toMatchObject({
+      description: '擅长公开资料检索与事实核对。',
+      model: 'deepseek-reasoner',
+      permissions: ['read', 'comment'],
+    });
     expect((await restored.getSpace(space.id))?.collaboratorIds).toEqual([
       agent.id,
     ]);

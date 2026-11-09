@@ -3,6 +3,7 @@ import { useId, useState } from 'react';
 import { Archive, Check, Trash2 } from 'lucide-react';
 import { useSpaceContext } from '../runtime';
 import { DirectoryField } from '../components/DirectoryField';
+import { CreateAgentDialog } from '../components/CreateAgentDialog';
 import { SpaceAppearanceField } from '../components/SpaceAppearanceField';
 import { Button, Dialog, Field, Input, Textarea } from '@alter/ui-system';
 import { SpaceDetailShell } from './SpaceDetailShell';
@@ -38,6 +39,7 @@ export function ConfigView() {
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
+  const [createAgentOpen, setCreateAgentOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState('');
   const [archiving, setArchiving] = useState(false);
@@ -237,13 +239,14 @@ export function ConfigView() {
             <p className={styles.sectionNote}>
               选择可以一起研究、整理和推进这个空间的 AI 协作者。
             </p>
-            <button
-              type="button"
-              className={styles.link}
-              onClick={() => router.navigate('#/settings')}
+            <Button
+              size="sm"
+              variant="secondary"
+              className={styles.sectionAction}
+              onClick={() => setCreateAgentOpen(true)}
             >
-              在设置中创建协作者
-            </button>
+              新建协作者
+            </Button>
           </div>
           <div className={styles.sectionBody}>
             {agents.length ? (
@@ -265,7 +268,9 @@ export function ConfigView() {
                       <span className={styles.optionText}>
                         <span>{agent.name}</span>
                         <span className={styles.optionMeta}>
-                          {agent.role || '未填写职责'}
+                          {[agent.role || '未填写职责', agent.model]
+                            .filter(Boolean)
+                            .join(' · ')}
                         </span>
                       </span>
                       <span className={styles.check} aria-hidden="true">
@@ -422,6 +427,19 @@ export function ConfigView() {
           </Field>
         </div>
       </Dialog>
+
+      <CreateAgentDialog
+        open={createAgentOpen}
+        onClose={() => setCreateAgentOpen(false)}
+        onCreated={(agent) => {
+          setCreateAgentOpen(false);
+          setCollaborators((current) =>
+            current.includes(agent.id) ? current : [...current, agent.id],
+          );
+          refresh();
+          toast('已创建协作者');
+        }}
+      />
     </SpaceDetailShell>
   );
 }

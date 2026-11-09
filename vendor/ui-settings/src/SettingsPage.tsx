@@ -1,10 +1,4 @@
-import {
-  useEffect,
-  useId,
-  useState,
-  useSyncExternalStore,
-  type FormEvent,
-} from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import {
   Archive,
   ArchiveRestore,
@@ -14,7 +8,7 @@ import {
   Info,
 } from 'lucide-react';
 import type { Agent, Space, SpaceService } from '@alter/protocol';
-import { Button, Field, Input } from '@alter/ui-system';
+import { Button } from '@alter/ui-system';
 import type { WorkbenchController } from '@alter/ui-workbench';
 import styles from './SettingsPage.module.css';
 
@@ -44,15 +38,10 @@ export interface SettingsCapabilities {
 export function SettingsPage({ service, workbench }: SettingsCapabilities) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [archivedSpaces, setArchivedSpaces] = useState<Space[]>([]);
-  const [name, setName] = useState('');
-  const [role, setRole] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [saving, setSaving] = useState(false);
   const [restoring, setRestoring] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
-  const nameId = useId();
-  const roleId = useId();
 
   useEffect(() => {
     let active = true;
@@ -68,27 +57,6 @@ export function SettingsPage({ service, workbench }: SettingsCapabilities) {
       active = false;
     };
   }, [service]);
-
-  async function handleSubmit(event: FormEvent) {
-    event.preventDefault();
-    if (!name.trim()) {
-      setError('填写协作者名称');
-      return;
-    }
-    setSaving(true);
-    setError('');
-    setNotice('');
-    try {
-      const agent = await service.createAgent({ name, role });
-      setAgents((items) => [...items, agent]);
-      setName('');
-      setRole('');
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : '创建失败，请重试');
-    } finally {
-      setSaving(false);
-    }
-  }
 
   async function restoreSpace(space: Space) {
     setRestoring(space.id);
@@ -194,55 +162,35 @@ export function SettingsPage({ service, workbench }: SettingsCapabilities) {
                 AI 协作者
               </h2>
               <p className={styles.sectionNote}>
-                空间配置中可以选择这些协作者。每个协作者拥有自己的名称与职责。
+                创建与设置已移到空间详情 → 配置。这里列出已有的协作者。
               </p>
             </div>
-            <div className={styles.agentList}>
-              {agents.map((agent) => (
-                <div className={styles.agentRow} key={agent.id}>
-                  <span className={styles.avatar} aria-hidden="true">
-                    {agent.name.slice(0, 1)}
-                  </span>
-                  <div className={styles.agentText}>
-                    <span className={styles.agentName}>{agent.name}</span>
-                    <span className={styles.agentRole}>
-                      {agent.role || '未填写职责'}
+            {agents.length ? (
+              <div className={styles.agentList}>
+                {agents.map((agent) => (
+                  <div className={styles.agentRow} key={agent.id}>
+                    <span className={styles.avatar} aria-hidden="true">
+                      {agent.name.slice(0, 1)}
+                    </span>
+                    <div className={styles.agentText}>
+                      <span className={styles.agentName}>{agent.name}</span>
+                      <span className={styles.agentRole}>
+                        {[agent.role || '未填写职责', agent.model]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </span>
+                    </div>
+                    <span className={styles.agentDate}>
+                      {formatDate(agent.createdAt)} 创建
                     </span>
                   </div>
-                  <span className={styles.agentDate}>
-                    {formatDate(agent.createdAt)} 创建
-                  </span>
-                </div>
-              ))}
-            </div>
-            <form className={styles.agentForm} onSubmit={handleSubmit}>
-              <div className={styles.fields}>
-                <Field label="名称" htmlFor={nameId}>
-                  <Input
-                    id={nameId}
-                    value={name}
-                    onChange={(event) => setName(event.target.value)}
-                    placeholder="例如：研究助手"
-                  />
-                </Field>
-                <Field label="职责" htmlFor={roleId}>
-                  <Input
-                    id={roleId}
-                    value={role}
-                    onChange={(event) => setRole(event.target.value)}
-                    placeholder="例如：资料检索与事实核对"
-                  />
-                </Field>
+                ))}
               </div>
-              <div className={styles.formFoot}>
-                <span className={styles.hint}>
-                  创建后可在空间配置中邀请协作者。
-                </span>
-                <Button type="submit" variant="primary" disabled={saving}>
-                  {saving ? '正在创建…' : '创建协作者'}
-                </Button>
-              </div>
-            </form>
+            ) : (
+              <p className={styles.empty}>
+                还没有 AI 协作者。到空间详情 → 配置页新建。
+              </p>
+            )}
           </section>
 
           <section
