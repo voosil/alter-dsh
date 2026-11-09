@@ -27,8 +27,8 @@
   `ConfigView.tsx` → `../components/DirectoryField` 重定向到 `src/native-directory-field.tsx`。
   覆盖组件打开宿主目录选择器（桌面=系统对话框，Web=DSH 浏览），无选择器时回退内置目录浏览器。
 - **文档视图**：把 `SpaceApp.tsx` 的 `./views/DocumentView` 重定向到
-  `src/document/adaptive-document-view.tsx`。旧 HTML 文档继续使用原编辑器；AST 文档走结构化
-  只读视图，直到 Tiptap 编辑器接入。
+  `src/document/adaptive-document-view.tsx`。旧 HTML 文档继续使用原编辑器；AST 文档走结构化的
+  Tiptap 编辑器（保存时由客户端 diff 生成 Document Operations）。
 
 其余导入（含覆盖模块内部对原实现的引用）保持原解析。
 

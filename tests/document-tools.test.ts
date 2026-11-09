@@ -82,6 +82,16 @@ function fakeService(overrides: Partial<DocumentService> = {}): DocumentService 
         title: input.markdown.slice(0, 4),
       };
     },
+    async undo(input: { docId: string; baseRevision: number }) {
+      return {
+        docId: input.docId,
+        revision: input.baseRevision + 1,
+        changedBlockIds: ['blk_2'],
+        diff: { applied: [], changedBlockIds: ['blk_2'] },
+        undoToken: 'op_undo',
+        warnings: [],
+      };
+    },
     async getObject(objectId: string) {
       return {
         id: objectId,
@@ -138,6 +148,7 @@ describe('document Agent tools', () => {
       'space_doc_outline',
       'space_doc_read',
       'space_doc_search',
+      'space_doc_undo',
       'space_object_get',
       'space_object_update',
     ]);
@@ -276,6 +287,19 @@ describe('document Agent tools', () => {
       revision: 4,
       object_id: 'obj_new',
       changed_block_ids: ['blk_9'],
+    });
+  });
+
+  it('maps undo results', async () => {
+    const { definitions } = setup();
+    const value = await definitions.get('space_doc_undo')!.execute(
+      { doc_id: 'doc-1', base_revision: 3, undo_token: 'op_1' },
+      exec('space_doc_undo'),
+    );
+    expect(value).toMatchObject({
+      revision: 4,
+      changed_block_ids: ['blk_2'],
+      undo_token: 'op_undo',
     });
   });
 

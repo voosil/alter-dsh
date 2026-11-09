@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { SpaceNode } from '@alter/protocol';
 import { useSpaceContext } from '../../vendor/ui-space/src/runtime';
 import { documentClientOf } from './client-access';
-import { DocumentContent } from './DocumentContent';
+import { AlterTiptapEditor } from './editor';
 import type { DocumentSnapshot } from './types';
 import styles from './AlterDocumentView.module.css';
 
@@ -20,11 +20,12 @@ type LoadState =
  */
 export function AlterDocumentView({ node }: { node: SpaceNode }) {
   const { service } = useSpaceContext();
+  const client = documentClientOf(service);
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
+  const [title, setTitle] = useState(node.title);
 
   useEffect(() => {
     let alive = true;
-    const client = documentClientOf(service);
     if (client === undefined) {
       setState({
         kind: 'error',
@@ -57,8 +58,27 @@ export function AlterDocumentView({ node }: { node: SpaceNode }) {
     <article className={styles.page} data-doc-format="alter-doc/1">
       <header className={styles.header}>
         <div className={styles.titleRow}>
-          <h1 className={styles.title}>{node.title || '未命名文档'}</h1>
-          <span className={styles.badge}>结构化文档 · 只读预览</span>
+          <input
+            className={styles.titleInput}
+            value={title}
+            aria-label="文档标题"
+            onChange={(event) => setTitle(event.target.value)}
+            onBlur={() => {
+              const next = title.trim();
+              if (next === '' || next === node.title) {
+                setTitle(node.title);
+                return;
+              }
+              void service
+                .saveNode(node.id, { title: next })
+                .then(() => undefined)
+                .catch(() => setTitle(node.title));
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') event.currentTarget.blur();
+            }}
+          />
+          <span className={styles.badge}>结构化文档</span>
         </div>
         <div className={styles.meta}>
           {state.kind === 'ready'
@@ -67,7 +87,7 @@ export function AlterDocumentView({ node }: { node: SpaceNode }) {
               ? '加载失败'
               : '正在加载…'}
           <span className={styles.metaDivider}>·</span>
-          编辑、评论与版本历史将在编辑器接入后启用
+          评论与版本历史将在后续接入
         </div>
       </header>
       <div className={styles.body}>
@@ -77,8 +97,20 @@ export function AlterDocumentView({ node }: { node: SpaceNode }) {
           <div className={styles.error} role="alert">
             无法加载文档：{state.message}
           </div>
+        ) : client === undefined ? (
+          <div className={styles.error} role="alert">
+            文档模型客户端未装配：请刷新页面或重新安装插件
+          </div>
         ) : (
-          <DocumentContent doc={state.snapshot.doc} />
+          <AlterTiptapEditor
+            docId={node.id}
+            initialDoc={state.snapshot.doc}
+            baseRevision={state.snapshot.revision}
+            client={client}
+            onSaved={(revision, doc) =>
+              setState({ kind: 'ready', snapshot: { ...state.snapshot, revision, doc } })
+            }
+          />
         )}
       </div>
     </article>

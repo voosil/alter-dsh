@@ -73,7 +73,17 @@ updated: 2026-11-09
 - `dry_run` 用于预览：返回 diff，不落盘。
 - 写工具能力受 registry `ai.ops` 与全局写策略约束；本仓库当前策略为默认直接执行、不弹审批。
 
-### 2.5 `space_doc_generate`
+### 2.5 `space_doc_undo`
+
+```
+输入：{ doc_id, base_revision, undo_token? }
+输出：{ revision, changed_block_ids, diff, warnings, undo_token? }
+```
+
+- 应用一次已提交批次的反向操作（`inverseOps`），省略 `undo_token` 时撤销最近一次批次。
+- 撤销同样产生新 revision 与 op log 记录（撤销本身可再撤销）。
+
+### 2.6 `space_doc_generate`
 
 ```
 输入：{ doc_id?, space_id?, title?, parent?: id, after?: id, markdown }
@@ -85,7 +95,7 @@ updated: 2026-11-09
 - `markdown` 必须走投影解析（见 [document-model-v0.md](document-model-v0.md) §7.3）；未知语法报错，
   不静默降级。
 
-### 2.6 对象工具
+### 2.7 对象工具
 
 | 工具 | 输入 | 输出 |
 | --- | --- | --- |
@@ -103,7 +113,7 @@ updated: 2026-11-09
 
 ## 3. 预算与裁剪
 
-- 7 个核心工具 schema 约 +1.2–1.6k tokens；读投影单次 ≤ 12k tokens / ≤ 40k 字符。
+- 8 个核心工具 schema 约 +1.4–1.8k tokens；读投影单次 ≤ 12k tokens / ≤ 40k 字符。
 - 每个工具的输出 schema 只列模型真正需要消费的字段，不回传整篇文档或未变更内容。
 - 读工具超限必须截断并在 `next` 给出续读锚点；写工具不因预算裁剪而改变语义。
 - 结构摘要与检索结果有独立上限：outline ≤ 2k tokens，search 默认 20 条且 preview ≤ 60 字。

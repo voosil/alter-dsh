@@ -271,13 +271,16 @@ check(
   'client bundle must carry the in-panel settings route and its back control',
 );
 check(
-  escaped.includes('结构化文档 · 只读预览') &&
-    escaped.includes('data-doc-format'),
-  'client bundle must carry the structured document view',
+  escaped.includes('结构化文档') &&
+    escaped.includes('data-doc-format') &&
+    escaped.includes('重新加载'),
+  'client bundle must carry the structured document editor',
 );
 check(
-  escaped.includes('doc.get') && escaped.includes('doc.undo'),
-  'client bundle must map the doc.get/doc.undo endpoints',
+  escaped.includes('doc.get') &&
+    escaped.includes('doc.undo') &&
+    escaped.includes('doc.applyOps'),
+  'client bundle must map the document model endpoints',
 );
 
 check(
@@ -318,9 +321,12 @@ check(
     escaped.includes('directory-picker-unavailable'),
   'client bundle must route working-directory picking through the native picker override',
 );
+// The legacy HTML editor keeps silent autosave; the structured editor saves
+// explicitly and may show its own save status, so only the failure affordance
+// is asserted here.
 check(
-  !escaped.includes('保存中'),
-  'the hosted editor must keep autosave silent (no 保存中 label)',
+  escaped.includes('保存失败'),
+  'the hosted editor must still surface a save-failure affordance',
 );
 check(
   escaped.includes('保存失败'),

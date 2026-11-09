@@ -688,6 +688,70 @@ export function registerDocumentTools(
 
   disposers.push(
     tools.register({
+      name: 'space_doc_undo',
+      description:
+        'Undo one previously applied Document Operations batch (the latest batch by default). The document revision must be current.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['doc_id', 'base_revision'],
+        properties: {
+          doc_id: { type: 'string', description: 'Document id.' },
+          base_revision: {
+            type: 'integer',
+            description: 'Current revision from space_doc_read.',
+          },
+          undo_token: {
+            type: 'string',
+            description: 'Specific batch token; omit to undo the latest batch.',
+          },
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['revision', 'changed_block_ids', 'diff', 'warnings'],
+          properties: {
+            revision: { type: 'integer' },
+            changed_block_ids: { type: 'array', items: { type: 'string' } },
+            diff: { type: 'object', additionalProperties: true, properties: {} },
+            undo_token: { type: 'string' },
+            warnings: { type: 'array', items: { type: 'string' } },
+          },
+        },
+        render: (_args, value) => renderOps(value),
+      },
+      isConcurrencySafe: () => false,
+      async execute(args) {
+        const input = asRecord(args);
+        try {
+          const undoToken = optionalString(input, 'undo_token');
+          const result = await service.undo({
+            docId: requireString(input, 'doc_id'),
+            baseRevision: requireInteger(input, 'base_revision'),
+            ...(undoToken === undefined ? {} : { undoToken }),
+          });
+          return {
+            revision: result.revision,
+            changed_block_ids: result.changedBlockIds,
+            diff: result.diff as unknown as JsonValue,
+            ...(result.undoToken === undefined
+              ? {}
+              : { undo_token: result.undoToken }),
+            warnings: result.warnings,
+          };
+        } catch (error) {
+          throw new Error(errorMessage(error));
+        }
+      },
+      presentCall: () =>
+        view({ card: 'generic', title: 'Undo document operations', kind: 'edit' }),
+    }),
+  );
+
+  disposers.push(
+    tools.register({
       name: 'space_object_get',
       description:
         'Read the structured payload of a mindmap/component object referenced by a document block. Use it before updating the object.',

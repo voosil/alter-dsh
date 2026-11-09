@@ -187,6 +187,7 @@ describe('host plugin apply', () => {
       'space_doc_outline',
       'space_doc_read',
       'space_doc_search',
+      'space_doc_undo',
       'space_object_get',
       'space_object_update',
     ]);

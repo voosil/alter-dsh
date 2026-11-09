@@ -24,7 +24,8 @@ DSH desktop profile 中的注册与读写链路。结论：**PASS（安装 / 工
 | 归属 | 工具写入按 `alter` 归属；版本/op log 随事务写入。 |
 | 完整 AST 读取 | `doc.get` 返回 revision/title/doc 块树；`tests/document-service.test.ts` 与 `host-apply` 集成用例覆盖。 |
 | 撤销 | `doc.undo` 应用 op log 的 inverseOps：revision+1、旧内容恢复；过期 base 报 `doc/conflict`，未知 token 报 `op/invalid`。 |
-| 结构化文档 UI（只读） | 构建期把 `DocumentView` 重定向到 `src/document/adaptive-document-view.tsx`：旧 HTML 文档走原编辑器，AST 文档渲染标题/块树/占位；`client.js` 产物断言与 SSR 渲染测试覆盖。未做浏览器截图验证。 |
+| 结构化文档 UI | 构建期把 `DocumentView` 重定向到 `src/document/adaptive-document-view.tsx`：旧 HTML 文档走原编辑器，AST 文档走 Tiptap 编辑器（标题/块树/工具栏/保存/冲突重载）；保存由客户端 block diff → `doc.applyOps`，不整篇覆盖。`client.js` 产物断言、映射/diff 单测与只读渲染 SSR 测试覆盖；未做浏览器点击验证。 |
+| 撤销工具 | `space_doc_undo`：按 `undo_token` 或最近一次 batch 应用 `inverseOps`，生成新 revision 与 op log；冲突/未知 token 错误码覆盖。 |
 
 真机测试文档：`doc-b16dc506-1186-45ab-bcf9-59e98291a2a4`（「S0 验收测试（可删除）」）。
 v0 没有删除工具，需在空间面板中手动删除。
@@ -37,7 +38,7 @@ v0 没有删除工具，需在空间面板中手动删除。
 
 ## 限制
 
-- 旧 HTML 文档对工具返回 `doc/legacy-format`；AST 文档当前只有**只读**结构化视图（Tiptap 编辑器未接入），评论/历史入口暂缺。
+- 旧 HTML 文档对工具返回 `doc/legacy-format`；AST 文档已有 Tiptap 编辑器，但评论、版本历史入口与资产渲染仍待接入。
 - `space_doc_outline` 的 `total_blocks` 计入嵌套块（示例 18），`outline` 只列顶层块（示例 7）。
 - 资产导入、undo 端点、对象 GC、组件运行时不在本切片。
 

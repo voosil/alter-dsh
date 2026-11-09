@@ -27,13 +27,26 @@
   flex-wrap: wrap;
 }
 
-.title {
+.titleInput {
+  flex: 1;
+  min-width: 0;
   margin: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--alter-text);
   font-family: var(--alter-font-family);
   font-size: var(--alter-font-headline);
   font-weight: 600;
   letter-spacing: var(--alter-tracking-display);
   line-height: var(--alter-line-display);
+}
+
+.titleInput:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--alter-radius-xs);
 }
 
 .badge {
