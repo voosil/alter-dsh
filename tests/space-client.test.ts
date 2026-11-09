@@ -115,6 +115,7 @@ describe('createSpaceDocumentClient', () => {
       versionId: 'ver_1',
       baseRevision: 3,
     });
+    await document.migrate({ docId: 'doc-1' });
     await document.generate({ spaceId: 'sp-1', markdown: '# x' });
     await document.getObject('obj_1');
     expect(calls.map((call) => call.op)).toEqual([
@@ -125,6 +126,7 @@ describe('createSpaceDocumentClient', () => {
       'doc.applyOps',
       'doc.undo',
       'doc.restoreVersion',
+      'doc.migrate',
       'doc.generate',
       'object.get',
     ]);

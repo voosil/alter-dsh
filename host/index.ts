@@ -16,6 +16,7 @@ import { createSnapshotScheduler } from './backup.js';
 import { createDocumentAssetRoute } from './document/asset-route.js';
 import { ASSET_ROUTE_PATH, createDocumentAssets } from './document/assets.js';
 import { gcDocumentArtifacts } from './document/gc.js';
+import { createDocumentMigration } from './document/migrate.js';
 import { createDocumentService } from './document/service.js';
 import {
   registerDocumentTools,
@@ -172,6 +173,7 @@ export async function apply(
     const storage = createSpaceStorage({ store, directory });
     const document = createDocumentService({ store, now });
     const assets = createDocumentAssets({ store, directory, now });
+    const migration = createDocumentMigration({ store, assets, now, logger });
     void gcDocumentArtifacts({ store, directory, logger }).catch((error: unknown) => {
       logger.warn?.(`[alter-dsh-space] 文档对象/资产 GC 失败：${describeError(error)}`);
     });
@@ -182,6 +184,7 @@ export async function apply(
       storage,
       workspaceSync: () => workspaceSync,
       document,
+      migration,
     });
     const attachDocumentTools = (child: HostContextLike): void => {
       const tools = child.tools ?? child.get?.('tools');
@@ -189,7 +192,11 @@ export async function apply(
         logger.warn?.('[alter-dsh-space] DSH 工具服务不可用：文档模型工具未注册');
         return;
       }
-      const dispose = registerDocumentTools(tools, { service: document, assets });
+      const dispose = registerDocumentTools(tools, {
+        service: document,
+        assets,
+        migration,
+      });
       disposeDocumentTools = dispose;
       const cleanup = () => {
         if (disposeDocumentTools === dispose) disposeDocumentTools = undefined;

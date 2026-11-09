@@ -117,9 +117,21 @@ updated: 2026-11-09
 - 生成/编辑图片块时把返回的 `asset_id` 写入 `image.attrs.assetId`；渲染 URL 由客户端拼
   `GET /api/alter-space/asset?id=…`。
 
+### 2.9 `space_doc_migrate`
+
+```
+输入：{ doc_id? }
+输出：{ migrated, skipped, failed, assets_imported, warnings? }
+```
+
+- 旧 HTML 文档 → AST 的语义级迁移；省略 `doc_id` 时迁移全部旧文档，已迁移文档跳过。
+- 转换保语义不保像素：段落/标题/列表/引用/代码/表格/行内 marks/内联 dataURL 图片尽量保留，
+  颜色、对齐与未知结构退化为纯文本；旧 HTML 版本快照保留在历史中但不可恢复到 AST 文档。
+- 只由用户或管理员显式触发，不在启动时自动执行。
+
 ## 3. 预算与裁剪
 
-- 9 个核心工具 schema 约 +1.6–2.0k tokens；读投影单次 ≤ 12k tokens / ≤ 40k 字符。
+- 10 个核心工具 schema 约 +1.8–2.2k tokens；读投影单次 ≤ 12k tokens / ≤ 40k 字符。
 - 每个工具的输出 schema 只列模型真正需要消费的字段，不回传整篇文档或未变更内容。
 - 读工具超限必须截断并在 `next` 给出续读锚点；写工具不因预算裁剪而改变语义。
 - 结构摘要与检索结果有独立上限：outline ≤ 2k tokens，search 默认 20 条且 preview ≤ 60 字。
@@ -140,7 +152,7 @@ updated: 2026-11-09
 | 版本/资产 | 恢复旧版本后对象/资产仍可渲染 |
 | 性能 | 单次 op apply（1 万块级文档）≤ 200ms（本机） |
 
-Spike 不做：完整 Tiptap 编辑器、组件沙箱、存量批量迁移、实时协作。
+Spike 不做：组件沙箱、实时协作；存量迁移见 `space_doc_migrate`。
 
 ## 5. 开放决策项
 

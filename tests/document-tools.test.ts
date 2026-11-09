@@ -153,7 +153,22 @@ function setup(service = fakeService()): {
       return undefined;
     },
   };
-  const deps = { service, assets } as DocumentToolDeps;
+  const migration = {
+    countLegacy: () => 0,
+    async migrateDocument(docId: string) {
+      return {
+        docId,
+        migrated: true,
+        revision: 1,
+        assetsImported: 0,
+        warnings: [],
+      };
+    },
+    async migrateAll() {
+      return { migrated: 1, skipped: 0, failed: [], assetsImported: 0, warnings: [] };
+    },
+  };
+  const deps = { service, assets, migration } as DocumentToolDeps;
   const dispose = registerDocumentTools(tools, deps);
   return { definitions, deps, dispose };
 }
@@ -164,6 +179,7 @@ describe('document Agent tools', () => {
     expect([...definitions.keys()].sort()).toEqual([
       'space_asset_import',
       'space_doc_generate',
+      'space_doc_migrate',
       'space_doc_ops',
       'space_doc_outline',
       'space_doc_read',
@@ -321,6 +337,20 @@ describe('document Agent tools', () => {
       changed_block_ids: ['blk_2'],
       undo_token: 'op_undo',
     });
+  });
+
+  it('runs legacy migration through the migration service', async () => {
+    const { definitions } = setup();
+    const value = await definitions.get('space_doc_migrate')!.execute(
+      { doc_id: 'doc-legacy' },
+      exec('space_doc_migrate'),
+    );
+    expect(value).toMatchObject({ migrated: 1, skipped: 0, failed: [] });
+    const batch = await definitions.get('space_doc_migrate')!.execute(
+      {},
+      exec('space_doc_migrate'),
+    );
+    expect(batch).toMatchObject({ migrated: 1, skipped: 0 });
   });
 
   it('imports assets through the asset store', async () => {

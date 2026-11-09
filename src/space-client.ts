@@ -232,6 +232,7 @@ export interface SpaceDocumentClient {
     versionId: string;
     baseRevision: number;
   }): Promise<unknown>;
+  migrate(input?: { docId?: string }): Promise<unknown>;
   generate(input: {
     docId?: string;
     spaceId?: string;
@@ -273,6 +274,7 @@ export function createSpaceDocumentClient(
     applyOperations: (input) => request('doc.applyOps', [input]),
     undo: (input) => request('doc.undo', [input]),
     restoreVersion: (input) => request('doc.restoreVersion', [input]),
+    migrate: (input) => request('doc.migrate', [input]),
     generate: (input) => request('doc.generate', [input]),
     getObject: (objectId) => request('object.get', [objectId]),
   };

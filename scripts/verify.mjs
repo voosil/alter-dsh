@@ -279,7 +279,8 @@ check(
 check(
   escaped.includes('doc.get') &&
     escaped.includes('doc.undo') &&
-    escaped.includes('doc.applyOps'),
+    escaped.includes('doc.applyOps') &&
+    escaped.includes('doc.migrate'),
   'client bundle must map the document model endpoints',
 );
 check(

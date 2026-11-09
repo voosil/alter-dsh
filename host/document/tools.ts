@@ -9,6 +9,7 @@
  */
 import type { JsonValue } from './types.js';
 import type { DocumentAssets } from './assets.js';
+import type { DocumentMigration } from './migrate.js';
 import type {
   ApplyOperationsInput,
   DocumentService,
@@ -71,6 +72,8 @@ export interface DocumentToolDeps {
   service: DocumentService;
   /** Optional asset store; absent disables space_asset_import. */
   assets?: DocumentAssets;
+  /** Optional legacy HTML → AST migration. */
+  migration?: DocumentMigration;
 }
 
 function view(value: unknown): JsonValue {
@@ -750,6 +753,95 @@ export function registerDocumentTools(
       },
       presentCall: () =>
         view({ card: 'generic', title: 'Undo document operations', kind: 'edit' }),
+    }),
+  );
+
+  disposers.push(
+    tools.register({
+      name: 'space_doc_migrate',
+      description:
+        'Migrate legacy HTML Space documents into the structured document model. Omit doc_id to migrate every legacy note; already-migrated documents are skipped.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          doc_id: {
+            type: 'string',
+            description: 'Migrate only this document; omit to migrate all legacy notes.',
+          },
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['migrated', 'skipped', 'failed', 'assets_imported'],
+          properties: {
+            migrated: { type: 'integer' },
+            skipped: { type: 'integer' },
+            failed: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['docId', 'message'],
+                properties: {
+                  docId: { type: 'string' },
+                  message: { type: 'string' },
+                },
+              },
+            },
+            assets_imported: { type: 'integer' },
+            warnings: { type: 'array', items: { type: 'string' } },
+          },
+        },
+        render: (_args, value) => {
+          const result = value as {
+            migrated: number;
+            skipped: number;
+            failed: Array<{ docId: string; message: string }>;
+          };
+          return [
+            text(
+              [
+                `迁移完成：${result.migrated} 篇，跳过 ${result.skipped} 篇，失败 ${result.failed.length} 篇。`,
+                ...result.failed.map((item) => `- ${item.docId}: ${item.message}`),
+              ].join('\n'),
+            ),
+          ];
+        },
+      },
+      isConcurrencySafe: () => false,
+      async execute(args) {
+        const input = asRecord(args);
+        try {
+          if (deps.migration === undefined)
+            throw new Error('doc/unavailable: 文档迁移未启用');
+          const docId = optionalString(input, 'doc_id');
+          if (docId !== undefined) {
+            const one = await deps.migration.migrateDocument(docId);
+            return {
+              migrated: one.migrated ? 1 : 0,
+              skipped: one.migrated ? 0 : 1,
+              failed: [],
+              assets_imported: one.assetsImported,
+              ...(one.warnings.length === 0 ? {} : { warnings: one.warnings }),
+            };
+          }
+          const batch = await deps.migration.migrateAll();
+          return {
+            migrated: batch.migrated,
+            skipped: batch.skipped,
+            failed: batch.failed,
+            assets_imported: batch.assetsImported,
+            ...(batch.warnings.length === 0 ? {} : { warnings: batch.warnings }),
+          };
+        } catch (error) {
+          throw new Error(errorMessage(error));
+        }
+      },
+      presentCall: () =>
+        view({ card: 'generic', title: 'Migrate legacy documents', kind: 'edit' }),
     }),
   );
 

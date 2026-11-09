@@ -185,6 +185,7 @@ describe('host plugin apply', () => {
     expect([...fake.definitions.keys()].sort()).toEqual([
       'space_asset_import',
       'space_doc_generate',
+      'space_doc_migrate',
       'space_doc_ops',
       'space_doc_outline',
       'space_doc_read',
