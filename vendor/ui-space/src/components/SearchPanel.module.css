@@ -5,7 +5,7 @@
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding: 16vh 20px 20px;
+  padding: 18vh 20px 20px;
   background: var(--alter-scrim);
   animation: fade-in 100ms ease-out;
 }
@@ -37,7 +37,9 @@
 .input {
   flex: 1;
   min-width: 0;
-  height: 100%;
+  /* 不铺满 48px 行高：聚焦时的 1px 描边上下要留出空隙，否则会贴着分隔线。 */
+  height: 34px;
+  padding: 0 11px;
   border: 0;
   background: transparent;
   color: var(--alter-text);
@@ -73,7 +75,8 @@
   padding: 6px;
 }
 .groupLabel {
-  padding: 8px 9px 4px;
+  /* 与结果标题左对齐：行内缩进 9px + 图标 16px + 间距 10px。 */
+  padding: 8px 9px 4px 35px;
   color: var(--alter-text-muted);
   font-size: var(--alter-font-caption);
 }
