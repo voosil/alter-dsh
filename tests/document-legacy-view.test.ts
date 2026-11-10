@@ -457,6 +457,30 @@ describe('legacy DocumentView on the AST backend', () => {
     const client = makeClient(doc);
     const { rerender } = renderView(makeNode(doc), client);
     await waitFor(() => expect(screen.getByText('编辑器正文')).toBeTruthy());
+    // D4: external reloads must start a fresh editing session. The browser's
+    // native undo stack is only cleared when the contenteditable element is
+    // re-created / toggled, so the reload path rebuilds the body nodes instead
+    // of assigning innerHTML in place (a real Chrome Ctrl+Z after version
+    // restore would otherwise replay pre-restore edits).
+    const staleParagraph = editorSurface().querySelector('p');
+    expect(staleParagraph).not.toBeNull();
+    // The reload path must detach/re-attach the editing host (fresh browser
+    // editing session → native undo stack dropped) instead of assigning
+    // innerHTML in place, which Chromium keeps undoable.
+    const surface = editorSurface();
+    const surfaceParent = surface.parentElement;
+    expect(surfaceParent).not.toBeNull();
+    const detachedLog: string[] = [];
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        if (record.type !== 'childList') continue;
+        for (const removed of record.removedNodes)
+          if (removed === surface) detachedLog.push('removed');
+        for (const added of record.addedNodes)
+          if (added === surface) detachedLog.push('added');
+      }
+    });
+    observer.observe(surfaceParent!, { childList: true });
 
     const updated: AlterDoc = {
       format: 'alter-doc/1',
@@ -484,6 +508,17 @@ describe('legacy DocumentView on the AST backend', () => {
       expect(screen.getByText('外部新内容')).toBeTruthy();
       expect(screen.queryByText('编辑器正文')).toBeNull();
     });
+    // The old body nodes are detached (fresh editing session) and the
+    // contenteditable attribute ends in its normal editable state.
+    observer.disconnect();
+    expect(detachedLog).toEqual(['removed', 'added']);
+    expect(editorSurface()).toBe(surface);
+    expect(editorSurface().contains(staleParagraph)).toBe(false);
+    expect(staleParagraph!.isConnected).toBe(false);
+    expect(editorSurface().getAttribute('contenteditable')).toBe('true');
+    expect(
+      editorSurface().querySelector('[data-block-id="blk_new"]'),
+    ).not.toBeNull();
   });
 });
 

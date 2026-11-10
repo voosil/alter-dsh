@@ -617,6 +617,39 @@ export function Editor({
     else console.warn(`[Space 编辑器] ${message}`);
   }
 
+  /**
+   * Replace the editor body for an external snapshot (version restore,
+   * external revision, draft adoption) and drop the browser's native undo
+   * stack with it.
+   *
+   * Chromium keeps the editing undo history across plain `innerHTML` writes
+   * (and across `contentEditable` toggles), so a Ctrl+Z after a version restore
+   * could write pre-restore edits back into the restored document. Detaching
+   * and re-attaching the editing host starts a fresh editing session; verified
+   * in Chrome that `execCommand('undo')` then reports no undo available. The
+   * node keeps its attributes/classes and returns to the same position, so the
+   * rendered DOM structure and CSS are unchanged.
+   */
+  function resetEditorBody(editor: HTMLElement, html: string) {
+    const hadFocus = document.activeElement === editor;
+    const parent = editor.parentNode;
+    if (parent !== null) {
+      // Detaching the editing host ends the browser's editing session: a
+      // re-attached node starts a fresh native undo stack. Chromium keeps the
+      // old stack across plain `innerHTML` writes (and across contentEditable
+      // toggles), so a post-restore Ctrl+Z could otherwise replay pre-restore
+      // edits. The node keeps its attributes/classes and returns to the same
+      // position, so the rendered DOM is unchanged.
+      const next = editor.nextSibling;
+      parent.removeChild(editor);
+      editor.innerHTML = html;
+      parent.insertBefore(editor, next);
+    } else {
+      editor.innerHTML = html;
+    }
+    if (hadFocus) editor.focus();
+  }
+
   function clearFloatingUi() {
     if (selectionTimerRef.current) {
       window.clearTimeout(selectionTimerRef.current);
@@ -651,7 +684,7 @@ export function Editor({
     const editor = editorRef.current;
     if (!editor) return;
     if (initialDocRef.current !== docId) {
-      editor.innerHTML = initialHtml;
+      resetEditorBody(editor, initialHtml);
       normalizeBlocks(editor);
       initialDocRef.current = docId;
       lastRevisionRef.current = externalRevision;
@@ -663,7 +696,7 @@ export function Editor({
       return;
     }
     if (lastRevisionRef.current !== externalRevision) {
-      editor.innerHTML = initialHtml;
+      resetEditorBody(editor, initialHtml);
       normalizeBlocks(editor);
       lastRevisionRef.current = externalRevision;
       commentAnchorsRef.current = new Map();
