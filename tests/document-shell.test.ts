@@ -550,6 +550,17 @@ describe('document menu', () => {
     await waitFor(() => expect(toast).toHaveBeenCalledWith('链接已复制'));
   });
 
+  it('opens the history tab from the document menu', async () => {
+    renderView();
+    await waitForEditor();
+    await openDocumentMenu();
+    await clickMenuItem('历史记录');
+    await waitFor(() => {
+      const tab = screen.getByRole('tab', { name: /历史/ });
+      expect(tab.getAttribute('aria-selected')).toBe('true');
+    });
+  });
+
   it('creates a child document and navigates to it', async () => {
     const { createNode, addNodeToState, navigate } = renderView();
     await waitForEditor();

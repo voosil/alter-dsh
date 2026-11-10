@@ -20,9 +20,12 @@ export interface DocumentSidePanelProps {
   service: SpaceService;
   client: SpaceDocumentClient;
   onRestored: (revision: number) => void;
+  /** Controlled visible tab; falls back to local state when omitted. */
+  tab?: Tab;
+  onTabChange?: (tab: Tab) => void;
 }
 
-type Tab = 'comments' | 'history';
+export type Tab = 'comments' | 'history';
 
 type Status =
   | { kind: 'idle' }
@@ -45,8 +48,15 @@ export function DocumentSidePanel({
   service,
   client,
   onRestored,
+  tab: tabProp,
+  onTabChange,
 }: DocumentSidePanelProps) {
-  const [tab, setTab] = useState<Tab>('comments');
+  const [internalTab, setInternalTab] = useState<Tab>('comments');
+  const tab = tabProp ?? internalTab;
+  const setTab = (next: Tab): void => {
+    if (onTabChange === undefined) setInternalTab(next);
+    else onTabChange(next);
+  };
   const [comments, setComments] = useState<Comment[]>([]);
   const [versions, setVersions] = useState<DocVersion[]>([]);
   const [draft, setDraft] = useState('');

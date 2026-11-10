@@ -28,7 +28,7 @@
  *    surviving blocks and `insert_blocks` for added/regenerated runs (one
  *    insertion per consecutive run), so the resulting order matches `newDoc`.
  *
- * Every generated batch is bounded by the Host limit (64 operations). Larger
+ * Every generated batch is bounded by the Host batch cap (8192 operations). Larger
  * edits throw {@link DocumentDiffError} with a readable Chinese message
  * ("变更过大") so the editor can ask the user to split the change instead of
  * surfacing a raw Host failure.

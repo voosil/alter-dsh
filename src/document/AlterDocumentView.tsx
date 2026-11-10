@@ -25,6 +25,7 @@ import {
   ArchiveRestore,
   Download,
   FilePlus2,
+  History,
   Link2,
   MessageSquare,
 } from 'lucide-react';
@@ -110,6 +111,7 @@ export function AlterDocumentView({
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
   const [title, setTitle] = useState(node.title);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [panelTab, setPanelTab] = useState<'comments' | 'history'>('comments');
   const [banner, setBanner] = useState<DraftBanner | null>(null);
   const [bannerError, setBannerError] = useState<string | null>(null);
   const [restore, setRestore] = useState<EditorRestoreRequest | null>(null);
@@ -568,6 +570,16 @@ export function AlterDocumentView({
       onSelect: () => void createChild(),
     },
     {
+      id: 'history',
+      label: '历史记录',
+      icon: <History />,
+      separatorBefore: true,
+      onSelect: () => {
+        setPanelTab('history');
+        setPanelOpen(true);
+      },
+    },
+    {
       id: 'export-markdown',
       label: '导出 Markdown',
       icon: <Download />,
@@ -789,6 +801,8 @@ export function AlterDocumentView({
             service={service}
             client={client}
             onRestored={handleRestored}
+            tab={panelTab}
+            onTabChange={setPanelTab}
           />
         ) : null}
       </div>

@@ -17,7 +17,7 @@ updated: 2026-11-10
 | [agent-collaborators.md](agent-collaborators.md) | Space AI 协作者创建：`#/settings` 设置页复用、协作者创建/选择链路、安装与产物 | 已验证（浏览器点击链路未自动化） |
 | [s0-document-tools.md](s0-document-tools.md) | 文档模型 S0/S1：工具面、Tiptap 编辑器、资产、评论/历史、撤销、GC、备份 | 已验收（真机 8/8；浏览器视觉待人工）；编辑器体验重建见 [editor-experience-p0-p6.md](editor-experience-p0-p6.md) |
 | [document-editor-robustness.md](document-editor-robustness.md) | 即时编辑器健壮性：数据安全、并发恢复、输入保真、保存可行性与规模观测 | 部分落地（P0 保存生命周期、P2 评论/历史、P5 patch）；其余按清单推进 |
-| [editor-experience-p0-p6.md](editor-experience-p0-p6.md) | 编辑器体验重建：旧 HTML 编辑器体验基线、单一 AST 不变量、P0–P6 分阶段验收与最终复验规则 | 进行中：P0/P1/P2/P5 主体完成（P0-4/P1-4/P2-3 待联调），P3/P4 部分，P6 未开始 |
+| [editor-experience-p0-p6.md](editor-experience-p0-p6.md) | 编辑器体验重建：旧 HTML 编辑器体验基线、单一 AST 不变量、P0–P6 分阶段验收与最终复验规则 | P0–P6 主体实现并完成自动化验收；独立复验 PASS-WITH-GAPS，遗留 `[~]` 项见清单 |
 
 ## 维护规则
 
