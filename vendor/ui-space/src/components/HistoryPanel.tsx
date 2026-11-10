@@ -6,7 +6,7 @@ import { documentModelOf } from '../document-model';
 import { alterDocToEditorHtml, parseDocumentContent } from '@alter-space/legacy-adapter';
 import { formatShortDate } from '../utils/date';
 import { diffHtml } from '../utils/diff';
-import { Dialog } from '@alter/ui-system';
+import { Button, Dialog } from '@alter/ui-system';
 import { EmptyState } from './EmptyState';
 import editorStyles from './editor/Editor.module.css';
 import styles from './HistoryPanel.module.css';
@@ -29,6 +29,8 @@ export function HistoryPanel({
   open,
   doc,
   baseRevision,
+  hasUnsavedChanges,
+  onPersistDraft,
   onClose,
   onRestored,
 }: {
@@ -36,6 +38,10 @@ export function HistoryPanel({
   doc: SpaceNode;
   /** Current document revision used as the restore CAS base. */
   baseRevision: number;
+  /** Live check for unsaved editor changes (evaluated on restore click). */
+  hasUnsavedChanges?: () => boolean;
+  /** Force a crash-draft write before restoring (B4). */
+  onPersistDraft?: () => void;
   onClose: () => void;
   onRestored: () => void;
 }) {
@@ -44,6 +50,7 @@ export function HistoryPanel({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loadedDocId, setLoadedDocId] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(false);
+  const [confirmRestoreOpen, setConfirmRestoreOpen] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -87,6 +94,16 @@ export function HistoryPanel({
     (selected.content === doc.content && selected.title === doc.title);
 
   async function restore() {
+    if (!selected) return;
+    if (hasUnsavedChanges?.() === true) {
+      // B4: never replace unsaved edits without an explicit confirmation.
+      setConfirmRestoreOpen(true);
+      return;
+    }
+    await performRestore();
+  }
+
+  async function performRestore() {
     if (!selected) return;
     const client = documentModelOf(service);
     if (client?.restoreVersion === undefined) {
@@ -184,6 +201,36 @@ export function HistoryPanel({
           description="继续编辑并保存后，这里会出现可以还原的版本。"
         />
       )}
+      <Dialog
+        open={confirmRestoreOpen}
+        onClose={() => setConfirmRestoreOpen(false)}
+        title="存在未保存修改"
+        size="small"
+        footer={
+          <>
+            <Button
+              variant="secondary"
+              onClick={() => setConfirmRestoreOpen(false)}
+            >
+              取消
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => {
+                setConfirmRestoreOpen(false);
+                onPersistDraft?.();
+                void performRestore();
+              }}
+            >
+              继续恢复
+            </Button>
+          </>
+        }
+      >
+        <p>
+          当前文档存在未保存修改。将先把内容保存为本地草稿，再恢复所选历史版本；草稿仍可在重新打开文档时恢复。
+        </p>
+      </Dialog>
     </Dialog>
   );
 }

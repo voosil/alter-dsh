@@ -325,6 +325,9 @@ describe('legacy DocumentView on the AST backend', () => {
     expect(input.ops.length).toBeGreaterThan(0);
     expect(JSON.stringify(input.ops)).toContain('改后的正文');
     expect(refresh).toHaveBeenCalled();
+    // A4: the save echo must not recreate the contentEditable DOM.
+    expect(editorSurface()).toBe(surface);
+    expect(surface.getAttribute('contenteditable')).toBe('true');
   });
 
   it('shows the legacy 保存失败，重试 action when the save fails', async () => {

@@ -234,6 +234,32 @@ describe('legacy adapter: AST ↔ old editor HTML', () => {
     }
   });
 
+  it('round-trips a near-limit document (≈4990 blocks) without truncation', () => {
+    const blocks = Array.from({ length: 4990 }, (_, index) =>
+      block(`blk_${index}`, 'paragraph', {}, {
+        content: [{ type: 'text', text: `段${index}` }],
+      }),
+    );
+    const doc: AlterDoc = {
+      format: 'alter-doc/1',
+      schemaVersion: 1,
+      revision: 1,
+      blocks,
+    };
+    const start = performance.now();
+    const html = alterDocToEditorHtml(doc);
+    const parsed = parseLegacyHtml(html);
+    const elapsed = performance.now() - start;
+    expect(parsed.blocks).toHaveLength(4990);
+    expect(parsed.blocks[0]?.id).toBe('blk_0');
+    expect(parsed.blocks.at(-1)?.id).toBe('blk_4989');
+    expect(normalize(parsed.blocks)).toEqual(normalize(blocks));
+    // Recorded for the acceptance notes (no brittle threshold).
+    console.log(
+      `adapter 4990-block round-trip: ${elapsed.toFixed(1)}ms (HTML ${html.length} chars)`,
+    );
+  });
+
   it('keeps block ids stable across a second round-trip', () => {
     const first = parseLegacyHtml(
       alterDocToEditorHtml(richDoc(), { docPath }),

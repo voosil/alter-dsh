@@ -24,13 +24,18 @@ import type { Comment, SpaceNode } from '@alter/protocol';
 import {
   alterDocToEditorHtml,
   anchorForQuote,
-  computeAstOperations,
-  materializeLegacyAssets,
+  clearLegacyDraft,
+  createLegacySaveController,
+  legacyDraftMatchesSnapshot,
   parseDocumentContent,
   parseLegacyHtml,
-  readRevisionOf,
+  readDocumentSnapshot,
+  readLegacyDraft,
   serializeDocument,
   type AlterDoc,
+  type LegacyDocumentDraft,
+  type LegacySaveController,
+  type LegacySaveSnapshot,
 } from '@alter-space/legacy-adapter';
 import { useSpaceContext } from '../runtime';
 import { documentModelOf } from '../document-model';
@@ -43,7 +48,13 @@ import { CommentRail } from '../components/CommentRail';
 import { DocumentComments } from '../components/DocumentComments';
 import { HistoryPanel } from '../components/HistoryPanel';
 import { HistoryCommentsModal } from '../components/HistoryCommentsModal';
-import { IconButton, Menu, type MenuAction } from '@alter/ui-system';
+import {
+  Button,
+  Dialog,
+  IconButton,
+  Menu,
+  type MenuAction,
+} from '@alter/ui-system';
 import { WorkbenchToggle } from '@alter/ui-workbench';
 import { DirectoryButton } from '../components/DirectoryButton';
 import styles from './DocumentView.module.css';
@@ -74,19 +85,6 @@ const EMPTY_AST: AlterDoc = {
 /** Parse stored `node.content` (always `alter-doc/1`) defensively. */
 function astOf(content: string): AlterDoc {
   return parseDocumentContent(content) ?? EMPTY_AST;
-}
-
-/** One idempotency key per save attempt (retries reuse it via the diff). */
-function createSaveKey(): string {
-  const cryptoApi = (
-    globalThis as { crypto?: { randomUUID?: () => string } }
-  ).crypto;
-  if (cryptoApi !== undefined && typeof cryptoApi.randomUUID === 'function') {
-    return `legacy-${cryptoApi.randomUUID()}`;
-  }
-  return `legacy-${Date.now().toString(36)}${Math.random()
-    .toString(36)
-    .slice(2)}`;
 }
 
 export function DocumentView({
@@ -142,9 +140,16 @@ export function DocumentView({
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>(
     'saved',
   );
+  const [conflictPrompt, setConflictPrompt] = useState<{
+    message: string;
+    serverRevision?: number;
+  } | null>(null);
+  const [draftPrompt, setDraftPrompt] = useState<{
+    draft: LegacyDocumentDraft;
+    kind: 'same' | 'conflict';
+    latest?: LegacySaveSnapshot;
+  } | null>(null);
   const [editorRevision, setEditorRevision] = useState(0);
-  const timerRef = useRef<number | null>(null);
-  const dirtyRef = useRef(false);
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const childrenTabRef = useRef<HTMLButtonElement>(null);
   const commentsTabRef = useRef<HTMLButtonElement>(null);
@@ -154,7 +159,89 @@ export function DocumentView({
   const lastSavedTitleRef = useRef(node.title);
   const loadedContentRef = useRef(node.content);
   const aliveRef = useRef(true);
-  const savingRef = useRef(false);
+  const controllerRef = useRef<LegacySaveController | null>(null);
+  const draftCheckedRef = useRef(false);
+  /** Project one AST snapshot into the legacy editor HTML. */
+  function editorHtmlOf(doc: AlterDoc): string {
+    return alterDocToEditorHtml(doc, {
+      docPath: (docId) => docPath(spaceId, docId),
+    });
+  }
+
+  /** Adopt one server snapshot into the editor (external reload/restore). */
+  function applyExternalSnapshot(snapshot: LegacySaveSnapshot): void {
+    lastSavedDocRef.current = snapshot.doc;
+    baseRevisionRef.current = snapshot.revision;
+    lastSavedTitleRef.current = snapshot.title;
+    loadedContentRef.current = serializeDocument(snapshot.doc);
+    const html = editorHtmlOf(snapshot.doc);
+    draftRef.current = { title: snapshot.title, content: html };
+    if (!aliveRef.current) return;
+    setRevision(snapshot.revision);
+    setEditorHtml(html);
+    setTitle(snapshot.title);
+    setBodyHasContent(hasBodyContent(html));
+    setEditorRevision((value) => value + 1);
+    setSaveState('saved');
+  }
+
+  if (controllerRef.current === null) {
+    controllerRef.current = createLegacySaveController({
+      docId: node.id,
+      initial: {
+        doc: mountDoc,
+        revision: mountDoc.revision,
+        title: node.title,
+      },
+      getClient: () => documentModelOf(service),
+      capture: () => ({
+        html: draftRef.current.content,
+        title: draftRef.current.title,
+      }),
+      onStatus: (status) => {
+        if (!aliveRef.current) return;
+        setSaveState(
+          status.kind === 'failed' || status.kind === 'conflict'
+            ? 'error'
+            : status.kind === 'saving'
+              ? 'saving'
+              : 'saved',
+        );
+        if (status.kind === 'conflict') {
+          setConflictPrompt({
+            message: status.message,
+            ...(status.serverRevision === undefined
+              ? {}
+              : { serverRevision: status.serverRevision }),
+          });
+        }
+      },
+      onBaseChanged: (snapshot) => {
+        lastSavedDocRef.current = snapshot.doc;
+        baseRevisionRef.current = snapshot.revision;
+        lastSavedTitleRef.current = snapshot.title;
+      },
+      onSaved: (snapshot) => {
+        lastSavedDocRef.current = snapshot.doc;
+        baseRevisionRef.current = snapshot.revision;
+        lastSavedTitleRef.current = snapshot.title;
+        loadedContentRef.current = serializeDocument(snapshot.doc);
+        if (!aliveRef.current) return;
+        setRevision(snapshot.revision);
+        setEditorHtml(editorHtmlOf(snapshot.doc));
+        setBodyHasContent(hasBodyContent(draftRef.current.content));
+        refresh();
+      },
+      onExternalSnapshot: applyExternalSnapshot,
+      notify: (message) => {
+        if (aliveRef.current) toast(message);
+      },
+      saveTitle: async (title) => {
+        await service.saveNode(node.id, { title });
+      },
+    });
+  }
+
   const quoteSavesRef = useRef(new Map<string, PendingQuoteSave>());
   const pageRef = useRef<HTMLElement>(null);
   const [anchorRoot, setAnchorRoot] = useState<HTMLElement | null>(null);
@@ -219,44 +306,115 @@ export function DocumentView({
     aliveRef.current = true;
     return () => {
       aliveRef.current = false;
-      if (timerRef.current) window.clearTimeout(timerRef.current);
-      // Fire-and-forget flush: the old view persisted the latest draft on
-      // unmount; the AST path saves through Document Operations instead.
-      if (dirtyRef.current) void flush();
+      // Persist a final crash draft and try one last save attempt.
+      controllerRef.current?.dispose();
     };
   }, [service, node.id]);
 
   useEffect(() => {
-    if (!dirtyRef.current) {
+    if (!controllerRef.current?.hasPending()) {
       setTitle(node.title);
       draftRef.current.title = node.title;
     }
   }, [node.title]);
 
   useEffect(() => {
-    if (dirtyRef.current) return;
+    const current = controllerRef.current;
+    if (current === null || current.hasPending()) return;
     if (node.content === loadedContentRef.current) return;
     loadedContentRef.current = node.content;
     const doc = astOf(node.content);
-    lastSavedDocRef.current = doc;
-    lastSavedTitleRef.current = node.title;
-    const html = alterDocToEditorHtml(doc, {
-      docPath: (docId) => docPath(spaceId, docId),
-    });
-    if (doc.revision === baseRevisionRef.current) {
+    const snapshot: LegacySaveSnapshot = {
+      doc,
+      revision: doc.revision,
+      title: node.title,
+    };
+    const ownEcho = doc.revision === current.getBase().revision;
+    current.adopt(snapshot);
+    if (ownEcho) {
       // Own-save echo at the revision we already adopted (the Host may
       // canonicalize attrs). Keep the editor DOM and cursor untouched.
-      setEditorHtml(html);
+      setEditorHtml(editorHtmlOf(doc));
       return;
     }
     // External revision (version restore, another writer): reload the editor.
-    baseRevisionRef.current = doc.revision;
-    setRevision(doc.revision);
-    draftRef.current = { title: node.title, content: html };
-    setEditorHtml(html);
-    setBodyHasContent(hasBodyContent(html));
-    setEditorRevision((value) => value + 1);
+    applyExternalSnapshot(snapshot);
   }, [node.content, node.title, spaceId]);
+
+  // Force a crash-draft write before the page is hidden/unloaded.
+  useEffect(() => {
+    const onVisibilityChange = (): void => {
+      if (document.visibilityState === 'hidden') {
+        controllerRef.current?.persistDraftNow();
+      }
+    };
+    const onPageHide = (): void => {
+      controllerRef.current?.persistDraftNow();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('pagehide', onPageHide);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('pagehide', onPageHide);
+    };
+  }, []);
+
+  // Crash-draft recovery on open: same revision → restore/discard; stale
+  // revision → keep-local-overwrite / discard-and-reload. Never silent.
+  useEffect(() => {
+    if (draftCheckedRef.current) return;
+    draftCheckedRef.current = true;
+    const draft = readLegacyDraft(node.id);
+    if (draft === undefined) return;
+    if (legacyDraftMatchesSnapshot(draft, { doc: mountDoc, title: node.title })) {
+      // The save landed but the receipt was lost: nothing to resolve.
+      clearLegacyDraft(node.id);
+      return;
+    }
+    if (draft.baseRevision === mountDoc.revision) {
+      setDraftPrompt({ draft, kind: 'same' });
+      return;
+    }
+    void (async () => {
+      const client = documentModelOf(service);
+      let latest: LegacySaveSnapshot | undefined;
+      if (client !== undefined) {
+        try {
+          const raw = readDocumentSnapshot(await client.get(node.id));
+          if (raw !== undefined) {
+            latest = {
+              doc: raw.doc,
+              revision: raw.revision,
+              title: raw.title ?? node.title,
+            };
+          }
+        } catch {
+          latest = undefined;
+        }
+      }
+      if (draft.baseRevision === (latest?.revision ?? mountDoc.revision)) {
+        setDraftPrompt({ draft, kind: 'same', latest });
+      } else {
+        setDraftPrompt({ draft, kind: 'conflict', latest });
+      }
+    })();
+  }, [node.id]);
+
+  // While a recovery/conflict dialog is open the editor must not accept
+  // input; only the `contenteditable` attribute changes (no DOM/CSS change).
+  useEffect(() => {
+    const page = pageRef.current;
+    if (page === null) return;
+    const surface = page.querySelector<HTMLElement>(
+      '[role="textbox"][aria-label="文档正文"]',
+    );
+    if (surface === null) return;
+    const locked = draftPrompt !== null || conflictPrompt !== null;
+    surface.setAttribute('contenteditable', locked ? 'false' : 'true');
+    return () => {
+      surface.setAttribute('contenteditable', 'true');
+    };
+  }, [draftPrompt, conflictPrompt]);
 
   useEffect(() => {
     const saves = quoteSavesRef.current;
@@ -280,97 +438,39 @@ export function DocumentView({
     [comments],
   );
 
-  function scheduleSave() {
-    dirtyRef.current = true;
-    setSaveState('saving');
-    if (timerRef.current) window.clearTimeout(timerRef.current);
-    timerRef.current = window.setTimeout(() => {
-      void flush();
-    }, 700);
+  function scheduleSave(): void {
+    controllerRef.current?.notifyChange();
   }
 
-  async function flush() {
-    if (timerRef.current) {
-      window.clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-    if (!dirtyRef.current || savingRef.current) return;
-    const client = documentModelOf(service);
-    if (client === undefined) {
-      setSaveState('error');
-      toast('文档模型客户端未装配：请刷新页面或重新安装插件');
-      return;
-    }
-    savingRef.current = true;
-    dirtyRef.current = false;
-    const title = draftRef.current.title.trim();
-    try {
-      // Inline data: URLs (pasted images/files) must become assets first.
-      const materialized = await materializeLegacyAssets(
-        draftRef.current.content,
-        client,
-      );
-      if (materialized.warnings.length > 0) {
-        // Never replace an un-uploaded inline image/file with a placeholder:
-        // keep the draft dirty so the user can retry (visible error state).
-        dirtyRef.current = true;
-        if (aliveRef.current) {
-          setSaveState('error');
-          toast(materialized.warnings[0]!);
-        }
-        return;
-      }
-      const parsed = parseLegacyHtml(materialized.html);
-      if (parsed.warnings.length > 0) toast(parsed.warnings[0]!);
-      const baseDoc = lastSavedDocRef.current;
-      const nextDoc: AlterDoc = {
-        format: 'alter-doc/1',
-        schemaVersion: 1,
-        revision: baseRevisionRef.current,
-        blocks: parsed.blocks,
-      };
-      const ops = computeAstOperations(baseDoc, nextDoc);
-      let savedRevision = baseRevisionRef.current;
-      if (ops.length > 0) {
-        const result = await client.applyOperations({
-          docId: node.id,
-          baseRevision: baseRevisionRef.current,
-          ops,
-          idempotencyKey: createSaveKey(),
-        });
-        savedRevision = readRevisionOf(result) ?? baseRevisionRef.current + 1;
-      }
-      if (title !== lastSavedTitleRef.current) {
-        await service.saveNode(node.id, { title });
-        lastSavedTitleRef.current = title;
-      }
-      const savedDoc: AlterDoc = { ...nextDoc, revision: savedRevision };
-      lastSavedDocRef.current = savedDoc;
-      baseRevisionRef.current = savedRevision;
-      loadedContentRef.current = serializeDocument(savedDoc);
-      if (aliveRef.current) {
-        setRevision(savedRevision);
-        setEditorHtml(
-          alterDocToEditorHtml(savedDoc, {
-            docPath: (docId) => docPath(spaceId, docId),
-          }),
-        );
-        setSaveState(dirtyRef.current ? 'saving' : 'saved');
-      }
-      refresh();
-    } catch (cause) {
-      dirtyRef.current = true;
-      if (aliveRef.current) {
-        setSaveState('error');
-        const message =
-          cause instanceof Error ? cause.message : '保存失败，请重试';
-        if (/conflict|已被修改/i.test(message)) {
-          toast('文档已被其他修改，保存失败；本地内容仍保留，可重试');
-        }
-      }
-    } finally {
-      savingRef.current = false;
-    }
+  async function flush(): Promise<void> {
+    await controllerRef.current?.flush();
+  }
+
+  function retrySave(): void {
+    void controllerRef.current?.retry();
+  }
+
+  /** Force a crash-draft write (history restore / unload paths). */
+  function persistDraftNow(): void {
+    controllerRef.current?.persistDraftNow();
+  }
+
+  /** Download the current draft as an HTML recovery file. */
+  function downloadDraft(): void {
+    const draft = controllerRef.current?.exportDraft();
+    if (draft === undefined) return;
+    const blob = new Blob([draft.html], {
+      type: 'text/html;charset=utf-8',
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${(draft.title || '无标题').replace(
+      /[\\/:*?"<>|]/g,
+      ' ',
+    )}.draft.html`;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 
   function handleTitleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -506,22 +606,116 @@ export function DocumentView({
     if (!fresh) return;
     updateNodeInState(fresh);
     const doc = astOf(fresh.content);
-    lastSavedDocRef.current = doc;
-    baseRevisionRef.current = doc.revision;
-    lastSavedTitleRef.current = fresh.title;
+    const snapshot: LegacySaveSnapshot = {
+      doc,
+      revision: doc.revision,
+      title: fresh.title,
+    };
     loadedContentRef.current = fresh.content;
-    const html = alterDocToEditorHtml(doc, {
-      docPath: (docId) => docPath(spaceId, docId),
-    });
-    draftRef.current = { title: fresh.title, content: html };
-    setRevision(doc.revision);
-    setEditorHtml(html);
-    setTitle(fresh.title);
-    setBodyHasContent(hasBodyContent(html));
-    dirtyRef.current = false;
-    setSaveState('saved');
-    setEditorRevision((revision) => revision + 1);
+    // Keep the crash draft: the user may want to restore their unsaved edits
+    // again after inspecting the historical version.
+    controllerRef.current?.adopt(snapshot);
+    applyExternalSnapshot(snapshot);
     refresh();
+  }
+
+  /** Draft recovery: restore the local draft (same revision). */
+  function restoreDraft(): void {
+    const prompt = draftPrompt;
+    if (prompt === null) return;
+    const snapshot: LegacySaveSnapshot = prompt.latest ?? {
+      doc: mountDoc,
+      revision: mountDoc.revision,
+      title: node.title,
+    };
+    const controller = controllerRef.current;
+    controller?.adopt(snapshot);
+    const html = prompt.draft.html;
+    draftRef.current = { title: prompt.draft.title, content: html };
+    setTitle(prompt.draft.title);
+    setBodyHasContent(hasBodyContent(html));
+    setEditorHtml(html);
+    setEditorRevision((value) => value + 1);
+    setSaveState('saved');
+    setDraftPrompt(null);
+    controller?.notifyChange();
+  }
+
+  /** Draft recovery: discard the local draft. */
+  function discardDraft(): void {
+    clearLegacyDraft(node.id);
+    setDraftPrompt(null);
+  }
+
+  /** Stale draft: keep local content and save it over the latest revision. */
+  async function keepDraftOverwrite(): Promise<void> {
+    const prompt = draftPrompt;
+    if (prompt === null) return;
+    let latest = prompt.latest;
+    if (latest === undefined) {
+      const client = documentModelOf(service);
+      if (client !== undefined) {
+        try {
+          const raw = readDocumentSnapshot(await client.get(node.id));
+          if (raw !== undefined) {
+            latest = {
+              doc: raw.doc,
+              revision: raw.revision,
+              title: raw.title ?? node.title,
+            };
+          }
+        } catch {
+          latest = undefined;
+        }
+      }
+    }
+    if (latest === undefined) {
+      toast('无法读取服务端最新内容，本地草稿已保留');
+      return;
+    }
+    const controller = controllerRef.current;
+    controller?.adoptForOverwrite(latest);
+    const html = prompt.draft.html;
+    draftRef.current = { title: prompt.draft.title, content: html };
+    setTitle(prompt.draft.title);
+    setBodyHasContent(hasBodyContent(html));
+    setEditorHtml(html);
+    setEditorRevision((value) => value + 1);
+    setDraftPrompt(null);
+    controller?.notifyChange();
+    void controller?.flush();
+  }
+
+  /** Stale draft: discard local content and reload the latest server state. */
+  async function discardDraftAndReload(): Promise<void> {
+    setDraftPrompt(null);
+    const controller = controllerRef.current;
+    const reloaded = await controller?.reloadServerSnapshot({ clearDraft: true });
+    if (reloaded !== undefined) return;
+    clearLegacyDraft(node.id);
+    applyExternalSnapshot({
+      doc: mountDoc,
+      revision: mountDoc.revision,
+      title: node.title,
+    });
+  }
+
+  /** Conflict: keep local edits and save them over the latest revision. */
+  function keepLocalConflict(): void {
+    setConflictPrompt(null);
+    void controllerRef.current?.keepLocalOverwrite();
+  }
+
+  /** Conflict: reload the latest server revision and discard local edits. */
+  async function discardConflict(): Promise<void> {
+    setConflictPrompt(null);
+    const reloaded = await controllerRef.current?.reloadServerSnapshot({
+      clearDraft: true,
+    });
+    if (reloaded === undefined) {
+      controllerRef.current?.persistDraftNow();
+      toast('无法读取服务端最新内容，本地草稿已保留');
+    }
   }
 
   async function copyLink() {
@@ -689,7 +883,7 @@ export function DocumentView({
             <button
               type="button"
               className={styles.saveError}
-              onClick={() => void flush()}
+              onClick={retrySave}
             >
               保存失败，重试
             </button>
@@ -794,6 +988,7 @@ export function DocumentView({
                   onCommentAtCaretChange={setCaretCommentId}
                   onCommentQuotesChange={handleCommentQuotesChange}
                   onCommentedTextClick={() => setCommentsOpen(true)}
+                  onNotice={(message) => toast(message)}
                 />
               </div>
 
@@ -954,6 +1149,10 @@ export function DocumentView({
           open
           doc={node}
           baseRevision={revision}
+          hasUnsavedChanges={() =>
+            controllerRef.current?.hasPending() ?? false
+          }
+          onPersistDraft={persistDraftNow}
           onClose={() => setHistoryOpen(false)}
           onRestored={() => void handleRestored()}
         />
@@ -963,6 +1162,91 @@ export function DocumentView({
         comments={comments}
         onClose={() => setHistoryCommentsOpen(false)}
       />
+      <Dialog
+        open={draftPrompt !== null}
+        onClose={() => setDraftPrompt(null)}
+        title={
+          draftPrompt?.kind === 'conflict'
+            ? '检测到旧版本草稿'
+            : '发现未保存草稿'
+        }
+        size="small"
+        footer={
+          draftPrompt?.kind === 'conflict' ? (
+            <>
+              <Button variant="secondary" onClick={() => setDraftPrompt(null)}>
+                取消
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => void discardDraftAndReload()}
+              >
+                丢弃并重载
+              </Button>
+              <Button variant="secondary" onClick={downloadDraft}>
+                导出草稿
+              </Button>
+              <Button variant="primary" onClick={() => void keepDraftOverwrite()}>
+                保留本地并覆盖
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button variant="secondary" onClick={() => setDraftPrompt(null)}>
+                取消
+              </Button>
+              <Button variant="secondary" onClick={discardDraft}>
+                丢弃
+              </Button>
+              <Button variant="primary" onClick={restoreDraft}>
+                恢复
+              </Button>
+            </>
+          )
+        }
+      >
+        <p>
+          {draftPrompt?.kind === 'conflict'
+            ? '发现基于旧版本的未保存草稿，服务端已有更新。可保留本地草稿并覆盖，或丢弃后重载最新内容。'
+            : '检测到上次未保存的内容，可恢复本地草稿或丢弃。'}
+        </p>
+        {draftPrompt === null ? null : (
+          <p>
+            {draftPrompt.draft.title.trim() || '无标题'} ·{' '}
+            {draftPrompt.kind === 'conflict'
+              ? '基于 revision ' + String(draftPrompt.draft.baseRevision)
+              : '未保存'}
+          </p>
+        )}
+      </Dialog>
+      <Dialog
+        open={conflictPrompt !== null}
+        onClose={() => setConflictPrompt(null)}
+        title="文档已被其他修改"
+        size="small"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setConflictPrompt(null)}>
+              仅保留草稿
+            </Button>
+            <Button variant="secondary" onClick={downloadDraft}>
+              导出草稿
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => void discardConflict()}
+            >
+              重新加载并丢弃本地
+            </Button>
+            <Button variant="primary" onClick={keepLocalConflict}>
+              保留本地草稿并覆盖
+            </Button>
+          </>
+        }
+      >
+        <p>{conflictPrompt?.message ?? ''}</p>
+        <p>本地内容已写入草稿；选择覆盖会基于最新 revision 重新保存。</p>
+      </Dialog>
     </section>
   );
 }

@@ -4,7 +4,9 @@ import {
   useRef,
   useState,
   type ClipboardEvent,
+  type DragEvent,
   type FocusEvent,
+  type FormEvent,
   type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
@@ -47,6 +49,8 @@ import {
   docLinkElement,
   findQuoteOffsets,
   insertInlineNode,
+  insertPlainTextAtCaret,
+  insertSanitizedHtml,
   isCaretAtEnd,
   isWebUrl,
   lineElement,
@@ -56,7 +60,9 @@ import {
   normalizeTodoCaret,
   offsetAtPoint,
   placeCaretAtEnd,
+  placeCaretAtStart,
   pointAtOffset,
+  sanitizePastedHtml,
   selectionRects,
   setDocLinkArchived,
   textEditBetween,
@@ -432,6 +438,8 @@ export function Editor({
   onCommentAtCaretChange,
   onCommentQuotesChange,
   onCommentedTextClick,
+  onNotice,
+  onCompositionChange,
 }: {
   docId: string;
   initialHtml: string;
@@ -446,6 +454,10 @@ export function Editor({
   onCommentAtCaretChange?: (id: string | null) => void;
   onCommentQuotesChange?: (updates: { id: string; quote: string }[]) => void;
   onCommentedTextClick?: () => void;
+  /** Report simplified/dropped clipboard content (defaults to console.warn). */
+  onNotice?: (message: string) => void;
+  /** Pause the save layer while an IME composition is in progress. */
+  onCompositionChange?: (composing: boolean) => void;
 }) {
   const editorRef = useRef<HTMLDivElement>(null);
   const savedRangeRef = useRef<Range | null>(null);
@@ -457,6 +469,7 @@ export function Editor({
   const slashMenuRef = useRef<HTMLDivElement>(null);
   const initialDocRef = useRef<string | null>(null);
   const lastRevisionRef = useRef(externalRevision);
+  const composingRef = useRef(false);
   const [slash, setSlash] = useState<SlashState | null>(null);
   const [toolbar, setToolbar] = useState<ToolbarState | null>(null);
   const [blockAnchor, setBlockAnchor] = useState<HTMLElement | null>(null);
@@ -480,10 +493,14 @@ export function Editor({
   const onCommentAtCaretChangeRef = useRef(onCommentAtCaretChange);
   const onCommentQuotesChangeRef = useRef(onCommentQuotesChange);
   const onCommentedTextClickRef = useRef(onCommentedTextClick);
+  const onNoticeRef = useRef(onNotice);
+  const onCompositionChangeRef = useRef(onCompositionChange);
   commentsRef.current = comments;
   onCommentAtCaretChangeRef.current = onCommentAtCaretChange;
   onCommentQuotesChangeRef.current = onCommentQuotesChange;
   onCommentedTextClickRef.current = onCommentedTextClick;
+  onNoticeRef.current = onNotice;
+  onCompositionChangeRef.current = onCompositionChange;
 
   const updateCaretComment = useCallback(() => {
     const editor = editorRef.current;
@@ -584,6 +601,52 @@ export function Editor({
     setContentTick((tick) => tick + 1);
   }
 
+  /** Make sure the editor owns a caret before inserting plain content. */
+  function ensureCaret() {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const selection = window.getSelection();
+    if (selection?.rangeCount && editor.contains(selection.anchorNode)) return;
+    placeCaretAtEnd(editor);
+  }
+
+  /** Surface a non-blocking notice (falls back to console.warn). */
+  function notifyNotice(message: string) {
+    const notice = onNoticeRef.current;
+    if (notice) notice(message);
+    else console.warn(`[Space 编辑器] ${message}`);
+  }
+
+  function clearFloatingUi() {
+    if (selectionTimerRef.current) {
+      window.clearTimeout(selectionTimerRef.current);
+      selectionTimerRef.current = null;
+    }
+    if (linkTimerRef.current) {
+      window.clearTimeout(linkTimerRef.current);
+      linkTimerRef.current = null;
+    }
+    setSlash(null);
+    setToolbar(null);
+    setLinkBar(null);
+    setBlockAnchor(null);
+  }
+
+  // IME composition: suppress floating UI and half-composed saves.
+  function handleCompositionStart() {
+    composingRef.current = true;
+    onCompositionChangeRef.current?.(true);
+    clearFloatingUi();
+  }
+
+  function handleCompositionEnd() {
+    composingRef.current = false;
+    onCompositionChangeRef.current?.(false);
+    // Some browsers do not emit a trailing non-composing input event; finish
+    // the composition with one final change notification.
+    notifyChange();
+  }
+
   useEffect(() => {
     const editor = editorRef.current;
     if (!editor) return;
@@ -614,6 +677,10 @@ export function Editor({
     function updateToolbar() {
       const editor = editorRef.current;
       if (!editor) return;
+      if (composingRef.current) {
+        setToolbar(null);
+        return;
+      }
       const rects = selectionRects(editor);
       if (!rects) {
         setToolbar(null);
@@ -653,6 +720,10 @@ export function Editor({
     function handleSelectionChange() {
       const editor = editorRef.current;
       if (!editor) return;
+      if (composingRef.current) {
+        setToolbar(null);
+        return;
+      }
       normalizeTodoCaret(editor);
       updateCaretComment();
       const selection = window.getSelection();
@@ -1006,6 +1077,14 @@ export function Editor({
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    // IME composition owns the keystrokes (shortcuts must not fire mid-word).
+    const nativeKey = event.nativeEvent as globalThis.KeyboardEvent;
+    if (
+      composingRef.current ||
+      nativeKey.isComposing === true ||
+      nativeKey.keyCode === 229
+    )
+      return;
     const editor = editorRef.current;
     if (editor) {
       normalizeTodoCaret(editor);
@@ -1032,15 +1111,53 @@ export function Editor({
       return;
     }
     const focusedLink = (event.target as HTMLElement).closest?.<HTMLElement>(
-      '[data-link-card], a[data-web-link]',
+      '[data-link-card], a[data-web-link], [data-file]',
     );
     if (focusedLink && (event.key === 'Enter' || event.key === ' ')) {
       event.preventDefault();
       setLinkBar(null);
+      if (focusedLink.dataset.file !== undefined) {
+        const href = focusedLink.dataset.href;
+        if (href) window.open(href, '_blank', 'noopener,noreferrer');
+        return;
+      }
       openWebUrl(
         focusedLink.dataset.linkCard ?? focusedLink.getAttribute('href'),
       );
       return;
+    }
+    // D3: deleting an empty list item keeps the list continuous and puts the
+    // caret where the user can keep typing.
+    if (
+      (event.key === 'Backspace' || event.key === 'Delete') &&
+      !event.shiftKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      !event.ctrlKey
+    ) {
+      const caret = window.getSelection();
+      if (
+        caret?.rangeCount &&
+        caret.isCollapsed &&
+        caret.anchorNode &&
+        editor?.contains(caret.anchorNode)
+      ) {
+        const item = lineElement(caret.anchorNode);
+        const list = item === null ? null : item.parentElement;
+        if (
+          item !== null &&
+          item.tagName.toLowerCase() === 'li' &&
+          item.contains(caret.anchorNode) &&
+          (item.textContent ?? '').trim() === '' &&
+          list !== null &&
+          (list.tagName === 'UL' || list.tagName === 'OL')
+        ) {
+          event.preventDefault();
+          removeEmptyListItem(item, list);
+          notifyChange();
+          return;
+        }
+      }
     }
     if (slash) {
       const commands = filterCommands(
@@ -1263,6 +1380,25 @@ export function Editor({
     }
   }
 
+  /** Remove one empty list item and place the caret at a typable position. */
+  function removeEmptyListItem(item: HTMLElement, list: HTMLElement) {
+    const previous = item.previousElementSibling;
+    const next = item.nextElementSibling;
+    item.remove();
+    if (previous instanceof HTMLElement) {
+      placeCaretAtEnd(previous);
+      return;
+    }
+    if (next instanceof HTMLElement) {
+      placeCaretAtStart(next);
+      return;
+    }
+    // The list is now empty: leave a plain paragraph instead of an empty list.
+    const paragraph = createParagraph();
+    list.replaceWith(paragraph);
+    placeCaretAtEnd(paragraph);
+  }
+
   function handleFocus(event: FocusEvent<HTMLDivElement>) {
     const target = event.target as HTMLElement;
     const link = target.closest?.<HTMLElement>(
@@ -1285,7 +1421,10 @@ export function Editor({
     onCommentAtCaretChangeRef.current?.(null);
   }
 
-  function handleInput() {
+  function handleInput(event: FormEvent<HTMLDivElement>) {
+    // Never treat half-composed IME text as final content.
+    const nativeInput = event.nativeEvent as InputEvent | undefined;
+    if (composingRef.current || nativeInput?.isComposing === true) return;
     if (slash) {
       const text = slash.line.textContent ?? '';
       if (slash.line.isConnected && text.startsWith('/')) {
@@ -1326,8 +1465,13 @@ export function Editor({
       const dataUrl = await new Promise<string>((resolve) => {
         const reader = new FileReader();
         reader.onload = () => resolve(String(reader.result ?? ''));
+        reader.onerror = () => resolve('');
         reader.readAsDataURL(file);
-      });
+      }).catch(() => '');
+      if (dataUrl === '') {
+        notifyNotice(`该文件类型不支持：${file.name}`);
+        continue;
+      }
       if (file.type.startsWith('image/')) {
         const image = document.createElement('img');
         image.src = dataUrl;
@@ -1339,6 +1483,10 @@ export function Editor({
         chip.dataset.href = dataUrl;
         chip.dataset.size = formatBytes(file.size);
         chip.setAttribute('contenteditable', 'false');
+        chip.setAttribute('role', 'link');
+        chip.setAttribute('tabindex', '0');
+        chip.setAttribute('aria-label', `打开文件 ${file.name}`);
+        chip.setAttribute('title', file.name);
         const icon = document.createElement('span');
         icon.dataset.fileIcon = '';
         icon.setAttribute('aria-hidden', 'true');
@@ -1354,14 +1502,36 @@ export function Editor({
     notifyChange();
   }
 
+  /** Paste rich text through the sanitizer; plain text stays plain. */
   function handlePaste(event: ClipboardEvent<HTMLDivElement>) {
-    const files = event.clipboardData.files;
+    const editor = editorRef.current;
+    if (!editor) return;
+    const clipboard = event.clipboardData;
+    const files = clipboard.files;
     if (files.length) {
       event.preventDefault();
       void insertFiles(files);
       return;
     }
-    const text = event.clipboardData.getData('text/plain');
+    const html = clipboard.getData('text/html');
+    if (html !== '') {
+      event.preventDefault();
+      const sanitized = sanitizePastedHtml(html);
+      if (sanitized.empty) {
+        const fallback = clipboard.getData('text/plain');
+        if (fallback !== '') {
+          ensureCaret();
+          insertPlainTextAtCaret(fallback);
+          notifyChange();
+        }
+        return;
+      }
+      insertSanitizedHtml(editor, sanitized.html);
+      if (sanitized.simplified) notifyNotice('部分粘贴内容已简化');
+      notifyChange();
+      return;
+    }
+    const text = clipboard.getData('text/plain');
     if (!text) return;
     const docId = docIdFromPaste(text);
     if (docId) {
@@ -1380,8 +1550,98 @@ export function Editor({
       return;
     }
     event.preventDefault();
-    document.execCommand('insertText', false, text);
+    ensureCaret();
+    insertPlainTextAtCaret(text);
     notifyChange();
+  }
+
+  /** Caret range for a drop point, when the browser exposes one. */
+  function dropRange(event: DragEvent<HTMLDivElement>): Range | null {
+    const editor = editorRef.current;
+    if (!editor) return null;
+    const point = event.nativeEvent as globalThis.DragEvent;
+    const caretDocument = document as Document & {
+      caretRangeFromPoint?: (x: number, y: number) => Range | null;
+      caretPositionFromPoint?: (
+        x: number,
+        y: number,
+      ) => { offsetNode: Node; offset: number } | null;
+    };
+    if (typeof caretDocument.caretRangeFromPoint === 'function') {
+      const range = caretDocument.caretRangeFromPoint(point.clientX, point.clientY);
+      if (range && editor.contains(range.startContainer)) return range;
+    }
+    if (typeof caretDocument.caretPositionFromPoint === 'function') {
+      const position = caretDocument.caretPositionFromPoint(
+        point.clientX,
+        point.clientY,
+      );
+      if (position && editor.contains(position.offsetNode)) {
+        const range = document.createRange();
+        range.setStart(position.offsetNode, position.offset);
+        range.collapse(true);
+        return range;
+      }
+    }
+    const selection = window.getSelection();
+    if (selection?.rangeCount && editor.contains(selection.anchorNode))
+      return selection.getRangeAt(0);
+    return null;
+  }
+
+  function handleDragOver(event: DragEvent<HTMLDivElement>) {
+    const types = event.dataTransfer?.types;
+    if (!types) return;
+    const values = Array.from(types as ArrayLike<string>);
+    if (
+      values.includes('Files') ||
+      values.includes('text/html') ||
+      values.includes('text/plain')
+    ) {
+      event.preventDefault();
+      try {
+        event.dataTransfer.dropEffect = 'copy';
+      } catch {
+        // Read-only dataTransfer in restricted hosts: dropping still works.
+      }
+    }
+  }
+
+  function handleDrop(event: DragEvent<HTMLDivElement>) {
+    const editor = editorRef.current;
+    const data = event.dataTransfer;
+    if (!editor || !data) return;
+    const files = data.files;
+    if (files && files.length > 0) {
+      event.preventDefault();
+      void insertFiles(files, dropRange(event));
+      return;
+    }
+    const html = data.getData('text/html');
+    if (html !== '') {
+      event.preventDefault();
+      const sanitized = sanitizePastedHtml(html);
+      if (sanitized.empty) {
+        const fallback = data.getData('text/plain');
+        if (fallback !== '') {
+          ensureCaret();
+          insertPlainTextAtCaret(fallback);
+          notifyChange();
+        }
+        return;
+      }
+      insertSanitizedHtml(editor, sanitized.html);
+      if (sanitized.simplified) notifyNotice('部分拖入内容已简化');
+      notifyChange();
+      return;
+    }
+    const text = data.getData('text/plain');
+    if (text !== '') {
+      event.preventDefault();
+      ensureCaret();
+      insertPlainTextAtCaret(text);
+      notifyChange();
+    }
   }
 
   function toggleTodo(todo: HTMLElement) {
@@ -1630,6 +1890,10 @@ export function Editor({
         onBlur={handleBlur}
         onKeyDown={handleKeyDown}
         onPaste={handlePaste}
+        onCompositionStart={handleCompositionStart}
+        onCompositionEnd={handleCompositionEnd}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
         onClick={handleClick}
         onMouseOver={handleMouseOver}
         onMouseLeave={handleMouseLeave}
@@ -1829,17 +2093,28 @@ export function Editor({
             <div
               className={styles.linkBar}
               style={{ top: linkBar.top, left: linkBar.left }}
+              role="group"
+              aria-label="链接操作"
               onMouseEnter={() => {
                 if (linkTimerRef.current)
                   window.clearTimeout(linkTimerRef.current);
               }}
               onMouseLeave={handleMouseLeave}
             >
-              <button type="button" onClick={convertLink}>
+              <button
+                type="button"
+                aria-label={
+                  linkBar.kind === 'card' ? '转为行内链接' : '转为卡片链接'
+                }
+                title={linkBar.kind === 'card' ? '转为行内链接' : '转为卡片链接'}
+                onClick={convertLink}
+              >
                 {linkBar.kind === 'card' ? '转为行内' : '转为卡片'}
               </button>
               <button
                 type="button"
+                aria-label="编辑链接"
+                title="编辑链接"
                 onClick={() => openLinkEditor(linkBar.element)}
               >
                 编辑

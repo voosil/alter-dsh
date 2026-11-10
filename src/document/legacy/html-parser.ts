@@ -26,8 +26,15 @@ import type {
 
 type MarkType = Mark['type'];
 
-/** Defensive caps mirrored from the Host registry (never import Host code). */
-const MAX_BLOCK_COUNT = 5000;
+/**
+ * Defensive caps (never import Host code).
+ *
+ * The Host owns the real limits (5000 blocks / 512 KiB) and rejects violations
+ * with `doc/schema-invalid` / `doc/too-large`. The parser must NOT truncate at
+ * those limits: a silent truncation would turn a rejected oversized save into a
+ * successful save that dropped blocks. These caps only stop absurd input.
+ */
+const MAX_BLOCK_COUNT = 20_000;
 const MAX_BLOCK_DEPTH = 50;
 
 /** Injections the parser needs from its caller. */
@@ -70,8 +77,11 @@ function defaultBlockId(): string {
   return `blk_${unique.replaceAll('-', '')}${fallbackIdSequence}`;
 }
 
-/** Block ids accepted from the editor DOM (defensive shape check). */
-const BLOCK_ID_PATTERN = /^blk_[A-Za-z0-9_-]{1,120}$/;
+/**
+ * Block ids accepted from the editor DOM (defensive shape check). The Host only
+ * requires a non-empty unique string, so non-ASCII ids must survive too.
+ */
+const BLOCK_ID_PATTERN = /^blk_[^\s"'<>]{1,120}$/u;
 
 /** Canonical mark order (mirrors the registry / markdown projection). */
 const MARK_TYPE_ORDER: readonly MarkType[] = [
@@ -99,7 +109,7 @@ const MAX_TREE_DEPTH = 200;
  * limit is 512 KiB; stopping earlier leaves room for JSON structural overhead
  * the estimate does not model exactly.
  */
-const MAX_ESTIMATED_BYTES = 400 * 1024;
+const MAX_ESTIMATED_BYTES = 8 * 1024 * 1024;
 
 const TRUNCATION_NOTE = '[文档内容过长，迁移已截断]';
 
