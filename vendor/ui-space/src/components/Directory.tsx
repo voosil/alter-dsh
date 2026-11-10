@@ -111,6 +111,9 @@ function FolderNameInput({
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    // An IME uses Enter/Escape to confirm or discard candidates while composing.
+    // Committing here would save the raw pinyin instead of the chosen text.
+    if (event.nativeEvent.isComposing) return;
     if (event.key === 'Enter') {
       event.preventDefault();
       void commit();
