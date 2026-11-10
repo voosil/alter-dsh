@@ -88,7 +88,7 @@ export async function materializeLegacyAssets(
     const match = IMAGE_DATA_URL.exec(src.trim());
     if (match === null) continue;
     if (typeof client.importAsset !== 'function') {
-      warnings.push('图片上传未启用，内联图片已降级');
+      warnings.push('图片上传未启用，内联图片已保留原内容并阻止保存，请重试');
       continue;
     }
     try {
@@ -116,7 +116,7 @@ export async function materializeLegacyAssets(
     const split = splitDataUrl(raw);
     if (split === undefined) continue;
     if (typeof client.importFile !== 'function') {
-      warnings.push('文件上传未启用，内联文件已降级');
+      warnings.push('文件上传未启用，内联文件已保留原内容并阻止保存，请重试');
       continue;
     }
     const name =

@@ -78,8 +78,8 @@ Document Operations。
 - **对象卡占位**：callout / mindmap / component 在旧 UI 中是无样式的 `data-object-card` 占位，
   无人工插入/编辑入口；AI 工具（`space_object_*`、`space_component_catalog`）仍可读写，保存往返
   不丢对象引用。新增人工入口需要产品批准前端改动（当前冻结）。
-- **真实环境限制**：真实输入法 IME、真实断网（非 route abort）、5000 块上限文档的浏览器实测
-  未覆盖（jsdom/等价自动化已覆盖组合输入、保存失败重试与 4990 块适配往返）。
+- **真实环境限制**：真实输入法 IME、真实断网（非 route abort）、真实桌面/面板冷启动未覆盖；
+  headless 已测 4990 块/509.7KiB 文档（见健壮性 F 组），jsdom 覆盖组合输入与保存失败重试。
 - **浏览器自动化替代**：headless 合成 Ctrl+Z 与鼠标拖选不生效，已用 `execCommand('undo')`
   与程序化 Range 等价验证；真实键盘/鼠标仍建议人工抽查。
 
@@ -87,7 +87,8 @@ Document Operations。
 
 1. 改动涉及文档页时，先跑自动证据（adapter / view / fuzz 等测试），再按第 2 节受影响的条目做
    自动或人工复验；提交前 `pnpm check` 全绿。
-2. 样式与 DOM 用基线 diff 判定：文档页 CSS 与编辑器 DOM 出现非数据层差异即失败。
+2. 样式与 DOM 用基线 diff 判定：文档页 CSS 与编辑器 DOM 出现非数据层差异即失败（除 §1 已声明的
+   错误/失败态最小兜底 UI 外）。
 3. 最终复验由独立子 Agent 按本清单逐项给出 PASS / FAIL / GAP（对应第 4 节）；结论只能是 PASS、
    PASS-WITH-GAPS 或 FAIL，并附证据与残留风险。
 4. 状态标记：`[x]` 自动化覆盖；`[~]` 已实现、待真实运行或人工联调；`[ ]` 未做。

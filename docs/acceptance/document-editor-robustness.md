@@ -1,6 +1,6 @@
 ---
 type: acceptance
-status: draft
+status: active
 updated: 2026-11-10
 ---
 
@@ -14,8 +14,8 @@ updated: 2026-11-10
 
 状态标记：`[x]` 自动化覆盖；`[~]` 部分落地、待真实运行或仅核心路径覆盖；`[ ]` 未完成。
 现状：A–G 除 D1（真实输入法）、A2（真实强制退出以页内 reload 等价验证）、G3（真实 IME/真实断网
-以等价自动化替代）与 G5（待复核转 active）外均由自动化+真实浏览器验收覆盖；对象卡人工入口不在
-本清单范围（见[编辑器还原验收](editor-experience-p0-p6.md)）。
+以等价自动化替代）为 `[~]` 外均由自动化+真实浏览器验收覆盖；清单已由独立复验通过并转 `active`。
+对象卡人工入口不在本清单范围（见[编辑器还原验收](editor-experience-p0-p6.md)）。
 
 验收环境：DSH 桌面 profile 与真实桌面应用；测试文档用 Agent 文档工具生成，不手工改库。
 未自动化前按「人工」执行，并在验收时记录可复现步骤。自动证据：`tests/document-legacy-{adapter,view,
@@ -90,6 +90,7 @@ save,recovery,input,resilience,anchors}.test.ts`、`tests/editor-fuzz.test.ts`�
 - [x] **F4 内存**：同一文档反复打开、关闭 20 次 → 内存无显著增长或泄漏。
 
 - **F 组实测与复跑**：`node scripts/measure-legacy-editor-perf.mjs`（开发期脚本，不在 CI 运行；默认从 Electron Cookies 取认证、用 Host RPC 建临时文档并清理）。HEAD ef93946 实测（headless Chrome 157，4990 顶层块 / 509.7 KiB，点击→就绪口径）：F1 273ms（3 次 260/273/282）；F2 输入 p50 9.5ms / p95 15.0ms；F3 保存 762ms（含 700ms 防抖，applyOps 19.7ms，无 >100ms 长任务）；F4 20 次开→关 GC 后 +247KB/+0.82%，DOM 节点/监听器计数恒定；`verdicts.all=true`。预算锁定：F1 ≤3s、F2 p95 ≤50ms、F3 ≤1s、F4 无显著泄漏。限制：headless、CDP 合成输入（无真实 IME/键盘）、F1 不含面板冷启动、F3 轮询 20ms、F4 仅 20 次循环；5000 块与 512KiB 是独立上限（任一），非空段落无法同时逼近，脚本用“3100 段文本+1890 空段”贴近双上限。
+
 ## G. 回归与自动化（P1）
 
 - [x] **G1 映射往返**：AST→编辑器→AST 对全部节点类型与属性幂等（自动化）。
@@ -98,7 +99,7 @@ save,recovery,input,resilience,anchors}.test.ts`、`tests/editor-fuzz.test.ts`�
 - [~] **G3 浏览器级用例**：编辑/刷新、slash、撤销、崩溃草稿、冲突 Dialog、粘贴 XSS/资产、导出/历史/评论
   已在真实浏览器通过；真实 IME 与真实断网未覆盖（以 jsdom/route abort 等价自动化替代）。
 - [x] **G4 故障注入**：保存超时、宿主重启、数据库忙、回执丢失等故障下输入不丢且可恢复（自动化）。
-- [~] **G5 文档同步**：实施范围、验收状态与代码在同一变更里更新；独立复验通过后状态改为 `active`。
+- [x] **G5 文档同步**：实施范围、验收状态与代码在同一变更里更新；独立复验通过，清单状态 `active`。
 
 自动证据：`tests/document-legacy-{adapter,view,save,recovery,input,resilience,anchors}.test.ts`、`tests/editor-fuzz.test.ts`；真实浏览器验收（G3）覆盖编辑/保存/刷新、slash、撤销、崩溃草稿、版本恢复脏状态、粘贴 XSS 与资产物化、大文档+保存失败重试、导出/历史/评论、样式/DOM 冻结对照。
 
