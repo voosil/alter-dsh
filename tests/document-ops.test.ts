@@ -1196,6 +1196,240 @@ describe('update_object', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Engine regressions: trusted inverse replay + id-stable replacement
+// ---------------------------------------------------------------------------
+
+/** table → tableRow → tableCell fixture (tableRow is not AI-writable). */
+function tableWithCell(): AlterDoc {
+  return makeDoc([
+    paragraph('blk_before', '前文'),
+    createBlockNode('blk_table', 'table', {
+      attrs: { headerRows: 1 },
+      children: [
+        createBlockNode('blk_row', 'tableRow', {
+          children: [
+            createBlockNode('blk_cell', 'tableCell', {
+              content: [inlineText('格子')],
+            }),
+          ],
+        }),
+      ],
+    }),
+    paragraph('blk_after', '后文'),
+  ]);
+}
+
+describe('trusted inverse replay', () => {
+  it('undoes a table-cell move while normal batches stay fail-closed', () => {
+    const base = tableWithCell();
+    const moved = applyOperations(
+      base,
+      [{ op: 'move_block', target: 'blk_cell', parent: null, index: 0 }],
+      makeContext().ctx,
+    );
+    // The inverse writes back into the non-writable tableRow: without the
+    // trusted flag the AI capability gate still rejects it.
+    expect(() =>
+      applyOperations(moved.doc, moved.inverseOps, makeContext().ctx),
+    ).toThrow(/不允许写入子块/);
+    const undone = applyOperations(
+      moved.doc,
+      moved.inverseOps,
+      makeContext().ctx,
+      { trusted: true },
+    );
+    expect(undone.doc.blocks).toEqual(base.blocks);
+    expectValid(undone.doc);
+    // A normal caller still cannot insert into a tableRow directly.
+    expect(() =>
+      applyOperations(
+        base,
+        [
+          {
+            op: 'insert_blocks',
+            parent: 'blk_row',
+            index: 0,
+            blocks: [
+              createBlockNode('blk_cell_new', 'tableCell', {
+                content: [inlineText('新')],
+              }),
+            ],
+          },
+        ],
+        makeContext().ctx,
+      ),
+    ).toThrow(/不允许写入子块/);
+  });
+
+  it('undoes a table-cell delete with trusted replay', () => {
+    const base = tableWithCell();
+    const deleted = applyOperations(
+      base,
+      [{ op: 'delete_block', target: 'blk_cell' }],
+      makeContext().ctx,
+    );
+    const undone = applyOperations(
+      deleted.doc,
+      deleted.inverseOps,
+      makeContext().ctx,
+      { trusted: true },
+    );
+    expect(undone.doc.blocks).toEqual(base.blocks);
+    expectValid(undone.doc);
+  });
+
+  it('keeps schema, size and existence checks in trusted mode', () => {
+    const base = tableWithCell();
+    // Wrong child type for the tableRow: schema validation is not bypassed.
+    expect(() =>
+      applyOperations(
+        base,
+        [
+          {
+            op: 'insert_blocks',
+            parent: 'blk_row',
+            index: 0,
+            blocks: [paragraph('blk_p', 'p')],
+          },
+        ],
+        makeContext().ctx,
+        { trusted: true },
+      ),
+    ).toThrow(/不允许子节点/);
+    // Missing target: existence is not bypassed either.
+    expect(() =>
+      applyOperations(
+        base,
+        [{ op: 'delete_block', target: 'blk_missing' }],
+        makeContext().ctx,
+        { trusted: true },
+      ),
+    ).toThrow(/节点不存在/);
+  });
+});
+
+describe('id-stable replacement', () => {
+  it('reuses the replaced subtree ids when undo restores a container snapshot', () => {
+    const base = makeDoc([
+      container(
+        'blk_callout',
+        'callout',
+        [paragraph('blk_cp', '内容')],
+        { tone: 'info' },
+      ),
+    ]);
+    const applied = applyOperations(
+      base,
+      [{ op: 'update_attrs', target: 'blk_callout', attrs: { tone: 'danger' } }],
+      makeContext().ctx,
+    );
+    const undone = applyOperations(
+      applied.doc,
+      applied.inverseOps,
+      makeContext().ctx,
+    );
+    expect(undone.doc.blocks).toEqual(base.blocks);
+    expect(undone.doc.blocks[0]!.children![0]!.id).toBe('blk_cp');
+    expectValid(undone.doc);
+  });
+
+  it('keeps descendant ids for orderedList/table/listItem attr undo', () => {
+    const cases: Array<{
+      block: BlockNode;
+      attrs: Record<string, JsonValue>;
+    }> = [
+      {
+        block: container(
+          'blk_ol',
+          'orderedList',
+          [
+            container('blk_oli', 'listItem', [paragraph('blk_olip', '项')]),
+          ],
+          { start: 2 },
+        ),
+        attrs: { start: 3 },
+      },
+      {
+        block: createBlockNode('blk_tbl', 'table', {
+          attrs: { headerRows: 1 },
+          children: [
+            createBlockNode('blk_tbl_row', 'tableRow', {
+              children: [
+                createBlockNode('blk_tbl_cell', 'tableCell', {
+                  content: [inlineText('格')],
+                }),
+              ],
+            }),
+          ],
+        }),
+        attrs: { headerRows: 0 },
+      },
+      {
+        block: container('blk_li', 'listItem', [paragraph('blk_lip', '内容')], {
+          checked: false,
+        }),
+        attrs: { checked: true },
+      },
+    ];
+    for (const testCase of cases) {
+      const base = makeDoc([testCase.block]);
+      const applied = applyOperations(
+        base,
+        [
+          {
+            op: 'update_attrs',
+            target: testCase.block.id,
+            attrs: testCase.attrs,
+          },
+        ],
+        makeContext().ctx,
+      );
+      const undone = applyOperations(
+        applied.doc,
+        applied.inverseOps,
+        makeContext().ctx,
+      );
+      expect(undone.doc.blocks).toEqual(base.blocks);
+      expectValid(undone.doc);
+      // A later operation still applies on the restored tree.
+      const reapplied = applyOperations(
+        undone.doc,
+        [
+          {
+            op: 'update_attrs',
+            target: testCase.block.id,
+            attrs: testCase.attrs,
+          },
+        ],
+        makeContext().ctx,
+      );
+      expectValid(reapplied.doc);
+    }
+  });
+
+  it('keeps id uniqueness when a replacement payload repeats ids', () => {
+    const base = makeDoc([
+      container('blk_quote', 'blockquote', [paragraph('blk_q1', '一')]),
+    ]);
+    const replacement = container('blk_quote', 'blockquote', [
+      paragraph('blk_dup', 'A'),
+      paragraph('blk_dup', 'B'),
+    ]);
+    const result = applyOperations(
+      base,
+      [{ op: 'replace_block', target: 'blk_quote', blocks: [replacement] }],
+      makeContext().ctx,
+    );
+    const children = result.doc.blocks[0]!.children ?? [];
+    expect(children).toHaveLength(2);
+    expect(children[0]!.id).toBe('blk_dup');
+    expect(children[1]!.id).toBe('blk_gen_1');
+    expect(new Set(children.map((child) => child.id)).size).toBe(2);
+    expectValid(result.doc);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Batch semantics, diff and inverse
 // ---------------------------------------------------------------------------
 

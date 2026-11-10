@@ -663,7 +663,10 @@ export function createDocumentService(
           target.inverseOps,
           input.docId,
           at,
-          { sidecar, actor },
+          // The inverse batch is engine-generated: replaying it must not be
+          // blocked by the AI capability gates that applied to the original
+          // user/AI batch (schema/size/existence checks still run).
+          { sidecar, actor, trusted: true },
         );
         const revision = doc.revision + 1;
         const content = serializeAlterDoc({ ...result.doc, revision });
@@ -732,6 +735,10 @@ export function createDocumentService(
         const result = applyDocumentOperations(doc, ops, input.docId, at, {
           sidecar,
           actor,
+          // Restore rewrites the whole tree from a stored snapshot; treat it
+          // as a system replay so non-AI-writable container blocks can be
+          // deleted/re-inserted, while schema validation still applies.
+          trusted: true,
         });
         const revision = doc.revision + 1;
         const content = serializeAlterDoc({ ...result.doc, revision });
@@ -926,37 +933,44 @@ export function createDocumentService(
     context?: {
       sidecar: import('./types.js').DocumentSidecar;
       actor: DocumentActor;
+      /** Internal inverse/restore replay: bypass AI capability gates. */
+      trusted?: boolean;
     },
   ): OpsResult {
-    return applyOperations(doc, ops, {
-      docId,
-      nowIso: () => at,
-      createBlockId: newBlockId,
-      parseMarkdown: (source, parseOptions) =>
-        parseMarkdownBlocks(source, {
-          createBlockId: parseOptions.createBlockId,
-          hasAsset: (id) => store.getDocumentAsset(id) !== undefined,
-        }),
-      createObject: ({ blockId, type, payload }) => {
-        const block = findBlockById(doc, blockId);
-        if (block === undefined)
-          throw new DocumentError('node/not-found', `节点不存在：${blockId}`);
-        if (block.type !== type)
-          throw new DocumentError('object/invalid', '对象类型与节点不一致');
-        if (context === undefined) {
-          validateObjectPayload(type, payload);
-          return newObjectId();
-        }
-        return applyObjectPayload(
-          docId,
-          block,
-          payload,
-          at,
-          context.sidecar,
-          context.actor,
-        );
+    return applyOperations(
+      doc,
+      ops,
+      {
+        docId,
+        nowIso: () => at,
+        createBlockId: newBlockId,
+        parseMarkdown: (source, parseOptions) =>
+          parseMarkdownBlocks(source, {
+            createBlockId: parseOptions.createBlockId,
+            hasAsset: (id) => store.getDocumentAsset(id) !== undefined,
+          }),
+        createObject: ({ blockId, type, payload }) => {
+          const block = findBlockById(doc, blockId);
+          if (block === undefined)
+            throw new DocumentError('node/not-found', `节点不存在：${blockId}`);
+          if (block.type !== type)
+            throw new DocumentError('object/invalid', '对象类型与节点不一致');
+          if (context === undefined) {
+            validateObjectPayload(type, payload);
+            return newObjectId();
+          }
+          return applyObjectPayload(
+            docId,
+            block,
+            payload,
+            at,
+            context.sidecar,
+            context.actor,
+          );
+        },
       },
-    });
+      { trusted: context?.trusted === true },
+    );
   }
 
   function findBlockById(doc: AlterDoc, id: string): BlockNode | undefined {

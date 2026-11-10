@@ -12,12 +12,19 @@
  * - Targets are block ids only; `parent`/`after`/`index` resolve inside the
  *   current tree, so nested blocks are addressable without a path syntax.
  * - Node ids are server-assigned: missing, blank or colliding candidate ids on
- *   inserted/replaced blocks are re-issued through `ctx.createBlockId`.
+ *   inserted/replaced blocks are re-issued through `ctx.createBlockId`; ids of
+ *   the subtree a `replace_block` replaces are freed first, so snapshot-based
+ *   replacements (and their inverses) keep descendant ids stable.
  * - `replace_block` keeps the target type (use `transform_block` to change it)
  *   and keeps the target block id, so anchors survive content replacement.
  * - `inverseOps` is ordered to be applied as one batch; it restores the tree
  *   structurally and content-wise (revision is intentionally left untouched,
  *   the service increments it).
+ * - Inverse/restore replays run in `trusted` mode: they skip the AI capability
+ *   gates (`ai.writable` / `ai.ops`) that protect caller batches — an inverse
+ *   may legitimately write back into a non-writable container such as
+ *   `tableRow` — while schema, size, existence and id-uniqueness validation
+ *   still applies.
  * - A transform's inverse cannot be a plain `replace_block` (the block type
  *   changed), so the engine emits: transform back to the original type, then
  *   `replace_block` with the original block to restore content/attrs exactly.
@@ -330,6 +337,7 @@ function resolveAnchor(
   doc: AlterDoc,
   index: NodeIndex,
   parentId: string | null | undefined,
+  trusted: boolean,
 ): InsertAnchor {
   if (parentId === undefined || parentId === null)
     return {
@@ -347,7 +355,10 @@ function resolveAnchor(
       'node/schema-invalid',
       `父节点 ${parentId}（${location.block.type}）不是块容器，不能承载子块`,
     );
-  if (!definition.ai.writable)
+  // AI capability gate: normal caller batches may not write into containers
+  // the registry marks non-writable (e.g. tableRow). System-generated inverse
+  // and restore replays pass `trusted` and keep only the schema checks above.
+  if (!trusted && !definition.ai.writable)
     fail('node/not-writable', `节点类型 ${location.block.type} 不允许写入子块`);
   if (location.block.children === undefined) location.block.children = [];
   return {
@@ -581,12 +592,13 @@ function applyInsertOperation(
   index: NodeIndex,
   ctx: OperationContext,
   usedIds: Set<string>,
+  trusted: boolean,
 ): OpEffect {
   const hasBlocks = request.blocks !== undefined;
   const hasMarkdown = request.markdown !== undefined;
   if (hasBlocks === hasMarkdown)
     fail('op/invalid', 'insert 需要且只能提供 blocks 或 markdown 之一');
-  const anchor = resolveAnchor(doc, index, request.parent);
+  const anchor = resolveAnchor(doc, index, request.parent, trusted);
   const at = resolveInsertIndex(anchor, index, request.after, request.index);
   const raw = hasMarkdown
     ? parseMarkdownBlocks(ctx, request.markdown, 'insert_markdown')
@@ -619,12 +631,13 @@ function applyReplaceOperation(
   index: NodeIndex,
   ctx: OperationContext,
   usedIds: Set<string>,
+  trusted: boolean,
 ): OpEffect {
   const location = index.get(op.target);
   if (location === undefined)
     fail('node/not-found', `节点不存在：${op.target}`);
   const target = location.block;
-  if (!operationAllowedOn(target.type, 'replace_block'))
+  if (!trusted && !operationAllowedOn(target.type, 'replace_block'))
     fail('node/not-writable', `节点类型 ${target.type} 不允许 replace_block`);
   const hasBlocks = op.blocks !== undefined;
   const hasMarkdown = op.markdown !== undefined;
@@ -645,6 +658,11 @@ function applyReplaceOperation(
       fail('op/invalid', 'replace_block 的 blocks 必须恰好包含 1 个块');
     raw = blocks[0];
   }
+  // The replaced subtree leaves the tree, so its ids are free for the
+  // replacement (this is what makes `replace_block` inverses id-stable). The
+  // target slot keeps its own id and stays reserved.
+  for (const id of collectSubtreeIds(target)) usedIds.delete(id);
+  usedIds.add(target.id);
   const replacement = prepareReplacementBlock(raw, target.id, usedIds, ctx);
   if (replacement.type !== target.type)
     fail(
@@ -673,6 +691,7 @@ function applyReplaceOperation(
 function applyUpdateTextOperation(
   op: UpdateTextOperation,
   index: NodeIndex,
+  trusted: boolean,
 ): OpEffect {
   const location = index.get(op.target);
   if (location === undefined)
@@ -681,7 +700,7 @@ function applyUpdateTextOperation(
   const definition = requireNodeType(block.type);
   if (
     definition.contentModel !== 'inline' ||
-    !operationAllowedOn(block.type, 'update_text')
+    (!trusted && !operationAllowedOn(block.type, 'update_text'))
   )
     fail(
       'node/not-writable',
@@ -706,13 +725,14 @@ function applyUpdateTextOperation(
 function applyUpdateAttrsOperation(
   op: UpdateAttrsOperation,
   index: NodeIndex,
+  trusted: boolean,
 ): OpEffect {
   const location = index.get(op.target);
   if (location === undefined)
     fail('node/not-found', `节点不存在：${op.target}`);
   const block = location.block;
   const definition = requireNodeType(block.type);
-  if (!operationAllowedOn(block.type, 'update_attrs'))
+  if (!trusted && !operationAllowedOn(block.type, 'update_attrs'))
     fail('node/not-writable', `节点类型 ${block.type} 不允许 update_attrs`);
   if (!isPlainObject(op.attrs))
     fail('op/invalid', 'update_attrs 需要 attrs 对象');
@@ -752,12 +772,13 @@ function applyMoveOperation(
   doc: AlterDoc,
   op: MoveOperation,
   index: NodeIndex,
+  trusted: boolean,
 ): OpEffect {
   const location = index.get(op.target);
   if (location === undefined)
     fail('node/not-found', `节点不存在：${op.target}`);
   const block = location.block;
-  if (!operationAllowedOn(block.type, 'move_block'))
+  if (!trusted && !operationAllowedOn(block.type, 'move_block'))
     fail('node/not-writable', `节点类型 ${block.type} 不允许 move_block`);
   const destinationParentId =
     op.parent === undefined ? undefined : op.parent;
@@ -784,7 +805,12 @@ function applyMoveOperation(
   const original = block;
   location.siblings.splice(location.index, 1);
   const freshIndex = buildNodeIndex(doc);
-  const anchor = resolveAnchor(doc, freshIndex, destinationParentId);
+  const anchor = resolveAnchor(
+    doc,
+    freshIndex,
+    destinationParentId,
+    trusted,
+  );
   const at = resolveInsertIndex(anchor, freshIndex, op.after, op.index);
   assertInsertDepth(anchor.parentDepth, [block]);
   assertAllowedChildren(anchor.definition, [block]);
@@ -810,12 +836,13 @@ function applyMoveOperation(
 function applyDeleteOperation(
   op: DeleteOperation,
   index: NodeIndex,
+  trusted: boolean,
 ): OpEffect {
   const location = index.get(op.target);
   if (location === undefined)
     fail('node/not-found', `节点不存在：${op.target}`);
   const block = location.block;
-  if (!operationAllowedOn(block.type, 'delete_block'))
+  if (!trusted && !operationAllowedOn(block.type, 'delete_block'))
     fail('node/not-writable', `节点类型 ${block.type} 不允许 delete_block`);
   const mode = op.mode ?? 'remove';
   if (mode !== 'remove' && mode !== 'unwrap')
@@ -945,6 +972,7 @@ function buildTransformInverse(
 function applyTransformOperation(
   op: TransformOperation,
   index: NodeIndex,
+  trusted: boolean,
 ): OpEffect {
   const location = index.get(op.target);
   if (location === undefined)
@@ -952,7 +980,7 @@ function applyTransformOperation(
   const block = location.block;
   const fromType = block.type;
   const fromDefinition = requireNodeType(fromType);
-  if (!operationAllowedOn(fromType, 'transform_block'))
+  if (!trusted && !operationAllowedOn(fromType, 'transform_block'))
     fail('node/not-writable', `节点类型 ${fromType} 不允许 transform_block`);
   if (typeof op.to !== 'string' || op.to.trim() === '')
     fail('op/invalid', 'transform_block 需要 to');
@@ -991,13 +1019,14 @@ function applyUpdateObjectOperation(
   op: UpdateObjectOperation,
   index: NodeIndex,
   ctx: OperationContext,
+  trusted: boolean,
 ): OpEffect {
   const location = index.get(op.target);
   if (location === undefined)
     fail('node/not-found', `节点不存在：${op.target}`);
   const block = location.block;
   const type = block.type;
-  if (!operationAllowedOn(type, 'update_object'))
+  if (!trusted && !operationAllowedOn(type, 'update_object'))
     fail('node/not-writable', `节点类型 ${type} 不允许 update_object`);
   if (type !== 'mindmap' && type !== 'component')
     fail('node/not-writable', 'update_object 仅支持 mindmap/component 块');
@@ -1036,10 +1065,18 @@ function applyOne(
   index: NodeIndex,
   ctx: OperationContext,
   usedIds: Set<string>,
+  trusted: boolean,
 ): OpEffect {
   switch (op.op) {
     case 'insert_blocks':
-      return applyInsertOperation(doc, op as InsertOperation, index, ctx, usedIds);
+      return applyInsertOperation(
+        doc,
+        op as InsertOperation,
+        index,
+        ctx,
+        usedIds,
+        trusted,
+      );
     case 'insert_markdown':
       return applyInsertOperation(
         doc,
@@ -1047,21 +1084,22 @@ function applyOne(
         index,
         ctx,
         usedIds,
+        trusted,
       );
     case 'replace_block':
-      return applyReplaceOperation(op, index, ctx, usedIds);
+      return applyReplaceOperation(op, index, ctx, usedIds, trusted);
     case 'update_text':
-      return applyUpdateTextOperation(op, index);
+      return applyUpdateTextOperation(op, index, trusted);
     case 'update_attrs':
-      return applyUpdateAttrsOperation(op, index);
+      return applyUpdateAttrsOperation(op, index, trusted);
     case 'move_block':
-      return applyMoveOperation(doc, op, index);
+      return applyMoveOperation(doc, op, index, trusted);
     case 'delete_block':
-      return applyDeleteOperation(op, index);
+      return applyDeleteOperation(op, index, trusted);
     case 'transform_block':
-      return applyTransformOperation(op, index);
+      return applyTransformOperation(op, index, trusted);
     case 'update_object':
-      return applyUpdateObjectOperation(op, index, ctx);
+      return applyUpdateObjectOperation(op, index, ctx, trusted);
     default:
       return fail(
         'op/invalid',
@@ -1086,6 +1124,18 @@ function dedupeIds(ids: readonly string[]): string[] {
 // Public entry point
 // ---------------------------------------------------------------------------
 
+/** Options of one {@link applyOperations} batch. */
+export interface ApplyOperationsOptions {
+  /**
+   * System-generated replay (undo `inverseOps` / version restore): skip the AI
+   * capability gates (`ai.writable` / `ai.ops`) that protect normal caller
+   * batches, while still enforcing schema, size, existence and id-uniqueness.
+   * Normal `applyOperations` calls must leave this unset so the fail-closed
+   * behaviour is unchanged.
+   */
+  trusted?: boolean;
+}
+
 /**
  * Apply one batch of Document Operations to a deep copy of `doc`.
  *
@@ -1096,13 +1146,17 @@ function dedupeIds(ids: readonly string[]): string[] {
  * @param doc - current canonical document (not mutated).
  * @param ops - non-empty operation batch, applied in order.
  * @param ctx - injected environment (ids, markdown parser, object factory).
+ * @param options - batch options; `trusted` marks internal inverse/restore
+ *   replays that bypass AI capability gates but not schema validation.
  * @returns the new document, its diff and the batch that undoes it.
  */
 export function applyOperations(
   doc: AlterDoc,
   ops: Operation[],
   ctx: OperationContext,
+  options: ApplyOperationsOptions = {},
 ): OpsResult {
+  const trusted = options.trusted === true;
   validateOperationsShape(ops);
   validateAlterDoc(doc);
   const next = cloneJson(doc);
@@ -1115,7 +1169,7 @@ export function applyOperations(
     const nodeIndex = buildNodeIndex(next);
     let effect: OpEffect;
     try {
-      effect = applyOne(next, op, nodeIndex, ctx, usedIds);
+      effect = applyOne(next, op, nodeIndex, ctx, usedIds, trusted);
     } catch (error) {
       if (error instanceof DocumentError) {
         const issues: OperationIssue[] =
