@@ -21,8 +21,8 @@ Marks、Schema Registry、v0 节点类型与 Markdown 投影规则。它是所�
   但只解析为「明确目标位置的新节点」。
 - **Document as Content 与 Document as Application 分离**：交互组件有独立 schema 与运行时，
   不混进正文语义。
-- 人编辑器（Tiptap）与 AI 工具共享同一节点契约（registry 为事实源，编辑器映射以往返测试校验对齐），
-  避免定义漂移。
+- 人编辑器（旧 UI 经 HTML↔AST 适配层）与 AI 工具共享同一节点契约（registry 为事实源，适配映射
+  以往返测试校验对齐），避免定义漂移。
 
 v0 非目标：
 
@@ -105,8 +105,8 @@ v0 行内子集与投影：
 
 ## 6. Schema Registry（唯一事实源）
 
-同一份节点契约服务所有消费方：存储校验、Tiptap node spec、AI 工具 JSON Schema、Markdown 投影、
-schemaVersion 校验与能力声明都以 registry 为准（编辑器 node spec 为映射实现，由往返测试校验对齐）：
+同一份节点契约服务所有消费方：存储校验、编辑器 HTML 映射、AI 工具 JSON Schema、Markdown 投影、
+schemaVersion 校验与能力声明都以 registry 为准（适配层映射由往返测试校验对齐）：
 
 ```ts
 interface NodeTypeDefinition {

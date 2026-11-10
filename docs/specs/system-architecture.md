@@ -24,6 +24,8 @@ updated: 2026-11-10
   客户端不得绕过该链路读写业务数据。
 - 业务数据只存在于 Host 与 SQLite；浏览器 localStorage 只存 UI 偏好，刷新或重开面板后从 Host 重新读取。
 - 插件自有数据放 SQLite 侧表（如空间 ↔ 工作区绑定），不写入 `vendor/` 的实体结构。
+- 文档页是 `vendor/ui-space` 的旧 UI 1:1 还原（DOM/CSS 冻结）；AST 适配层在 `src/document/legacy`，
+  正文仍只经 Document Operations 写入 Host。
 - 本仓库是 Space 协议、业务服务、编辑器、UI 与 Host 的唯一实现源（单仓库、自包含）。
 - `vendor/` 是项目自有源码，可以修改但须克制：新增逻辑优先放 `host/`、`src/`；确需改 `vendor/`
   时保持既有行为与约定一致，并在 `vendor/README.md` 的「构建期模块覆盖与别名 / 关键行为约定」中更新。
@@ -95,10 +97,10 @@ updated: 2026-11-10
 ## 5. 构建与自包含
 
 - 要求 Node.js ≥ 24 与 pnpm；`client.js`、`lib/` 是生成产物，不入库，安装或更新前必须先构建。
-- 构建期适配集中在 `build/build.mjs`（CSS 适配 + 模块级覆盖）；当前生效的模块覆盖只有
-  `DirectoryField → src/native-directory-field.tsx`（宿主目录选择）。文档视图不做模块覆盖：
-  `@alter-space/document-view` 别名在 `build/build.mjs` 与 `tsconfig.json` paths 两处声明，
-  指向 `src/document/` 的结构化视图。新增覆盖或别名须在 `vendor/README.md` 登记。
+- 构建期适配集中在 `build/build.mjs`（CSS 适配 + 模块级覆盖）：当前生效的模块覆盖只有
+  `DirectoryField → src/native-directory-field.tsx`（宿主目录选择）；`@alter-space/legacy-adapter`
+  别名指向 `src/document/legacy/index.ts`，在 `build/build.mjs`、`tsconfig.json` paths 与
+  `vitest.config.mts` 三处声明，必须保持同步。新增覆盖或别名须在 `vendor/README.md` 登记。
 - 客户端 bundle 自包含：外置依赖仅限 react 族，新增第三方库必须打进 bundle；
   Host 侧新增依赖不得引入 `@deepseek-ai/*` 运行时依赖。
 - 交付前 `pnpm check`（build + verify + docs:check + typecheck + test）必须全绿；
@@ -132,6 +134,8 @@ updated: 2026-11-10
   Workbench 右侧面板不装配。
 - **浏览器路由**：地址栏路由为内存路由，刷新后回到默认文档。
 - **数据文件形态**：SQLite 二进制不如 JSON 直观，备份与恢复按 §4 的方式操作。
+- **文档编辑器还原**：文档页为旧 UI 1:1 还原（CSS/DOM 不改）；callout / mindmap / component 等新
+  AST 节点在旧 UI 中显示为对象占位卡，无人工编辑入口（AI 工具仍可读写，见验收清单）。
 - **面板行为**：Space 面板按产品设计始终浅色；其全局快捷键在面板打开时优先于宿主。
 
 ## 相关文档

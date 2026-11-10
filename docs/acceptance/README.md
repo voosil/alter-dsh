@@ -15,9 +15,9 @@ updated: 2026-11-10
 | --- | --- | --- |
 | [space-workspace.md](space-workspace.md) | 空间 ↔ DSH 工作区映射：创建、改名、主目录变更、归档/恢复、删除、双向共存、数据与工程 | 已验收；依赖运行时联调项标 `[~]` |
 | [agent-collaborators.md](agent-collaborators.md) | Space AI 协作者创建：`#/settings` 设置页复用、协作者创建/选择链路、安装与产物 | 已验证（浏览器点击链路未自动化） |
-| [s0-document-tools.md](s0-document-tools.md) | 文档模型 S0/S1：工具面、Tiptap 编辑器、资产、评论/历史、撤销、GC、备份 | 已验收（真机 8/8；浏览器视觉待人工）；编辑器体验重建见 [editor-experience-p0-p6.md](editor-experience-p0-p6.md) |
-| [document-editor-robustness.md](document-editor-robustness.md) | 即时编辑器健壮性：数据安全、并发恢复、输入保真、保存可行性与规模观测 | 部分落地（P0 保存生命周期、P2 评论/历史、P5 patch）；其余按清单推进 |
-| [editor-experience-p0-p6.md](editor-experience-p0-p6.md) | 编辑器体验重建：旧 HTML 编辑器体验基线、单一 AST 不变量、P0–P6 分阶段验收与最终复验规则 | P0–P6 主体实现并完成自动化验收；独立复验 PASS-WITH-GAPS，遗留 `[~]` 项见清单 |
+| [s0-document-tools.md](s0-document-tools.md) | 文档模型 S0/S1：Host 工具面、资产、评论/历史 API、撤销、GC、备份 | 已验收（真机 8/8；浏览器视觉待人工）；编辑器前端还原与适配见 [editor-experience-p0-p6.md](editor-experience-p0-p6.md) |
+| [document-editor-robustness.md](document-editor-robustness.md) | 旧编辑器的健壮性：数据安全、并发恢复、输入保真、保存可行性与规模观测 | 仅自动保存/失败重试/版本恢复/评论锚点/资产物化有自动覆盖；草稿、并发 UX、IME、规模、无障碍与客户端故障注入未完成 |
+| [editor-experience-p0-p6.md](editor-experience-p0-p6.md) | 编辑器前端 1:1 还原与 AST 适配：外观冻结约束、旧体验行为、适配数据链路、已知缺口与复验规则 | 前端已按基线还原、AST 数据层已接入并有测试；对象卡占位与人工回归缺口见清单 |
 
 ## 维护规则
 

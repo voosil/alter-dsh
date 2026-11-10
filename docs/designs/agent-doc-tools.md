@@ -44,7 +44,8 @@ updated: 2026-11-10
 
 工具面收敛为 `space_doc_outline` / `space_doc_read` / `space_doc_search` / `space_doc_ops` /
 `space_doc_patch` / `space_doc_generate` / `space_doc_undo`、对象/资产工具与 `space_component_catalog`；
-正文只有 AST 一种格式，正文写入只经 Operations。完整契约见
+正文只有 AST 一种格式，正文写入只经 Operations。浏览器侧写入走同一条链路：旧 `DocumentView` 经
+legacy adapter 生成 Operations，与 Agent 共用 `doc.applyOps` / `doc.restoreVersion`。完整契约见
 [specs/agent-doc-tools-v0.md](../specs/agent-doc-tools-v0.md)。
 
 工具划分的设计取舍：
@@ -145,8 +146,8 @@ updated: 2026-11-10
 
 - **何时能看到**：重新进入文档、切换空间、切走面板再回来，或刷新页面时 `SpaceApp` 会重新拉取数据，
   不需要改客户端代码。
-- **浏览器与 Agent 都做 CAS**：保存带 `baseRevision`；过期 base 直接失败，冲突时保留本地草稿并给出
-  重试/重载，不静默覆盖。
+- **浏览器与 Agent 都做 CAS**：保存带 `baseRevision`；过期 base 直接失败，冲突时保留编辑面内容并
+  提示重试，不静默覆盖（草稿/对比/重载 UX 见健壮性清单，当前未做）。
 - **后续可选（需要时再设计）**：revision 轮询 + 软刷新、跨窗口同步。DSH 原生 Host→Client 推送对
   第三方插件不可用（构建期 allowlist），自建 SSE 成本高，均不占当前工期。
 - **为什么现在不做**：实时同步要连带解决保存冲突 UI、客户端依赖数组失效与多窗口语义，收益是「协作感」
@@ -165,7 +166,7 @@ updated: 2026-11-10
 
 | 风险 | 影响 | 缓解 |
 | --- | --- | --- |
-| 用户旧草稿覆盖 Agent 写入 | 保存被 CAS 拒绝，用户需重试或重载 | 浏览器保存带 CAS + 冲突草稿保留；强制版本 + 快照兜底 |
+| 用户旧草稿覆盖 Agent 写入 | 保存被 CAS 拒绝，用户需重试 | 浏览器保存带 CAS，冲突时保留编辑面内容；强制版本 + 快照兜底 |
 | Agent 覆盖用户正在编辑的内容 | 用户草稿丢失 | Agent 侧 CAS：过期 base 拒绝，不自动 merge |
 | 注入/恶意内容进入正文 | 面板渲染异常、脚本执行 | schema 校验 + 编辑器粘贴过滤 + 组件目录 fail-closed（无任意代码） |
 | 工具对所有 Agent（含子 Agent）可见 | 任意 Agent 都能写空间 | 配置门禁；后续按 preset 或插件作用域收窄 |

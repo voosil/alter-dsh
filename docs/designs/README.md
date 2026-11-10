@@ -22,8 +22,8 @@ updated: 2026-11-09
 | 文档 | 回答什么 | 状态 |
 | --- | --- | --- |
 | [document-content-architecture.md](document-content-architecture.md) | 文档正文为什么以 JSON AST 为权威、Markdown 投影与 Operations 如何分工、富对象与组件边界、本仓库映射与待拍板项 | active |
-| [agent-doc-tools.md](agent-doc-tools.md) | Agent 读写空间文档为什么用 Host 原生工具、写入安全三件套、首期边界、阶段与风险 | active |
-| [document-editor-robustness.md](document-editor-robustness.md) | 即时编辑器为什么以系统保障为目标、分阶段改造范围与边界、开放决策与风险 | draft |
+| [agent-doc-tools.md](agent-doc-tools.md) | Agent 读写空间文档为什么用 Host 原生工具、写入安全三件套、工具面现状、边界与风险 | active |
+| [document-editor-robustness.md](document-editor-robustness.md) | 文档编辑器还原后的健壮性现状、缺口、推进顺序、开放决策与风险 | draft |
 | [space-deployment-modes.md](space-deployment-modes.md) | 空间部署形态：本地权威与自部署服务端的方向、模式边界、服务端约束与开放问题 | draft |
 
 ## 维护规则
