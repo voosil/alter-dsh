@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createSpaceAuthority } from '../host/authority.js';
-import { createDocumentAssets, MAX_ASSET_BYTES } from '../host/document/assets.js';
+import { createDocumentAssets, MAX_ASSET_BYTES, MAX_FILE_BYTES } from '../host/document/assets.js';
 import { createStructuredSpaceService } from '../host/document/notes.js';
 import { createDocumentService } from '../host/document/service.js';
 import { parseAlterDoc } from '../host/document/types.js';
@@ -37,6 +37,8 @@ afterEach(async () => {
 const fixedNow = () => new Date('2026-11-06T00:00:00.000Z');
 const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
 const PNG_BASE64 = Buffer.from(png).toString('base64');
+const pdf = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x37, 1, 2, 3]);
+const PDF_BASE64 = Buffer.from(pdf).toString('base64');
 
 async function createHandler(
   options: { workspaceSync?: boolean; assets?: boolean } = {},
@@ -307,6 +309,27 @@ describe('Space RPC dispatch', () => {
     };
     expect(rejectedBody.result.value.error?.code).toBe('object/invalid');
 
+    const uploadedFile = await post('rpc-4', {
+      op: 'doc.importFile',
+      args: [
+        { mime: 'application/pdf', dataBase64: PDF_BASE64, name: 'a.pdf' },
+      ],
+    });
+    const uploadedFileBody = (await uploadedFile.json()) as {
+      rpcId: string;
+      result: {
+        value: {
+          value?: { assetId: string; mime: string; bytes: number; name?: string };
+        };
+      };
+    };
+    expect(uploadedFileBody.rpcId).toBe('rpc-4');
+    expect(uploadedFileBody.result.value.value).toMatchObject({
+      mime: 'application/pdf',
+      bytes: pdf.byteLength,
+      name: 'a.pdf',
+    });
+
     const bad = await route(
       new Request('http://dsh.internal/api/alter-space', {
         method: 'POST',
@@ -450,6 +473,12 @@ describe('doc.importAsset RPC', () => {
     });
     expect(errorOf(svg)?.code).toBe('object/invalid');
     expect(errorOf(svg)?.message).toContain('不支持的资产类型');
+    // The image channel stays closed to file mimes.
+    for (const mime of ['application/pdf', 'text/plain']) {
+      const rejected = await importAsset({ mime, dataBase64: PNG_BASE64 });
+      expect(errorOf(rejected)?.code).toBe('object/invalid');
+      expect(errorOf(rejected)?.message).toContain('不支持的资产类型');
+    }
 
     for (const dataBase64 of ['', 'abc', 'not base64!!', 'AAA A', 'A===']) {
       const bad = await importAsset({ mime: 'image/png', dataBase64 });
@@ -499,6 +528,155 @@ describe('doc.importAsset RPC', () => {
     const result = await handler(
       'doc.importAsset',
       { args: [{ mime: 'image/png', dataBase64: PNG_BASE64 }] },
+      signal,
+      {},
+    );
+    expect(errorOf(result)?.code).toBe('doc/unavailable');
+    await store.close();
+  });
+});
+
+describe('doc.importFile RPC', () => {
+  it('imports a browser-uploaded file and returns its public fields', async () => {
+    const { store, handler, assets } = await createHandler();
+    const result = await handler(
+      'doc.importFile',
+      {
+        args: [
+          {
+            mime: 'application/pdf',
+            dataBase64: PDF_BASE64,
+            name: ' 报告.pdf ',
+          },
+        ],
+      },
+      signal,
+      {},
+    );
+    expect(errorOf(result)).toBeUndefined();
+    const file = valueOf(result) as Record<string, unknown>;
+    expect(file).toEqual({
+      assetId: expect.stringMatching(/^asset_/),
+      mime: 'application/pdf',
+      bytes: pdf.byteLength,
+      name: '报告.pdf',
+    });
+    expect(file).not.toHaveProperty('sha256');
+    expect(file).not.toHaveProperty('createdAt');
+    expect(file).not.toHaveProperty('width');
+    const stored = await assets!.read(String(file.assetId));
+    expect(stored?.record.name).toBe('报告.pdf');
+    expect(Buffer.from(stored!.data)).toEqual(Buffer.from(pdf));
+    await store.close();
+  });
+
+  it('accepts image mimes through the file channel', async () => {
+    const { store, handler } = await createHandler();
+    const result = await handler(
+      'doc.importFile',
+      { args: [{ mime: 'image/png', dataBase64: PNG_BASE64 }] },
+      signal,
+      {},
+    );
+    expect(errorOf(result)).toBeUndefined();
+    expect(valueOf(result)).toMatchObject({
+      mime: 'image/png',
+      bytes: png.byteLength,
+    });
+    expect(valueOf(result)).not.toHaveProperty('name');
+    await store.close();
+  });
+
+  it('deduplicates identical file uploads by content', async () => {
+    const { store, handler } = await createHandler();
+    const importOnce = async (bytes: Uint8Array) =>
+      valueOf(
+        await handler(
+          'doc.importFile',
+          {
+            args: [
+              {
+                mime: 'application/pdf',
+                dataBase64: Buffer.from(bytes).toString('base64'),
+              },
+            ],
+          },
+          signal,
+          {},
+        ),
+      ) as { assetId: string };
+    const first = await importOnce(pdf);
+    const again = await importOnce(pdf);
+    const other = await importOnce(new Uint8Array([...pdf, 9]));
+    expect(again.assetId).toBe(first.assetId);
+    expect(other.assetId).not.toBe(first.assetId);
+    await store.close();
+  });
+
+  it('rejects non-whitelisted mime, malformed base64 and bad arguments', async () => {
+    const { store, handler } = await createHandler();
+    const importFile = (args: unknown) =>
+      handler('doc.importFile', { args: [args] }, signal, {});
+
+    for (const mime of [
+      'text/html',
+      'image/svg+xml',
+      'application/javascript',
+      'application/octet-stream',
+    ]) {
+      const bad = await importFile({ mime, dataBase64: PDF_BASE64 });
+      expect(errorOf(bad)?.code).toBe('object/invalid');
+      expect(errorOf(bad)?.message).toContain('不支持的文件类型');
+    }
+
+    for (const dataBase64 of ['', 'abc', 'not base64!!', 'AAA A', 'A===']) {
+      const bad = await importFile({ mime: 'application/pdf', dataBase64 });
+      expect(errorOf(bad)?.code).toBe('object/invalid');
+      expect(errorOf(bad)?.message).toMatch(/文件内容|base64/);
+    }
+
+    const badArgs: unknown[] = [
+      undefined,
+      'nope',
+      { dataBase64: PDF_BASE64 },
+      { mime: 42, dataBase64: PDF_BASE64 },
+      { mime: 'application/pdf' },
+      { mime: 'application/pdf', dataBase64: PDF_BASE64, name: 7 },
+    ];
+    for (const args of badArgs) {
+      const bad = await importFile(args);
+      expect(errorOf(bad)?.code).toBe('object/invalid');
+    }
+    await store.close();
+  });
+
+  it('rejects payloads larger than the file limit', async () => {
+    const { store, handler } = await createHandler();
+    const importFile = (dataBase64: string) =>
+      handler(
+        'doc.importFile',
+        { args: [{ mime: 'application/pdf', dataBase64 }] },
+        signal,
+        {},
+      );
+    const oversized = Buffer.alloc(MAX_FILE_BYTES + 1).toString('base64');
+    const decodedTooLarge = await importFile(oversized);
+    expect(errorOf(decodedTooLarge)?.code).toBe('doc/too-large');
+    expect(errorOf(decodedTooLarge)?.message).toContain(String(MAX_FILE_BYTES));
+    // Guarded before decoding so a pathological payload cannot be buffered.
+    const encodedTooLarge = await importFile(
+      'A'.repeat(Math.ceil(MAX_FILE_BYTES / 3) * 4 + 4),
+    );
+    expect(errorOf(encodedTooLarge)?.code).toBe('doc/too-large');
+    expect(errorOf(encodedTooLarge)?.message).toContain('文件超过上限');
+    await store.close();
+  });
+
+  it('reports doc/unavailable when no asset store is attached', async () => {
+    const { store, handler } = await createHandler({ assets: false });
+    const result = await handler(
+      'doc.importFile',
+      { args: [{ mime: 'application/pdf', dataBase64: PDF_BASE64 }] },
       signal,
       {},
     );

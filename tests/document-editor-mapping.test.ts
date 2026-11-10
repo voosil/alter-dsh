@@ -144,6 +144,12 @@ function richDoc(): AlterDoc {
       caption: '图 1',
       width: '320',
     }),
+    block('blk_file', 'file', {
+      assetId: 'asset_demo02',
+      name: '需求说明.pdf',
+      mime: 'application/pdf',
+      bytes: 2048,
+    }),
     block('blk_mindmap', 'mindmap', {
       objectId: 'obj_demo01',
       caption: '目标拆解',
@@ -241,6 +247,7 @@ describe('astToTiptap / tiptapToBlocks round-trip', () => {
       'table',
       'alterCallout',
       'alterImage',
+      'alterFile',
       'alterMindmap',
       'alterComponent',
       'alterBookmark',
@@ -300,6 +307,12 @@ describe('astToTiptap / tiptapToBlocks round-trip', () => {
       caption: '图 1',
       width: '320',
     });
+    expect(byType('file').attrs).toEqual({
+      assetId: 'asset_demo02',
+      name: '需求说明.pdf',
+      mime: 'application/pdf',
+      bytes: 2048,
+    });
     expect(byType('mindmap').attrs).toEqual({
       objectId: 'obj_demo01',
       caption: '目标拆解',
@@ -331,6 +344,29 @@ describe('astToTiptap / tiptapToBlocks round-trip', () => {
     expect((json.content ?? []).map((node) => node.type)).toEqual([
       'alterBookmark',
       'alterDocLink',
+    ]);
+    expect(tiptapToBlocks(json)).toEqual(source.blocks);
+    expect(() => validateAlterDoc(makeDoc(tiptapToBlocks(json)))).not.toThrow();
+  });
+
+  it('round-trips file cards with and without optional bytes', () => {
+    const source = makeDoc([
+      block('blk_file_full', 'file', {
+        assetId: 'asset_file1',
+        name: '数据.csv',
+        mime: 'text/csv',
+        bytes: 12,
+      }),
+      block('blk_file_min', 'file', {
+        assetId: 'asset_file2',
+        name: '说明.md',
+        mime: 'text/markdown',
+      }),
+    ]);
+    const json = astToTiptap(source);
+    expect((json.content ?? []).map((node) => node.type)).toEqual([
+      'alterFile',
+      'alterFile',
     ]);
     expect(tiptapToBlocks(json)).toEqual(source.blocks);
     expect(() => validateAlterDoc(makeDoc(tiptapToBlocks(json)))).not.toThrow();
@@ -426,6 +462,7 @@ describe('astToTiptap / tiptapToBlocks round-trip', () => {
       type: 'doc',
       content: [
         { type: 'alterImage', attrs: { blockId: 'blk_i' } },
+        { type: 'alterFile', attrs: { blockId: 'blk_f' } },
         { type: 'alterMindmap', attrs: { blockId: 'blk_m' } },
         { type: 'alterComponent', attrs: { blockId: 'blk_c' } },
         { type: 'alterBookmark', attrs: { blockId: 'blk_b' } },
@@ -439,8 +476,10 @@ describe('astToTiptap / tiptapToBlocks round-trip', () => {
       'paragraph',
       'paragraph',
       'paragraph',
+      'paragraph',
     ]);
     expect(JSON.stringify(blocks)).toContain('[图片：缺少资产 id]');
+    expect(JSON.stringify(blocks)).toContain('[附件：缺少资产 id]');
     expect(JSON.stringify(blocks)).toContain('[思维导图：缺少对象 id]');
     expect(JSON.stringify(blocks)).toContain('[交互组件：缺少对象 id]');
     expect(JSON.stringify(blocks)).toContain('[网页链接卡：缺少链接]');

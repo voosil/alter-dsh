@@ -354,6 +354,20 @@ describe('selection → comment anchor', () => {
     expect(lastAnchor(harness)).toBeNull();
   });
 
+  it('keeps the pending selection when focus moves into the comment rail', () => {
+    const harness = mount();
+    selectText(harness.editor(), '第一段');
+    expect(lastAnchor(harness)?.quote).toBe('第一段');
+
+    const rail = document.createElement('aside');
+    rail.setAttribute('data-space-comment-rail', '');
+    const composer = document.createElement('textarea');
+    rail.append(composer);
+
+    fireEvent.blur(editorDom(), { relatedTarget: composer });
+    expect(lastAnchor(harness)?.quote).toBe('第一段');
+  });
+
   it('does not report anchors while an IME composition is active', () => {
     const harness = mount();
     const editor = harness.editor();

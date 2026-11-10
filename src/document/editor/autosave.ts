@@ -129,6 +129,12 @@ export function createAutosaveController(
   let draftTimer: TimerHandle | null = null;
   let lastDraftWriteAt = Number.NEGATIVE_INFINITY;
   let flushRequested = false;
+  /**
+   * Set when the editor unmounts with newer edits while a save is still in
+   * flight. That receipt is older than the draft `dispose` wrote, so clearing
+   * the draft on `saved` would drop the only copy of those edits.
+   */
+  let keepDraftOnSave = false;
   let status: AutosaveStatus = { kind: 'idle' };
 
   function setStatus(next: AutosaveStatus): void {
@@ -193,10 +199,16 @@ export function createAutosaveController(
   function applyOutcome(outcome: SaveOutcome): void {
     switch (outcome.kind) {
       case 'saved':
-        options.clearDraft();
-        // Edits made while the request was in flight are not part of this
-        // receipt: keep a draft for them until the next cycle lands.
-        if (pending) persistDraftNow();
+        if (keepDraftOnSave) {
+          // The draft written by `dispose` holds edits this receipt does not
+          // cover; keep it until the document is reopened and reconciled.
+          keepDraftOnSave = false;
+        } else {
+          options.clearDraft();
+          // Edits made while the request was in flight are not part of this
+          // receipt: keep a draft for them until the next cycle lands.
+          if (pending) persistDraftNow();
+        }
         setStatus({ kind: 'idle' });
         break;
       case 'skipped':
@@ -295,6 +307,7 @@ export function createAutosaveController(
     pending = false;
     blocked = false;
     flushRequested = false;
+    keepDraftOnSave = false;
     setStatus({ kind: 'idle' });
   }
 
@@ -310,6 +323,9 @@ export function createAutosaveController(
     if (disposed) return;
     const hadPending = pending;
     if (hadPending) persistDraftNow();
+    // No final save is issued below when a request is already in flight, so
+    // its receipt must not clear the newer draft written just above.
+    if (hadPending && saving !== null) keepDraftOnSave = true;
     disposed = true;
     clearDebounce();
     clearDraftTimer();

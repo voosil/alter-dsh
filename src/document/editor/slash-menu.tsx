@@ -24,6 +24,10 @@ export interface SlashCommandContext {
   range: { from: number; to: number };
   /** Open the OS file picker for an image upload. */
   pickImage: () => void;
+  /** Open the OS file picker for a generic file-asset upload. */
+  pickFile: () => void;
+  /** Insert a mindmap block through a Document-Operations batch. */
+  insertMindmap: () => void;
   /** Ask the user for a URL and insert a bookmark card. */
   promptBookmark: () => void;
   /** Show a readable notice in the editor status area. */
@@ -197,7 +201,17 @@ export const slashCommands: readonly SlashCommand[] = [
     icon: '📎',
     run: (context) => {
       replaceQuery(context).run();
-      context.notify('文件卡片将在 P3 提供，暂不可用');
+      context.pickFile();
+    },
+  },
+  {
+    id: 'mindmap',
+    label: '思维导图',
+    keywords: ['mindmap', 'map', '思维导图', '脑图'],
+    icon: '🧠',
+    run: (context) => {
+      replaceQuery(context).run();
+      context.insertMindmap();
     },
   },
 ];

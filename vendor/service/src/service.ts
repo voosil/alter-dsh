@@ -111,7 +111,7 @@ function astBlockText(block: unknown): string[] {
   }
   if (Array.isArray(record.children))
     for (const child of record.children) parts.push(...astBlockText(child));
-  for (const key of ['alt', 'caption', 'title', 'description']) {
+  for (const key of ['alt', 'caption', 'title', 'description', 'name']) {
     const value = record.attrs;
     if (typeof value !== 'object' || value === null) continue;
     const text = (value as Record<string, unknown>)[key];

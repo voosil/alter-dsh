@@ -23,8 +23,10 @@ import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
 import type { Editor } from '@tiptap/core';
 import {
   AlterTiptapEditor,
+  MAX_FILE_BYTES,
   MAX_IMAGE_BYTES,
   validateImageFile,
+  type FileAssetResult,
   type ImageAssetResult,
 } from '../src/document/editor/AlterTiptapEditor';
 import {
@@ -36,7 +38,11 @@ import {
   filterSlashCommands,
   slashCommands,
 } from '../src/document/editor/slash-menu';
-import type { SpaceDocumentClient } from '../src/space-client';
+import {
+  SpaceRemoteError,
+  type SpaceDocumentClient,
+} from '../src/space-client';
+import type { MindmapPayload } from '../src/document/objects';
 import type { AlterDoc } from '../src/document/types';
 
 // jsdom has no layout engine; ProseMirror calls these on elements and ranges.
@@ -120,6 +126,37 @@ const linkedDoc: AlterDoc = {
   ],
 };
 
+const imageDoc: AlterDoc = {
+  format: 'alter-doc/1',
+  schemaVersion: 1,
+  revision: 1,
+  blocks: [
+    {
+      id: 'blk_img',
+      type: 'image',
+      attrs: {
+        assetId: 'asset_img1',
+        alt: '旧图',
+        caption: '旧说明',
+        width: '320px',
+      },
+    },
+  ],
+};
+
+const mindmapDoc: AlterDoc = {
+  format: 'alter-doc/1',
+  schemaVersion: 1,
+  revision: 1,
+  blocks: [
+    {
+      id: 'blk_mm',
+      type: 'mindmap',
+      attrs: { objectId: 'obj_1', caption: '流程' },
+    },
+  ],
+};
+
 interface MountOptions {
   initialDoc?: AlterDoc;
   uploadImage?: (file: File) => Promise<ImageAssetResult>;
@@ -128,6 +165,14 @@ interface MountOptions {
     dataBase64: string;
     name?: string;
   }) => Promise<ImageAssetResult>;
+  uploadFile?: (file: File) => Promise<FileAssetResult>;
+  importFile?: (input: {
+    mime: string;
+    dataBase64: string;
+    name?: string;
+  }) => Promise<FileAssetResult>;
+  getObject?: (objectId: string) => Promise<unknown>;
+  get?: Mock;
   applyOperations?: Mock;
   title?: string;
 }
@@ -136,6 +181,7 @@ interface Harness {
   editor: () => Editor;
   applyOperations: Mock;
   get: Mock;
+  getObject: Mock;
 }
 
 function mount(options: MountOptions = {}): Harness {
@@ -150,16 +196,22 @@ function mount(options: MountOptions = {}): Harness {
       diff: {},
       warnings: [],
     }));
-  const get = vi.fn(async () => ({
-    docId: 'doc-surface',
-    revision,
-    title: options.title ?? '测试文档',
-    doc: initialDoc,
-  }));
+  const get =
+    options.get ??
+    vi.fn(async () => ({
+      docId: 'doc-surface',
+      revision,
+      title: options.title ?? '测试文档',
+      doc: initialDoc,
+    }));
+  const getObject =
+    options.getObject ?? vi.fn(async () => undefined);
   const client = {
     get,
     applyOperations,
     importAsset: options.importAsset,
+    importFile: options.importFile,
+    getObject,
     async outline() {
       return {};
     },
@@ -178,9 +230,6 @@ function mount(options: MountOptions = {}): Harness {
     async generate() {
       return {};
     },
-    async getObject() {
-      return {};
-    },
   } as unknown as SpaceDocumentClient;
   let captured: Editor | undefined;
   render(
@@ -193,6 +242,7 @@ function mount(options: MountOptions = {}): Harness {
       client,
       onSaved: () => {},
       uploadImage: options.uploadImage,
+      uploadFile: options.uploadFile,
       onEditorReady: (instance: Editor) => {
         captured = instance;
       },
@@ -206,6 +256,7 @@ function mount(options: MountOptions = {}): Harness {
     },
     applyOperations,
     get,
+    getObject,
   };
 }
 
@@ -835,6 +886,505 @@ describe('image insertion', () => {
     Object.defineProperty(oversized, 'size', { value: 4 * 1024 * 1024 + 1 });
     expect(MAX_IMAGE_BYTES).toBe(4 * 1024 * 1024);
     expect(validateImageFile(oversized)).toContain('4 MiB');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// File cards (P3)
+// ---------------------------------------------------------------------------
+
+const pdfFile = (name = '需求说明.pdf'): File =>
+  new File([new Uint8Array([1, 2, 3])], name, {
+    type: 'application/pdf',
+  });
+
+function fileUploader(
+  result: Partial<FileAssetResult> = {},
+): (file: File) => Promise<FileAssetResult> {
+  return vi.fn(async (file: File) => ({
+    assetId: 'asset_file1',
+    mime: file.type === '' ? 'application/octet-stream' : file.type,
+    bytes: file.size,
+    name: file.name,
+    ...result,
+  }));
+}
+
+describe('file cards', () => {
+  it('uploads a picked file and inserts an alterFile card', async () => {
+    const uploadFile = fileUploader();
+    const harness = mount({ uploadFile });
+    fireEvent.change(screen.getByLabelText('选择文件'), {
+      target: { files: [pdfFile()] },
+    });
+    await waitFor(() => expect(jsonOf(harness)).toContain('"asset_file1"'));
+    expect(uploadFile).toHaveBeenCalledTimes(1);
+    expect(jsonOf(harness)).toContain('"type":"alterFile"');
+    expect(jsonOf(harness)).toContain('"name":"需求说明.pdf"');
+    expect(jsonOf(harness)).toContain('"mime":"application/pdf"');
+    const link = document.querySelector(
+      '[data-doc-editor="tiptap"] a[download]',
+    ) as HTMLAnchorElement | null;
+    expect(link).toBeTruthy();
+    expect(link!.getAttribute('href')).toBe(
+      '/api/alter-space/asset?id=asset_file1',
+    );
+    expect(link!.getAttribute('download')).toBe('需求说明.pdf');
+  });
+
+  it('uploads through doc.importFile with an inferred mime', async () => {
+    const importFile = vi.fn(
+      async (input: { mime: string; dataBase64: string; name?: string }) => ({
+        assetId: 'asset_rpc_file',
+        mime: input.mime,
+        bytes: 3,
+        name: input.name,
+      }),
+    );
+    const harness = mount({ importFile });
+    fireEvent.change(screen.getByLabelText('选择文件'), {
+      target: {
+        files: [new File([new Uint8Array([1, 2, 3])], '说明.md')],
+      },
+    });
+    await waitFor(() => expect(jsonOf(harness)).toContain('asset_rpc_file'));
+    const call = importFile.mock.calls[0]![0];
+    expect(call.mime).toBe('text/markdown');
+    expect(call.name).toBe('说明.md');
+    expect(call.dataBase64).toMatch(/^[A-Za-z0-9+/]+=*$/);
+  });
+
+  it('reports 文件上传未启用 when the channel is missing', async () => {
+    mount();
+    fireEvent.change(screen.getByLabelText('选择文件'), {
+      target: { files: [pdfFile()] },
+    });
+    expect(await screen.findByText('文件上传未启用')).toBeTruthy();
+  });
+
+  it('rejects unknown types and oversized files with readable errors', async () => {
+    const uploadFile = fileUploader();
+    mount({ uploadFile });
+    const input = screen.getByLabelText('选择文件') as HTMLInputElement;
+    fireEvent.change(input, {
+      target: {
+        files: [
+          new File([new Uint8Array([1])], 'evil.exe', {
+            type: 'application/octet-stream',
+          }),
+        ],
+      },
+    });
+    expect(await screen.findByText(/不支持的文件类型/)).toBeTruthy();
+    const big = pdfFile('big.pdf');
+    Object.defineProperty(big, 'size', { value: MAX_FILE_BYTES + 1 });
+    fireEvent.change(input, { target: { files: [big] } });
+    expect(await screen.findByText(/文件过大/)).toBeTruthy();
+    expect(uploadFile).not.toHaveBeenCalled();
+  });
+
+  it('does not open the inline-link bar for the download control', async () => {
+    const uploadFile = fileUploader();
+    const harness = mount({ uploadFile });
+    fireEvent.change(screen.getByLabelText('选择文件'), {
+      target: { files: [pdfFile()] },
+    });
+    await waitFor(() => expect(jsonOf(harness)).toContain('"asset_file1"'));
+    const link = document.querySelector(
+      '[data-kind="file"] a[download]',
+    ) as HTMLAnchorElement;
+    fireEvent.click(link);
+    expect(screen.queryByRole('dialog', { name: '编辑链接' })).toBeNull();
+  });
+
+  it('opens the file picker from the toolbar and the slash menu', async () => {
+    mount();
+    const input = screen.getByLabelText('选择文件') as HTMLInputElement;
+    const clickSpy = vi.spyOn(input, 'click').mockImplementation(() => {});
+    fireEvent.click(screen.getByRole('button', { name: '插入文件' }));
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+    paste({ text: '/' });
+    await screen.findByRole('listbox', { name: '插入内容' });
+    paste({ text: '文件' });
+    press('Enter');
+    expect(clickSpy).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Image attribute editing (P3)
+// ---------------------------------------------------------------------------
+
+describe('image attribute editing', () => {
+  it('edits alt/caption/width through the node view', async () => {
+    const harness = mount({ initialDoc: imageDoc });
+    fireEvent.click(screen.getByRole('button', { name: '编辑图片' }));
+    expect(
+      (screen.getByLabelText('替代文本') as HTMLInputElement).value,
+    ).toBe('旧图');
+    fireEvent.change(screen.getByLabelText('替代文本'), {
+      target: { value: '新图' },
+    });
+    fireEvent.change(screen.getByLabelText('图片说明'), {
+      target: { value: '新说明' },
+    });
+    fireEvent.change(screen.getByLabelText('图片宽度'), {
+      target: { value: '50%' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存图片属性' }));
+    const node = JSON.parse(jsonOf(harness)).content[0] as {
+      attrs: Record<string, unknown>;
+    };
+    expect(node.attrs['alt']).toBe('新图');
+    expect(node.attrs['caption']).toBe('新说明');
+    expect(node.attrs['width']).toBe('50%');
+    const img = document.querySelector(
+      '[data-kind="image"] img',
+    ) as HTMLImageElement | null;
+    await waitFor(() => expect(img?.style.width).toBe('50%'));
+    expect(screen.queryByLabelText('替代文本')).toBeNull();
+  });
+
+  it('rejects illegal CSS widths without changing attrs', () => {
+    const harness = mount({ initialDoc: imageDoc });
+    fireEvent.click(screen.getByRole('button', { name: '编辑图片' }));
+    fireEvent.change(screen.getByLabelText('图片宽度'), {
+      target: { value: 'calc(100% - 2px)' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存图片属性' }));
+    expect(screen.getByRole('alert').textContent).toContain('宽度格式不正确');
+    expect(jsonOf(harness)).toContain('"width":"320px"');
+    expect(screen.getByLabelText('图片宽度')).toBeTruthy();
+  });
+
+  it('persists image attribute edits through the autosave diff', async () => {
+    vi.useFakeTimers();
+    const applyOperations = vi.fn(async () => ({
+      docId: 'doc-surface',
+      revision: 2,
+      changedBlockIds: [],
+      diff: {},
+      warnings: [],
+    }));
+    mount({ initialDoc: imageDoc, applyOperations });
+    await settle();
+    fireEvent.click(screen.getByRole('button', { name: '编辑图片' }));
+    fireEvent.change(screen.getByLabelText('替代文本'), {
+      target: { value: '新图' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存图片属性' }));
+    await tick(700);
+    expect(applyOperations).toHaveBeenCalledTimes(1);
+    const input = applyOperations.mock.calls[0]![0] as {
+      ops: Array<Record<string, unknown>>;
+    };
+    const op = input.ops[0]!;
+    // A childless atom attribute change is currently a `replace_block`
+    // (target id preserved); accept `update_attrs` if the diff engine switches.
+    expect(['replace_block', 'update_attrs']).toContain(op['op']);
+    if (op['op'] === 'replace_block') {
+      expect(op['target']).toBe('blk_img');
+      const blocks = op['blocks'] as Array<{ attrs: Record<string, unknown> }>;
+      expect(blocks[0]!.attrs['alt']).toBe('新图');
+    } else {
+      expect((op['attrs'] as Record<string, unknown>)['alt']).toBe('新图');
+    }
+  });
+
+  it('clears optional attributes when the fields are emptied', () => {
+    const harness = mount({ initialDoc: imageDoc });
+    fireEvent.click(screen.getByRole('button', { name: '编辑图片' }));
+    fireEvent.change(screen.getByLabelText('替代文本'), {
+      target: { value: '' },
+    });
+    fireEvent.change(screen.getByLabelText('图片宽度'), {
+      target: { value: '' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存图片属性' }));
+    const node = JSON.parse(jsonOf(harness)).content[0] as {
+      attrs: Record<string, unknown>;
+    };
+    expect(node.attrs['alt']).toBeNull();
+    expect(node.attrs['width']).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Mindmap editing (P3)
+// ---------------------------------------------------------------------------
+
+const mindmapPayload = (): MindmapPayload => ({
+  root: {
+    id: 'n1',
+    text: '中心主题',
+    children: [{ id: 'n2', text: '分支' }],
+  },
+});
+
+function mindmapSnapshot(revision = 2) {
+  return {
+    docId: 'doc-surface',
+    revision,
+    title: '测试文档',
+    doc: { ...mindmapDoc, revision },
+  };
+}
+
+describe('mindmap editing', () => {
+  it('opens the tree editor from the node card and saves through update_object', async () => {
+    const getObject = vi.fn(async () => ({
+      id: 'obj_1',
+      type: 'mindmap',
+      payload: mindmapPayload(),
+    }));
+    const get = vi.fn(async () => mindmapSnapshot());
+    const applyOperations = vi.fn(async () => ({
+      docId: 'doc-surface',
+      revision: 2,
+      changedBlockIds: ['blk_mm'],
+      diff: {},
+      warnings: [],
+    }));
+    mount({ initialDoc: mindmapDoc, getObject, get, applyOperations });
+    fireEvent.click(screen.getByRole('button', { name: '编辑思维导图' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: '编辑思维导图',
+    });
+    await waitFor(() =>
+      expect(within(dialog).getByLabelText('节点文本：中心主题')).toBeTruthy(),
+    );
+    fireEvent.change(within(dialog).getByLabelText('节点文本：中心主题'), {
+      target: { value: '新中心' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存' }));
+    await waitFor(() => expect(applyOperations).toHaveBeenCalledTimes(1));
+    const input = applyOperations.mock.calls[0]![0] as {
+      baseRevision: number;
+      ops: Array<Record<string, unknown>>;
+    };
+    expect(input.baseRevision).toBe(1);
+    expect(input.ops).toHaveLength(1);
+    expect(input.ops[0]).toMatchObject({
+      op: 'update_object',
+      target: 'blk_mm',
+    });
+    expect(
+      JSON.stringify((input.ops[0] as { payload: unknown }).payload),
+    ).toContain('新中心');
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('dialog', { name: '编辑思维导图' }),
+      ).toBeNull(),
+    );
+    expect(await screen.findByText('思维导图已保存')).toBeTruthy();
+    expect(get).toHaveBeenCalled();
+  });
+
+  it('inserts a mindmap through two Document-Operations batches', async () => {
+    const updatedDoc: AlterDoc = {
+      format: 'alter-doc/1',
+      schemaVersion: 1,
+      revision: 3,
+      blocks: [
+        {
+          id: 'blk_new_mm',
+          type: 'mindmap',
+          attrs: { objectId: 'obj_new' },
+        },
+      ],
+    };
+    const get = vi.fn(async () => ({
+      docId: 'doc-surface',
+      revision: 3,
+      title: '测试文档',
+      doc: updatedDoc,
+    }));
+    const applyOperations = vi
+      .fn()
+      .mockResolvedValueOnce({
+        docId: 'doc-surface',
+        revision: 2,
+        changedBlockIds: [],
+        diff: {},
+        warnings: [],
+      })
+      .mockResolvedValueOnce({
+        docId: 'doc-surface',
+        revision: 3,
+        changedBlockIds: [],
+        diff: {},
+        warnings: [],
+      });
+    const harness = mount({ get, applyOperations });
+    paste({ text: '/' });
+    await screen.findByRole('listbox', { name: '插入内容' });
+    paste({ text: '思维导图' });
+    const listbox = screen.getByRole('listbox', { name: '插入内容' });
+    expect(
+      within(listbox)
+        .getAllByRole('option')
+        .map((option) => option.getAttribute('aria-label')),
+    ).toEqual(['思维导图']);
+    press('Enter');
+    await waitFor(() => expect(applyOperations).toHaveBeenCalledTimes(2));
+
+    // Batch 1: insert the placeholder block against the current revision.
+    const first = applyOperations.mock.calls[0]![0] as {
+      baseRevision: number;
+      ops: Array<Record<string, unknown>>;
+    };
+    expect(first.baseRevision).toBe(1);
+    expect(first.ops).toHaveLength(1);
+    const insertOp = first.ops[0] as {
+      op: string;
+      blocks: Array<{ id: string; type: string; attrs: Record<string, unknown> }>;
+    };
+    expect(insertOp.op).toBe('insert_blocks');
+    expect(insertOp.blocks[0]).toMatchObject({
+      type: 'mindmap',
+      attrs: { objectId: 'obj_pending' },
+    });
+    const blockId = insertOp.blocks[0]!.id;
+
+    // Batch 2: create the object against the revision returned by batch 1.
+    const second = applyOperations.mock.calls[1]![0] as {
+      baseRevision: number;
+      ops: Array<Record<string, unknown>>;
+    };
+    expect(second.baseRevision).toBe(2);
+    expect(second.ops).toHaveLength(1);
+    expect(second.ops[0]).toMatchObject({
+      op: 'update_object',
+      target: blockId,
+    });
+
+    await waitFor(() =>
+      expect(jsonOf(harness)).toContain('"type":"alterMindmap"'),
+    );
+    expect(await screen.findByText('已插入思维导图')).toBeTruthy();
+  });
+
+  it('cleans up the placeholder block when object creation fails', async () => {
+    const applyOperations = vi
+      .fn()
+      .mockResolvedValueOnce({
+        docId: 'doc-surface',
+        revision: 2,
+        changedBlockIds: [],
+        diff: {},
+        warnings: [],
+      })
+      .mockRejectedValueOnce(
+        new SpaceRemoteError('node/not-found', '节点不存在：blk_lost'),
+      )
+      .mockResolvedValueOnce({
+        docId: 'doc-surface',
+        revision: 3,
+        changedBlockIds: [],
+        diff: {},
+        warnings: [],
+      });
+    mount({ applyOperations });
+    paste({ text: '/' });
+    await screen.findByRole('listbox', { name: '插入内容' });
+    paste({ text: '思维导图' });
+    press('Enter');
+    await waitFor(() => expect(applyOperations).toHaveBeenCalledTimes(3));
+
+    const insertOp = applyOperations.mock.calls[0]![0] as {
+      ops: Array<{ blocks: Array<{ id: string }> }>;
+    };
+    const blockId = insertOp.ops[0]!.blocks[0]!.id;
+    const cleanup = applyOperations.mock.calls[2]![0] as {
+      baseRevision: number;
+      ops: Array<Record<string, unknown>>;
+    };
+    expect(cleanup.baseRevision).toBe(2);
+    expect(cleanup.ops).toEqual([{ op: 'delete_block', target: blockId }]);
+    expect(await screen.findByText(/插入思维导图失败/)).toBeTruthy();
+    expect(screen.getByText(/占位块已清理/)).toBeTruthy();
+  });
+
+  it('does not crash when the placeholder cleanup also fails', async () => {
+    const applyOperations = vi
+      .fn()
+      .mockResolvedValueOnce({
+        docId: 'doc-surface',
+        revision: 2,
+        changedBlockIds: [],
+        diff: {},
+        warnings: [],
+      })
+      .mockRejectedValueOnce(
+        new SpaceRemoteError('node/not-found', '节点不存在：blk_lost'),
+      )
+      .mockRejectedValueOnce(
+        new SpaceRemoteError('doc/conflict', '文档已被修改'),
+      );
+    mount({ applyOperations });
+    paste({ text: '/' });
+    await screen.findByRole('listbox', { name: '插入内容' });
+    paste({ text: '思维导图' });
+    press('Enter');
+    await waitFor(() => expect(applyOperations).toHaveBeenCalledTimes(3));
+    expect(await screen.findByText(/插入思维导图失败/)).toBeTruthy();
+    expect(screen.getByText(/占位块清理失败/)).toBeTruthy();
+  });
+
+  it('shows a conflict error and reloads the document', async () => {
+    const getObject = vi.fn(async () => ({
+      id: 'obj_1',
+      type: 'mindmap',
+      payload: mindmapPayload(),
+    }));
+    const get = vi.fn(async () => mindmapSnapshot(5));
+    const applyOperations = vi.fn(async () => {
+      throw new SpaceRemoteError('doc/conflict', '文档已被修改');
+    });
+    mount({ initialDoc: mindmapDoc, getObject, get, applyOperations });
+    fireEvent.click(screen.getByRole('button', { name: '编辑思维导图' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: '编辑思维导图',
+    });
+    await waitFor(() =>
+      expect(within(dialog).getByLabelText('节点文本：中心主题')).toBeTruthy(),
+    );
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存' }));
+    await waitFor(() =>
+      expect(within(dialog).getByRole('alert').textContent).toContain(
+        '文档已被其他修改更新',
+      ),
+    );
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: '重新加载文档' }),
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('dialog', { name: '编辑思维导图' }),
+      ).toBeNull(),
+    );
+    expect(get).toHaveBeenCalled();
+    expect(
+      await screen.findByText('文档已重新加载，请重新打开思维导图编辑'),
+    ).toBeTruthy();
+  });
+
+  it('surfaces an unreadable object payload as a readable error', async () => {
+    const getObject = vi.fn(async () => ({
+      id: 'obj_1',
+      type: 'mindmap',
+      payload: { root: { text: 42 } },
+    }));
+    mount({ initialDoc: mindmapDoc, getObject });
+    fireEvent.click(screen.getByRole('button', { name: '编辑思维导图' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: '编辑思维导图',
+    });
+    await waitFor(() =>
+      expect(within(dialog).getByRole('alert').textContent).toContain(
+        '缺少节点 id',
+      ),
+    );
   });
 });
 

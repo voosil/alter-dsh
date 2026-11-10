@@ -79,7 +79,7 @@ v0 限制：
 | --- | --- |
 | `doc/not-found` | 文档不存在/已删 |
 | `doc/conflict` | `baseRevision` 不匹配 |
-| `doc/too-large` | AST 序列化超上限 |
+| `doc/too-large` | AST 序列化或文件资产超上限 |
 | `doc/schema-invalid` | AST 结构、`format`、`schemaVersion`、`revision` 或存储内容不合法 |
 | `op/invalid` | op 参数非法/未知 op |
 | `node/not-found` | target 不存在或已删除 |
@@ -159,12 +159,18 @@ v0 限制：
 ```
 
 - 内容寻址：同字节只存一份；id 为 `asset_<sha256 前 32 位>`，二进制放
-  `${dataDir}/assets/<sha[0:2]>/<sha256>.<ext>`（0600），DB 只存元数据。
-- 只允许图片（png/jpeg/webp/gif），单资产 ≤ 4 MiB；导入时校验 mime/大小并去重。
-- 导入：Agent 工具 `space_asset_import` 与浏览器 RPC `doc.importAsset`（`{ mime, dataBase64, name? }`
-  → `{ assetId, mime, bytes, width?, height? }`）接收 base64，解码后 ≤ 4 MiB；编辑器图片上传走后者。
-- 读取：Host 注册 `GET /api/alter-space/asset?id=<assetId>`（Connection 鉴权）返回原始字节，
-  客户端用该 URL 渲染 `<img>`；`space-asset://` 只是 Markdown 投影里的引用写法。
+  `${dataDir}/assets/<sha[0:2]>/<sha256>.<ext>`（0600，未知 mime 用 `bin`），DB 只存元数据。
+- 图片资产：png/jpeg/webp/gif，单资产 ≤ 4 MiB；Agent 工具 `space_asset_import` 与浏览器 RPC
+  `doc.importAsset`（`{ mime, dataBase64, name? }` → `{ assetId, mime, bytes, width?, height? }`）
+  接收 base64，解码后校验 mime/大小并去重；编辑器图片上传走后者。
+- 文件资产：mime 白名单为图片四类、`application/pdf`、`text/plain`、`text/markdown`、`text/csv`、
+  `application/json`、`application/zip` 与 Office Open XML（docx/xlsx/pptx）；单文件 ≤ 8 MiB，
+  HTML/SVG 等可内联执行类型不得加入白名单。浏览器 RPC `doc.importFile`（`{ mime, dataBase64, name? }`
+  → `{ assetId, mime, bytes, name? }`）接收 base64；文件卡以 `attrs.assetId` 引用资产（GC 依据）。
+- 读取：Host 注册 `GET /api/alter-space/asset?id=<assetId>`（Connection 鉴权）返回原始字节；
+  图片以 `content-type` inline 返回供 `<img>` 渲染，非图片返回 `content-disposition: attachment`
+  （文件名做 CRLF/引号转义），两者均带 `x-content-type-options: nosniff` 与 immutable 缓存；
+  `space-asset://` 只是 Markdown 投影里的引用写法。
 - 备份：资产目录必须纳入备份/恢复流程（见 §7）。每日快照会同时生成资产归档。
 
 ## 7. 版本、快照与备份
@@ -182,9 +188,9 @@ v0 限制：
 
 ## 8. RPC 暴露
 
-- 对应端点：`doc.get` / `doc.outline` / `doc.read` / `doc.search` / `doc.applyOps` / `doc.undo` / `doc.restoreVersion` / `doc.generate` / `doc.importAsset` / `object.get`；
+- 对应端点：`doc.get` / `doc.outline` / `doc.read` / `doc.search` / `doc.applyOps` / `doc.undo` / `doc.restoreVersion` / `doc.generate` / `doc.importAsset` / `doc.importFile` / `object.get`；
   其中 `doc.applyOps` / `doc.generate` / `doc.undo` / `doc.restoreVersion` 是正文写入入口，
-  `doc.importAsset` 是资产上传入口，其余端点只读；
+  `doc.importAsset` / `doc.importFile` 是资产上传入口，其余端点只读；
   `doc.get` 返回完整 AST（编辑器加载用），`doc.undo` 应用一次 op log 的 `inverseOps`；
   浏览器编辑器加载 AST、编辑后在客户端做 block 级 diff 生成 Operation 批次再提交，不整篇覆盖；
   新增端点必须同时加入 Host 路由白名单与浏览器客户端映射（约束见 [system-architecture.md](system-architecture.md)）。

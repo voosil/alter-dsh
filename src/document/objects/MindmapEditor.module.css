@@ -1,0 +1,167 @@
+/**
+ * Mindmap tree editor dialog styles (token-driven, matches the document shell).
+ */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--alter-scrim);
+}
+
+.dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(640px, 100%);
+  max-height: min(720px, 100%);
+  overflow: hidden;
+  border: 1px solid var(--alter-border);
+  border-radius: var(--alter-radius-panel);
+  background: var(--alter-surface);
+  box-shadow: var(--alter-shadow-popover);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--alter-space-2);
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--alter-border);
+}
+
+.title {
+  font-size: var(--alter-font-body);
+  font-weight: 600;
+}
+
+.counter {
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+.body {
+  flex: 1;
+  min-height: 120px;
+  overflow: auto;
+  padding: 12px 18px;
+}
+
+.tree {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--alter-radius-xs);
+}
+
+.row[data-selected='true'] {
+  border-color: var(--alter-accent-soft);
+  background: var(--alter-surface-hover);
+}
+
+.input {
+  flex: 1;
+  min-width: 120px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--alter-control-border);
+  border-radius: var(--alter-radius-xs);
+  background: var(--alter-surface);
+  color: var(--alter-text);
+  font-family: var(--alter-font-family);
+  font-size: var(--alter-font-body-sm);
+}
+
+.input:focus-visible {
+  outline: var(--alter-focus-width, 2px) solid
+    var(--alter-focus-ring, var(--alter-accent));
+  outline-offset: 1px;
+}
+
+.action,
+.remove,
+.reload,
+.button,
+.primary {
+  flex: none;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--alter-control-border);
+  border-radius: var(--alter-radius-xs);
+  background: transparent;
+  color: var(--alter-text-secondary);
+  font-family: var(--alter-font-family);
+  font-size: var(--alter-font-caption);
+  cursor: pointer;
+}
+
+.action:hover:not(:disabled),
+.button:hover:not(:disabled) {
+  background: var(--alter-surface-hover);
+}
+
+.remove {
+  color: var(--alter-danger);
+}
+
+.remove:hover:not(:disabled) {
+  border-color: var(--alter-danger);
+}
+
+.reload {
+  margin-top: 8px;
+  color: var(--alter-accent-strong);
+}
+
+.primary {
+  border-color: var(--alter-accent);
+  background: var(--alter-accent);
+  color: var(--alter-surface);
+}
+
+.primary:hover:not(:disabled) {
+  background: var(--alter-accent-strong);
+}
+
+.action:disabled,
+.remove:disabled,
+.reload:disabled,
+.button:disabled,
+.primary:disabled,
+.input:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.error {
+  margin: 10px 0 0;
+  color: var(--alter-danger);
+  font-size: var(--alter-font-caption);
+}
+
+.state {
+  margin: 8px 0;
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-body-sm);
+}
+
+.footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--alter-space-2);
+  padding: 12px 18px;
+  border-top: 1px solid var(--alter-border);
+}

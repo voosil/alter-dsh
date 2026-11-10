@@ -9,8 +9,10 @@
 import type { NewSpaceInput, SpacePatch, SpaceService } from '@alter/protocol';
 import {
   MAX_ASSET_BYTES,
+  MAX_FILE_BYTES,
   type DocumentAssets,
   type ImportAssetInput,
+  type ImportFileInput,
 } from './document/assets.js';
 import type {
   ApplyOperationsInput,
@@ -106,6 +108,7 @@ const DOCUMENT_METHODS = [
   'restoreVersion',
   'generate',
   'importAsset',
+  'importFile',
 ] as const;
 const OBJECT_METHODS = ['get'] as const;
 
@@ -147,7 +150,7 @@ export interface SpaceRpcOptions {
   workspaceSync?: () => SpaceWorkspaceSync | undefined;
   /** Document-model service; absent when the feature is disabled. */
   document?: DocumentService;
-  /** Document asset store; absent disables `doc.importAsset`. */
+  /** Document asset store; absent disables `doc.importAsset` / `doc.importFile`. */
   assets?: DocumentAssets;
 }
 
@@ -193,8 +196,6 @@ function readStoragePatch(input: unknown): Partial<StorageSettings> {
   return patch;
 }
 
-/** Upper bound of a base64 payload that can still decode to {@link MAX_ASSET_BYTES}. */
-const MAX_ASSET_BASE64_LENGTH = Math.ceil(MAX_ASSET_BYTES / 3) * 4;
 /** Standard base64 with optional trailing padding; whitespace is rejected. */
 const BASE64_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
 
@@ -207,28 +208,64 @@ interface ImportedAssetResult {
   height?: number;
 }
 
-/** Decode one browser-uploaded asset payload, rejecting malformed base64. */
-function decodeAssetBase64(encoded: string): Uint8Array {
+/** Public fields `doc.importFile` returns. */
+interface ImportedFileResult {
+  assetId: string;
+  mime: string;
+  bytes: number;
+  name?: string;
+}
+
+interface ImportDecodeLimits {
+  maxBytes: number;
+  tooLargeCode: 'object/invalid' | 'doc/too-large';
+  label: string;
+}
+
+const IMAGE_DECODE_LIMITS: ImportDecodeLimits = {
+  maxBytes: MAX_ASSET_BYTES,
+  tooLargeCode: 'object/invalid',
+  label: '资产',
+};
+
+const FILE_DECODE_LIMITS: ImportDecodeLimits = {
+  maxBytes: MAX_FILE_BYTES,
+  tooLargeCode: 'doc/too-large',
+  label: '文件',
+};
+
+/** Decode one browser-uploaded payload, rejecting malformed base64. */
+function decodeBase64(encoded: string, limits: ImportDecodeLimits): Uint8Array {
   const compact = encoded.trim();
   if (compact.length === 0)
-    throw new DocumentError('object/invalid', '资产内容为空');
-  if (compact.length > MAX_ASSET_BASE64_LENGTH)
+    throw new DocumentError('object/invalid', `${limits.label}内容为空`);
+  // Guard before decoding so a pathological payload cannot be buffered.
+  if (compact.length > Math.ceil(limits.maxBytes / 3) * 4)
     throw new DocumentError(
-      'object/invalid',
-      `资产超过上限 ${MAX_ASSET_BYTES} 字节`,
+      limits.tooLargeCode,
+      `${limits.label}超过上限 ${limits.maxBytes} 字节`,
     );
   if (compact.length % 4 !== 0 || !BASE64_PATTERN.test(compact))
-    throw new DocumentError('object/invalid', '资产内容不是合法的 base64');
+    throw new DocumentError(
+      'object/invalid',
+      `${limits.label}内容不是合法的 base64`,
+    );
   const data = Buffer.from(compact, 'base64');
   if (data.byteLength === 0)
-    throw new DocumentError('object/invalid', '资产内容为空');
+    throw new DocumentError('object/invalid', `${limits.label}内容为空`);
   return new Uint8Array(data);
 }
 
-/** Validate one `doc.importAsset` argument into a store import request. */
-function readImportAssetInput(input: unknown): ImportAssetInput {
+interface RawImportInput {
+  mime: string;
+  dataBase64: string;
+  name?: string;
+}
+
+/** Validate the shared `{ mime, dataBase64, name? }` upload argument. */
+function readRawImportInput(input: unknown, label: string): RawImportInput {
   if (!isPlainObject(input))
-    throw new DocumentError('object/invalid', '资产参数必须是对象');
+    throw new DocumentError('object/invalid', `${label}参数必须是对象`);
   const { mime, dataBase64, name } = input;
   if (typeof mime !== 'string' || mime.trim() === '')
     throw new DocumentError('object/invalid', 'mime 必须是非空字符串');
@@ -238,11 +275,31 @@ function readImportAssetInput(input: unknown): ImportAssetInput {
     throw new DocumentError('object/invalid', 'name 必须是字符串');
   const trimmedName = name?.trim();
   return {
-    data: decodeAssetBase64(dataBase64),
     mime,
+    dataBase64,
     ...(trimmedName === undefined || trimmedName === ''
       ? {}
       : { name: trimmedName }),
+  };
+}
+
+/** Validate one `doc.importAsset` argument into a store import request. */
+function readImportAssetInput(input: unknown): ImportAssetInput {
+  const raw = readRawImportInput(input, '资产');
+  return {
+    data: decodeBase64(raw.dataBase64, IMAGE_DECODE_LIMITS),
+    mime: raw.mime,
+    ...(raw.name === undefined ? {} : { name: raw.name }),
+  };
+}
+
+/** Validate one `doc.importFile` argument into a store import request. */
+function readImportFileInput(input: unknown): ImportFileInput {
+  const raw = readRawImportInput(input, '文件');
+  return {
+    data: decodeBase64(raw.dataBase64, FILE_DECODE_LIMITS),
+    mime: raw.mime,
+    ...(raw.name === undefined ? {} : { name: raw.name }),
   };
 }
 
@@ -260,6 +317,22 @@ async function importDocumentAsset(
     bytes: record.bytes,
     ...(record.width === undefined ? {} : { width: record.width }),
     ...(record.height === undefined ? {} : { height: record.height }),
+  };
+}
+
+/** Import one uploaded file asset and project its public fields. */
+async function importDocumentFile(
+  assets: DocumentAssets | undefined,
+  input: unknown,
+): Promise<ImportedFileResult> {
+  if (assets === undefined)
+    throw new SpaceRpcError('doc/unavailable', '资产存储未启用');
+  const record = await assets.importFile(readImportFileInput(input));
+  return {
+    assetId: record.id,
+    mime: record.mime,
+    bytes: record.bytes,
+    ...(record.name === undefined ? {} : { name: record.name }),
   };
 }
 
@@ -323,6 +396,8 @@ export function createSpaceRpc(options: SpaceRpcOptions): SpaceRpcHandler {
       if (group === 'doc' && DOCUMENT_METHOD_SET.has(method)) {
         if (method === 'importAsset')
           return { value: await importDocumentAsset(options.assets, args[0]) };
+        if (method === 'importFile')
+          return { value: await importDocumentFile(options.assets, args[0]) };
         const document = options.document;
         if (document === undefined)
           throw new SpaceRpcError('doc/unavailable', '文档模型服务未启用');

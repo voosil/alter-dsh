@@ -27,6 +27,16 @@
  *   bare web URL as an inline link;
  * - table insertion plus a contextual table toolbar.
  *
+ * P3 rich blocks:
+ *
+ * - file cards (`alterFile`): picker → `doc.importFile` → `file` AST node with
+ *   a downloadable attachment card;
+ * - image attribute editing (alt / caption / CSS width) through the node view's
+ *   `updateAttributes`, which the autosave diff persists as `update_attrs`;
+ * - mindmap insertion/editing through Document Operations: one batch creates
+ *   the `mindmap` block and its `obj_…` payload (`update_object`), later edits
+ *   replace the object and reload the document revision.
+ *
  * Markdown shortcuts (`# `, `- `, `1. `, `> `, ``` ```, `[ ] `) come from the
  * StarterKit input rules; paste is filtered by the editor schema.
  *
@@ -48,12 +58,13 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from 'react';
-import type { SpaceDocumentClient } from '../../space-client';
-import type { AlterDoc } from '../types';
+import { SpaceRemoteError, type SpaceDocumentClient } from '../../space-client';
+import type { AlterDoc, JsonValue } from '../types';
 import {
   createAutosaveController,
   createDocumentSaver,
   describeSaveError,
+  readRevision,
   readSnapshot,
   type AutosaveController,
   type AutosaveStatus,
@@ -74,7 +85,7 @@ import {
   type CommentMarker,
   type CommentSelectionAnchor,
 } from './comment-marks';
-import { astToTiptap } from './mapping';
+import { astToTiptap, newBlockId } from './mapping';
 import { editorExtensions } from './schema';
 import {
   LinkBar,
@@ -84,6 +95,17 @@ import {
   parseInternalDocLink,
   type InternalDocLink,
 } from './link-bar';
+import {
+  MindmapEditor,
+  MINDMAP_EDIT_EVENT,
+  buildDeleteBlockOperation,
+  buildPendingObjectInsertOperation,
+  buildUpdateObjectOperation,
+  createMindmapPayload,
+  validateMindmapPayload,
+  type MindmapEditRequest,
+  type MindmapPayload,
+} from '../objects';
 import {
   SlashMenu,
   filterSlashCommands,
@@ -156,13 +178,13 @@ function assetImporterOf(
   return typeof candidate === 'function' ? candidate.bind(client) : undefined;
 }
 
-function readFileAsDataUrl(file: File): Promise<string> {
+function readFileAsDataUrl(file: File, label = '图片'): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
       resolve(typeof reader.result === 'string' ? reader.result : '');
     };
-    reader.onerror = () => reject(new Error('读取图片失败，请重试'));
+    reader.onerror = () => reject(new Error(`读取${label}失败，请重试`));
     reader.readAsDataURL(file);
   });
 }
@@ -202,6 +224,195 @@ function describeImageError(error: unknown): string {
   return '图片上传失败，请重试';
 }
 
+/** Result returned by `doc.importFile` for one uploaded attachment. */
+export interface FileAssetResult {
+  assetId: string;
+  mime: string;
+  bytes: number;
+  name?: string;
+}
+
+/** Reads a browser `File` and returns the Host file-asset reference. */
+export type FileUploader = (file: File) => Promise<FileAssetResult>;
+
+/** MIME types accepted by the generic file-asset channel. */
+export const SUPPORTED_FILE_MIMES = [
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/gif',
+  'application/pdf',
+  'text/plain',
+  'text/markdown',
+  'text/csv',
+  'application/json',
+  'application/zip',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+] as const;
+
+/** Maximum file size accepted by the file-asset channel (8 MiB). */
+export const MAX_FILE_BYTES = 8 * 1024 * 1024;
+
+/** Extensions the file picker offers; also used to infer a missing File.type. */
+export const SUPPORTED_FILE_EXTENSIONS = [
+  '.pdf',
+  '.txt',
+  '.md',
+  '.markdown',
+  '.csv',
+  '.json',
+  '.zip',
+  '.docx',
+  '.xlsx',
+  '.pptx',
+] as const;
+
+/** Extension → MIME fallback for browsers that report an empty `File.type`. */
+const FILE_EXTENSION_MIMES: Readonly<Record<string, string>> = {
+  pdf: 'application/pdf',
+  txt: 'text/plain',
+  md: 'text/markdown',
+  markdown: 'text/markdown',
+  csv: 'text/csv',
+  json: 'application/json',
+  zip: 'application/zip',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+};
+
+/** Infer the upload MIME from `File.type`, falling back to the extension. */
+export function inferFileMime(file: File): string | undefined {
+  const declared = file.type.trim().toLowerCase();
+  if ((SUPPORTED_FILE_MIMES as readonly string[]).includes(declared)) {
+    return declared;
+  }
+  const dot = file.name.lastIndexOf('.');
+  if (dot < 0) return undefined;
+  const extension = file.name.slice(dot + 1).trim().toLowerCase();
+  return FILE_EXTENSION_MIMES[extension];
+}
+
+/** Readable validation error for a picked attachment, if any. */
+export function validateFileCard(file: File): string | undefined {
+  if (inferFileMime(file) === undefined) {
+    return '不支持的文件类型：仅支持 PDF/文本/Markdown/CSV/JSON/ZIP/Office 文档';
+  }
+  if (file.size > MAX_FILE_BYTES) {
+    return '文件过大：单个附件最大 8 MiB';
+  }
+  return undefined;
+}
+
+/** Structural view of the optional `doc.importFile` RPC method. */
+type FileImporter = (input: {
+  mime: string;
+  dataBase64: string;
+  name?: string;
+}) => Promise<FileAssetResult>;
+
+/** Read the optional file importer without widening the shared client type. */
+function fileImporterOf(
+  client: SpaceDocumentClient,
+): FileImporter | undefined {
+  const candidate = (
+    client as SpaceDocumentClient & { importFile?: FileImporter }
+  ).importFile;
+  return typeof candidate === 'function' ? candidate.bind(client) : undefined;
+}
+
+/** Default file uploader: base64 → `doc.importFile` → `alterFile` attrs. */
+export async function uploadFileWithClient(
+  client: SpaceDocumentClient,
+  file: File,
+): Promise<FileAssetResult> {
+  const importFile = fileImporterOf(client);
+  if (importFile === undefined) {
+    throw new Error('文件上传未启用');
+  }
+  const mime = inferFileMime(file);
+  if (mime === undefined) {
+    throw new Error('不支持的文件类型：仅支持 PDF/文本/Markdown/CSV/JSON/ZIP/Office 文档');
+  }
+  const dataUrl = await readFileAsDataUrl(file, '文件');
+  const separator = dataUrl.indexOf(',');
+  if (separator < 0) throw new Error('读取文件失败，请重试');
+  const result = await importFile({
+    mime,
+    dataBase64: dataUrl.slice(separator + 1),
+    name: file.name,
+  });
+  if (
+    result === null ||
+    typeof result !== 'object' ||
+    typeof result.assetId !== 'string' ||
+    result.assetId === ''
+  ) {
+    throw new Error('文件上传失败：未返回资产 id');
+  }
+  return result;
+}
+
+function describeFileError(error: unknown): string {
+  if (error instanceof Error && error.message.trim() !== '') {
+    return error.message;
+  }
+  return '文件上传失败，请重试';
+}
+
+/** Readable message for a Document-Operations failure outside the save loop. */
+function describeOperationError(error: unknown): string {
+  if (error instanceof SpaceRemoteError) {
+    if (error.code === 'doc/conflict') {
+      return '文档已被其他修改更新，请重新加载后再试';
+    }
+    return error.message;
+  }
+  if (error instanceof Error && error.message.trim() !== '') {
+    return error.message;
+  }
+  return '操作失败，请重试';
+}
+
+/** Id of the top-level block that contains the current selection. */
+function topLevelBlockIdAt(editor: Editor): string | undefined {
+  const { selection } = editor.state;
+  let found: string | undefined;
+  editor.state.doc.forEach((node, offset) => {
+    if (found !== undefined) return;
+    if (selection.from >= offset && selection.from <= offset + node.nodeSize) {
+      const blockId = node.attrs['blockId'];
+      if (typeof blockId === 'string' && blockId !== '') found = blockId;
+    }
+  });
+  return found;
+}
+
+/** Find the top-level mindmap block that references `objectId`. */
+function findMindmapBlockId(
+  editor: Editor,
+  objectId: string,
+): string | undefined {
+  let found: string | undefined;
+  editor.state.doc.descendants((node) => {
+    if (found !== undefined) return false;
+    if (node.type.name !== 'alterMindmap') return true;
+    if (node.attrs['objectId'] !== objectId) return true;
+    const blockId = node.attrs['blockId'];
+    if (typeof blockId === 'string' && blockId !== '') found = blockId;
+    return false;
+  });
+  return found;
+}
+
+/** Read the object payload out of a `doc.getObject` / `object.get` result. */
+function readObjectPayload(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null) return undefined;
+  return (value as Record<string, unknown>)['payload'];
+}
+
 /** Stable empty marker list so effects do not re-run on every render. */
 const EMPTY_COMMENT_MARKERS: readonly CommentMarker[] = [];
 
@@ -231,6 +442,8 @@ export interface AlterTiptapEditorProps {
   readOnly?: boolean;
   /** Override the image uploader (tests / integrations with a custom channel). */
   uploadImage?: ImageUploader;
+  /** Override the generic file uploader (tests / integrations). */
+  uploadFile?: FileUploader;
   /** Receives the editor instance once mounted (tests / integrations). */
   onEditorReady?: (editor: Editor) => void;
   /** Comment highlights supplied by the comment rail (P2). */
@@ -243,6 +456,17 @@ export interface AlterTiptapEditorProps {
   onCommentClick?: (id: string) => void;
   /** Comment to select/scroll to; set by the comment rail. */
   activeCommentId?: string | null;
+}
+
+/** Dialog state of the mindmap tree editor. */
+interface MindmapEditorState {
+  blockId: string;
+  objectId: string;
+  payload: MindmapPayload | null;
+  loading: boolean;
+  saving: boolean;
+  error: string | null;
+  conflict: boolean;
 }
 
 interface LinkBarState {
@@ -376,6 +600,7 @@ export function AlterTiptapEditor({
   restore,
   readOnly = false,
   uploadImage,
+  uploadFile,
   onEditorReady,
   commentMarkers,
   onCommentAnchorChange,
@@ -387,13 +612,17 @@ export function AlterTiptapEditor({
   const [slash, setSlash] = useState<SlashMenuState | null>(null);
   const [linkBar, setLinkBar] = useState<LinkBarState | null>(null);
   const [notice, setNotice] = useState<EditorNotice | null>(null);
-  const [uploading, setUploading] = useState(false);
+  const [uploading, setUploading] = useState<'image' | 'file' | null>(null);
+  const [mindmapEditor, setMindmapEditor] = useState<MindmapEditorState | null>(
+    null,
+  );
 
   const loadingRef = useRef(false);
   const disposedRef = useRef(false);
   const latestEditorJsonRef = useRef<JSONContent | undefined>(undefined);
   const editorRef = useRef<Editor | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const currentTitleRef = useRef(title);
   currentTitleRef.current = title;
   const lastSeenTitleRef = useRef(initialTitle);
@@ -420,6 +649,11 @@ export function AlterTiptapEditor({
   );
   uploadImageRef.current =
     uploadImage ?? ((file) => uploadImageWithClient(clientRef.current, file));
+  const uploadFileRef = useRef<FileUploader>((file) =>
+    uploadFileWithClient(clientRef.current, file),
+  );
+  uploadFileRef.current =
+    uploadFile ?? ((file) => uploadFileWithClient(clientRef.current, file));
 
   const slashRef = useRef<SlashMenuState | null>(null);
   slashRef.current = slash;
@@ -427,6 +661,7 @@ export function AlterTiptapEditor({
   linkBarRef.current = linkBar;
   const filteredCommandsRef = useRef<readonly SlashCommand[]>([]);
   const executeSlashRef = useRef<(command: SlashCommand) => void>(() => {});
+  const insertMindmapRef = useRef<() => void>(() => {});
 
   const externalToken = `${docId}#${baseRevision}#${initialDoc.revision}`;
   const lastExternalTokenRef = useRef(externalToken);
@@ -547,7 +782,7 @@ export function AlterTiptapEditor({
         pending.push(file);
       }
       if (pending.length === 0) return;
-      setUploading(true);
+      setUploading('image');
       try {
         let insertAt = position;
         for (const file of pending) {
@@ -578,7 +813,65 @@ export function AlterTiptapEditor({
           }
         }
       } finally {
-        setUploading(false);
+        setUploading(null);
+      }
+    },
+    [showNotice],
+  );
+
+  /** Validate, upload and insert file cards (picker entry). */
+  const insertFileFiles = useCallback(
+    async (files: readonly File[], position?: number): Promise<void> => {
+      const current = editorRef.current;
+      if (current === null || !current.isEditable) return;
+      const pending: File[] = [];
+      for (const file of files) {
+        const invalid = validateFileCard(file);
+        if (invalid !== undefined) {
+          showNotice(invalid, 'error');
+          continue;
+        }
+        pending.push(file);
+      }
+      if (pending.length === 0) return;
+      setUploading('file');
+      try {
+        let insertAt = position;
+        for (const file of pending) {
+          try {
+            const mime = inferFileMime(file);
+            const uploaded = await uploadFileRef.current(file);
+            if (current.isDestroyed) return;
+            const node: JSONContent = {
+              type: 'alterFile',
+              attrs: {
+                assetId: uploaded.assetId,
+                name: file.name.trim() === '' ? '附件' : file.name.trim(),
+                mime: uploaded.mime ?? mime ?? 'application/octet-stream',
+                bytes:
+                  typeof uploaded.bytes === 'number'
+                    ? uploaded.bytes
+                    : file.size,
+              },
+            };
+            const chain = current.chain().focus();
+            if (insertAt === undefined) {
+              chain.insertContent([node, { type: 'paragraph' }]).run();
+            } else {
+              chain
+                .insertContentAt(clampPosition(current, insertAt), [
+                  node,
+                  { type: 'paragraph' },
+                ])
+                .run();
+            }
+            insertAt = undefined;
+          } catch (error) {
+            showNotice(describeFileError(error), 'error');
+          }
+        }
+      } finally {
+        setUploading(null);
       }
     },
     [showNotice],
@@ -660,6 +953,8 @@ export function AlterTiptapEditor({
         editor: current,
         range,
         pickImage: () => imageInputRef.current?.click(),
+        pickFile: () => fileInputRef.current?.click(),
+        insertMindmap: () => insertMindmapRef.current(),
         promptBookmark: () => openLinkBar('bookmark'),
         notify: (message) => showNotice(message),
       };
@@ -855,6 +1150,8 @@ export function AlterTiptapEditor({
         const target = event.target as HTMLElement | null;
         const anchor = target?.closest?.('a[href]');
         if (anchor === null || anchor === undefined) return false;
+        // File-card download links are node-view controls, not inline links.
+        if (anchor.hasAttribute('download')) return false;
         const range = linkRangeFromElement(view, anchor);
         if (range === undefined) return false;
         setLinkBar({
@@ -878,8 +1175,17 @@ export function AlterTiptapEditor({
       syncSlashState(editor);
       syncCommentSelection(editor);
     },
-    onBlur: () => {
+    onBlur: ({ event }) => {
       setSlash(null);
+      // Focusing the comment rail is how an anchored comment gets written; the
+      // blur it causes must not drop the selection the comment quotes.
+      const next = event.relatedTarget;
+      if (
+        next !== null &&
+        next instanceof Element &&
+        next.closest('[data-space-comment-rail]') !== null
+      )
+        return;
       reportCommentSelection(null);
     },
   });
@@ -1071,6 +1377,276 @@ export function AlterTiptapEditor({
     [controller, docId, editor, saver],
   );
 
+  /** Load the current Host snapshot and adopt it without recreating the editor. */
+  const reloadDocumentSnapshot = useCallback(async (): Promise<void> => {
+    const snapshot = readSnapshot(await clientRef.current.get(docId));
+    if (snapshot === undefined) {
+      throw new Error('服务端返回的文档结构无法识别');
+    }
+    applyServerSnapshot(snapshot);
+  }, [applyServerSnapshot, docId]);
+
+  /**
+   * Flush the autosave queue and return the revision an out-of-band
+   * Document-Operations batch must be based on. A failed save aborts the batch
+   * so local edits are never dropped by the following reload.
+   */
+  const prepareOperationBase = useCallback(async (): Promise<number> => {
+    await controller.flush();
+    const flushStatus = controller.getStatus();
+    if (
+      flushStatus.kind === 'failed' ||
+      flushStatus.kind === 'conflict' ||
+      controller.hasPending()
+    ) {
+      throw new Error('当前编辑尚未保存成功，请先处理保存错误后再继续');
+    }
+    return saver.context().baseRevision;
+  }, [controller, saver]);
+
+  /**
+   * Insert a mindmap block in two Document-Operations batches.
+   *
+   * The Host resolves `update_object` targets against the batch's base
+   * document, so the block must be inserted (batch 1) before its object can be
+   * created (batch 2). If batch 2 fails, the placeholder block is removed on a
+   * best-effort third batch so no block is left with a dangling
+   * `obj_pending` ref.
+   */
+  const insertMindmapBlock = useCallback(async (): Promise<void> => {
+    const current = editorRef.current;
+    if (current === null || !current.isEditable) return;
+    const blockId = newBlockId();
+    const payload = createMindmapPayload();
+    let baseRevision: number;
+    try {
+      baseRevision = await prepareOperationBase();
+    } catch (error) {
+      showNotice(`插入思维导图失败：${describeOperationError(error)}`, 'error');
+      return;
+    }
+    const after = topLevelBlockIdAt(current);
+    // Lock the surface while the two batches are in flight so edits typed
+    // between the round-trips cannot be overwritten by the reload below.
+    const wasEditable = current.isEditable;
+    current.setEditable(false);
+    try {
+      let insertedRevision: number;
+      try {
+        const insertResult = await clientRef.current.applyOperations({
+          docId,
+          baseRevision,
+          ops: [
+            buildPendingObjectInsertOperation({
+              blockId,
+              kind: 'mindmap',
+              ...(after === undefined ? {} : { after }),
+            }),
+          ],
+        });
+        insertedRevision = readRevision(insertResult) ?? baseRevision + 1;
+      } catch (error) {
+        showNotice(
+          `插入思维导图失败：${describeOperationError(error)}`,
+          'error',
+        );
+        return;
+      }
+      try {
+        await clientRef.current.applyOperations({
+          docId,
+          baseRevision: insertedRevision,
+          ops: [
+            buildUpdateObjectOperation(
+              blockId,
+              payload as unknown as JsonValue,
+            ),
+          ],
+        });
+      } catch (error) {
+        let cleanupHint = '';
+        try {
+          await clientRef.current.applyOperations({
+            docId,
+            baseRevision: insertedRevision,
+            ops: [buildDeleteBlockOperation(blockId)],
+          });
+          cleanupHint = '（占位块已清理）';
+        } catch {
+          cleanupHint = '（占位块清理失败，请刷新后手动删除）';
+        }
+        showNotice(
+          `插入思维导图失败：${describeOperationError(error)}${cleanupHint}`,
+          'error',
+        );
+        return;
+      }
+      try {
+        await reloadDocumentSnapshot();
+        showNotice('已插入思维导图');
+      } catch (error) {
+        showNotice(
+          `思维导图已插入，但刷新文档失败：${describeOperationError(error)}`,
+          'error',
+        );
+      }
+    } finally {
+      if (!current.isDestroyed) current.setEditable(wasEditable);
+    }
+  }, [
+    docId,
+    prepareOperationBase,
+    reloadDocumentSnapshot,
+    showNotice,
+  ]);
+  insertMindmapRef.current = () => {
+    void insertMindmapBlock();
+  };
+
+  /** Load one mindmap object payload and open the tree editor. */
+  const openMindmapEditor = useCallback(
+    async (request: MindmapEditRequest): Promise<void> => {
+      const current = editorRef.current;
+      if (current === null || !current.isEditable) return;
+      const blockId =
+        request.blockId ?? findMindmapBlockId(current, request.objectId);
+      if (blockId === undefined) {
+        showNotice('无法定位思维导图块，请刷新后重试', 'error');
+        return;
+      }
+      setMindmapEditor({
+        blockId,
+        objectId: request.objectId,
+        payload: null,
+        loading: true,
+        saving: false,
+        error: null,
+        conflict: false,
+      });
+      try {
+        const record = await clientRef.current.getObject(request.objectId);
+        if (record === undefined || record === null) {
+          setMindmapEditor((state) =>
+            state === null
+              ? state
+              : {
+                  ...state,
+                  loading: false,
+                  error: '思维导图对象不存在或已被删除',
+                },
+          );
+          return;
+        }
+        const validated = validateMindmapPayload(readObjectPayload(record));
+        setMindmapEditor((state) =>
+          state === null
+            ? state
+            : validated.ok
+              ? { ...state, loading: false, payload: validated.payload }
+              : { ...state, loading: false, error: validated.error },
+        );
+      } catch (error) {
+        setMindmapEditor((state) =>
+          state === null
+            ? state
+            : {
+                ...state,
+                loading: false,
+                error: describeOperationError(error),
+              },
+        );
+      }
+    },
+    [showNotice],
+  );
+
+  /** Save the edited mindmap payload through `update_object`, then reload. */
+  const saveMindmapEditor = useCallback(
+    async (payload: MindmapPayload): Promise<void> => {
+      const state = mindmapEditor;
+      if (state === null || state.saving) return;
+      setMindmapEditor({ ...state, saving: true, error: null, conflict: false });
+      try {
+        const baseRevision = await prepareOperationBase();
+        await clientRef.current.applyOperations({
+          docId,
+          baseRevision,
+          ops: [
+            { op: 'update_object', target: state.blockId, payload },
+          ],
+        });
+        await reloadDocumentSnapshot();
+        setMindmapEditor(null);
+        showNotice('思维导图已保存');
+      } catch (error) {
+        const conflict =
+          error instanceof SpaceRemoteError && error.code === 'doc/conflict';
+        setMindmapEditor((current) =>
+          current === null
+            ? current
+            : {
+                ...current,
+                saving: false,
+                conflict,
+                error: conflict
+                  ? '文档已被其他修改更新，请重新加载后再保存'
+                  : describeOperationError(error),
+              },
+        );
+      }
+    },
+    [
+      docId,
+      mindmapEditor,
+      prepareOperationBase,
+      reloadDocumentSnapshot,
+      showNotice,
+    ],
+  );
+
+  /** Conflict recovery: reload the document revision, then reopen the editor. */
+  const reloadMindmapDocument = useCallback(async (): Promise<void> => {
+    setMindmapEditor((current) =>
+      current === null
+        ? current
+        : { ...current, loading: true, error: null, conflict: false },
+    );
+    try {
+      await reloadDocumentSnapshot();
+      setMindmapEditor(null);
+      showNotice('文档已重新加载，请重新打开思维导图编辑');
+    } catch (error) {
+      setMindmapEditor((current) =>
+        current === null
+          ? current
+          : { ...current, loading: false, error: describeOperationError(error) },
+      );
+    }
+  }, [reloadDocumentSnapshot, showNotice]);
+
+  const closeMindmapEditor = useCallback((): void => {
+    setMindmapEditor(null);
+  }, []);
+
+  // The mindmap node view asks the surface to open its tree editor.
+  useEffect(() => {
+    const onEditRequest = (event: Event): void => {
+      const detail = (event as CustomEvent<MindmapEditRequest>).detail;
+      if (
+        detail === undefined ||
+        typeof detail.objectId !== 'string' ||
+        detail.objectId === ''
+      ) {
+        return;
+      }
+      void openMindmapEditor(detail);
+    };
+    window.addEventListener(MINDMAP_EDIT_EVENT, onEditRequest);
+    return () => {
+      window.removeEventListener(MINDMAP_EDIT_EVENT, onEditRequest);
+    };
+  }, [openMindmapEditor]);
+
   const handleRetry = useCallback(() => {
     void controller.retry();
   }, [controller]);
@@ -1167,6 +1743,14 @@ export function AlterTiptapEditor({
     if (files.length > 0) void insertImageFiles(files);
   };
 
+  const handleFileInputChange = (
+    event: ChangeEvent<HTMLInputElement>,
+  ): void => {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = '';
+    if (files.length > 0) void insertFileFiles(files);
+  };
+
   const handleSurfaceClick = useCallback(
     (event: ReactMouseEvent<HTMLDivElement>): void => {
       const target = event.target as HTMLElement | null;
@@ -1188,6 +1772,8 @@ export function AlterTiptapEditor({
     const target = event.target as HTMLElement | null;
     const anchor = target?.closest?.('a[href]');
     if (anchor === null || anchor === undefined) return;
+    // Do not treat the file-card download control as an inline link.
+    if (anchor.hasAttribute('download')) return;
     const range = linkRangeFromElement(current.view, anchor);
     if (range === undefined) return;
     setLinkBar((existing) =>
@@ -1356,6 +1942,12 @@ export function AlterTiptapEditor({
             onClick={() => imageInputRef.current?.click()}
           />
           <ToolButton
+            label="文件"
+            title="插入文件"
+            disabled={toolsDisabled}
+            onClick={() => fileInputRef.current?.click()}
+          />
+          <ToolButton
             label="分割线"
             title="插入分割线"
             disabled={toolsDisabled}
@@ -1383,7 +1975,11 @@ export function AlterTiptapEditor({
           />
         </ToolGroup>
         <div className={styles.toolbarSpacer} />
-        {uploading ? <span className={styles.savingHint}>图片上传中…</span> : null}
+        {uploading === null ? null : (
+          <span className={styles.savingHint}>
+            {uploading === 'image' ? '图片上传中…' : '文件上传中…'}
+          </span>
+        )}
         {status.kind === 'saving' ? (
           <span className={styles.savingHint}>保存中…</span>
         ) : null}
@@ -1518,6 +2114,16 @@ export function AlterTiptapEditor({
         onChange={handleImageInputChange}
       />
 
+      <input
+        ref={fileInputRef}
+        type="file"
+        className={styles.fileInput}
+        aria-label="选择文件"
+        accept={SUPPORTED_FILE_EXTENSIONS.join(',')}
+        multiple
+        onChange={handleFileInputChange}
+      />
+
       {slash === null ? null : (
         <SlashMenu
           commands={filteredCommands}
@@ -1531,6 +2137,22 @@ export function AlterTiptapEditor({
           onSelect={executeSlashCommand}
         />
       )}
+
+      <MindmapEditor
+        open={mindmapEditor !== null}
+        initial={mindmapEditor?.payload ?? null}
+        loading={mindmapEditor?.loading ?? false}
+        saving={mindmapEditor?.saving ?? false}
+        error={mindmapEditor?.error ?? null}
+        conflict={mindmapEditor?.conflict ?? false}
+        onSave={(payload) => {
+          void saveMindmapEditor(payload);
+        }}
+        onClose={closeMindmapEditor}
+        onReload={() => {
+          void reloadMindmapDocument();
+        }}
+      />
     </section>
   );
 }

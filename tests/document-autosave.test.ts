@@ -323,6 +323,31 @@ describe('autosave controller', () => {
     expect(harness.save).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps the draft when unmounting while an older save is in flight', async () => {
+    let resolveSave: ((outcome: SaveOutcome) => void) | undefined;
+    const harness = makeController(
+      () =>
+        new Promise<SaveOutcome>((resolve) => {
+          resolveSave = resolve;
+        }),
+    );
+    harness.controller.notifyChange();
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_DEBOUNCE_MS);
+    expect(harness.save).toHaveBeenCalledTimes(1);
+
+    // A newer edit lands while the request is in flight, then the editor
+    // unmounts (document switch / panel close).
+    harness.controller.notifyChange();
+    const writesBeforeDispose = harness.writes.length;
+    harness.controller.dispose();
+    expect(harness.writes.length).toBe(writesBeforeDispose + 1);
+
+    // The in-flight receipt is older than that draft: it must not erase it.
+    resolveSave?.({ kind: 'saved', revision: 3 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(harness.cleared).not.toHaveBeenCalled();
+  });
+
   it('clears the draft when the saved content equals the baseline', async () => {
     const harness = makeController(async () => ({ kind: 'skipped' }));
     harness.controller.notifyChange();

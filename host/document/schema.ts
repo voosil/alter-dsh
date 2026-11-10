@@ -279,6 +279,26 @@ export const NODE_TYPES: Readonly<Record<string, NodeTypeDefinition>> = {
     markdown: { anchors: 'comment' },
     render: { editor: 'image', readOnly: 'image' },
   },
+  file: {
+    type: 'file',
+    schemaVersion: 1,
+    kind: 'content',
+    contentModel: 'none',
+    attrs: {
+      assetId: { type: 'assetRef', required: true },
+      name: { type: 'string', required: true, maxLength: 256 },
+      mime: { type: 'string', required: true, maxLength: 128 },
+      bytes: { type: 'number' },
+    },
+    ai: {
+      readable: true,
+      writable: true,
+      preview: 'markdown',
+      ops: [...MEDIA_OPS],
+    },
+    markdown: { anchors: 'comment' },
+    render: { editor: 'file', readOnly: 'file' },
+  },
   bookmark: {
     type: 'bookmark',
     schemaVersion: 1,
@@ -707,8 +727,16 @@ export function plainTextOfInline(content: InlineNode[] | undefined): string {
   return text;
 }
 
-/** Extract the plain text of one textblock; non-inline blocks have none. */
+/**
+ * Extract the searchable plain text of one block: inline content for
+ * textblocks, the display name for `file` cards. Other non-inline blocks have
+ * no text of their own (their attrs are read by the callers that need them).
+ */
 export function plainTextOfBlock(block: BlockNode): string {
+  if (block.type === 'file') {
+    const name = block.attrs.name;
+    return typeof name === 'string' ? name : '';
+  }
   return plainTextOfInline(block.content);
 }
 

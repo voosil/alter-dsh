@@ -32,7 +32,11 @@ import type { MenuAction } from '@alter/ui-system';
 import type { Comment, CommentAnchor, SpaceNode } from '@alter/protocol';
 import { DirectoryButton } from '../../vendor/ui-space/src/components/DirectoryButton';
 import { useSpaceContext } from '../../vendor/ui-space/src/runtime';
-import { displayTitle } from '../../vendor/ui-space/src/utils/tree';
+import { docPath } from '../../vendor/ui-space/src/space-route';
+import {
+  bySiblingOrder,
+  displayTitle,
+} from '../../vendor/ui-space/src/utils/tree';
 import { documentClientOf } from './client-access';
 import {
   anchorText,
@@ -52,6 +56,7 @@ import {
   type DocumentDraft,
 } from './editor/draft';
 import { DocumentSidePanel } from './DocumentSidePanel';
+import { DocumentFooter, HistoryCommentsDialog } from './footer';
 import {
   copyDocumentLink,
   createChildDocument,
@@ -116,6 +121,7 @@ export function AlterDocumentView({
     (CommentAnchor & { quote: string }) | null
   >(null);
   const [pendingDraft, setPendingDraft] = useState(false);
+  const [historyCommentsOpen, setHistoryCommentsOpen] = useState(false);
 
   const loadedRef = useRef(false);
   const titleEditedRef = useRef(false);
@@ -259,6 +265,36 @@ export function AlterDocumentView({
   const openCommentCount = comments.filter(
     (comment) => comment.status === 'open',
   ).length;
+
+  /** Child notes of this document (old footer semantics: notes, not deleted). */
+  const childNotes = useMemo(
+    () =>
+      nodes
+        .filter(
+          (item) =>
+            item.parentId === node.id &&
+            item.kind === 'note' &&
+            item.deletedAt === null,
+        )
+        .sort(bySiblingOrder),
+    [nodes, node.id],
+  );
+
+  /** Full-document comments: comments without a text anchor. */
+  const fullComments = useMemo(
+    () =>
+      comments.filter(
+        (comment) => comment.anchor === null || comment.anchor === undefined,
+      ),
+    [comments],
+  );
+
+  const resolvedComments = useMemo(
+    () => comments.filter((comment) => comment.status === 'resolved'),
+    [comments],
+  );
+
+  const showFooter = childNotes.length > 0 || fullComments.length > 0;
 
   /** Keep stored quotes in sync with the text currently under each anchor. */
   const syncCommentQuotes = useCallback(
@@ -538,6 +574,14 @@ export function AlterDocumentView({
       separatorBefore: true,
       onSelect: () => void exportMarkdown(),
     },
+    {
+      id: 'history-comments',
+      label: '历史评论',
+      icon: <MessageSquare />,
+      separatorBefore: true,
+      disabled: resolvedComments.length === 0,
+      onSelect: () => setHistoryCommentsOpen(true),
+    },
     archived
       ? {
           id: 'unarchive',
@@ -711,6 +755,15 @@ export function AlterDocumentView({
               onCommentClick={handleCommentClick}
             />
           )}
+          {showFooter ? (
+            <DocumentFooter
+              children={childNotes}
+              comments={fullComments}
+              onOpenDocument={(docId) =>
+                router.navigate(docPath(spaceId, docId))
+              }
+            />
+          ) : null}
         </div>
         {commentsOpen ? (
           <CommentRail
@@ -739,6 +792,11 @@ export function AlterDocumentView({
           />
         ) : null}
       </div>
+      <HistoryCommentsDialog
+        open={historyCommentsOpen}
+        comments={comments}
+        onClose={() => setHistoryCommentsOpen(false)}
+      />
     </article>
   );
 }

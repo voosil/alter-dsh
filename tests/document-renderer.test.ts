@@ -50,6 +50,12 @@ const doc: AlterDoc = {
       ],
     }),
     block('blk_img', 'image', { assetId: 'asset_demo', alt: '架构图' }),
+    block('blk_file', 'file', {
+      assetId: 'asset_file',
+      name: '需求说明.pdf',
+      mime: 'application/pdf',
+      bytes: 2048,
+    }),
     block('blk_map', 'mindmap', { objectId: 'obj_demo', caption: '流程' }),
     block('blk_cmp', 'component', { objectId: 'obj_chart', title: '图表' }),
     block('blk_link', 'bookmark', {
@@ -79,6 +85,14 @@ describe('Alter document renderer', () => {
     expect(html).toContain('列1');
     expect(html).toContain('架构图');
     expect(html).toContain('asset_demo');
+    expect(html).toContain('data-card-kind="file"');
+    expect(html).toContain('需求说明.pdf');
+    expect(html).toContain('application/pdf');
+    expect(html).toContain('2.0 KB');
+    expect(html).toContain(
+      'href="/api/alter-space/asset?id=asset_file"',
+    );
+    expect(html).toContain('download="需求说明.pdf"');
     expect(html).toContain('obj_demo');
     expect(html).toContain('obj_chart');
     expect(html).toContain('外部指南');

@@ -6,6 +6,7 @@ import { createDocumentAssetRoute } from '../host/document/asset-route.js';
 import {
   ASSET_ROUTE_PATH,
   MAX_ASSET_BYTES,
+  MAX_FILE_BYTES,
   assetFilePath,
   createDocumentAssets,
 } from '../host/document/assets.js';
@@ -14,6 +15,7 @@ import { openSpaceStore } from '../host/store.js';
 const dirs: string[] = [];
 const fixedNow = () => new Date('2026-11-09T00:00:00.000Z');
 const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+const pdf = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x37, 1, 2, 3]);
 
 afterEach(async () => {
   for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
@@ -57,6 +59,10 @@ describe('document assets', () => {
     await expect(
       assets.import({ data: png, mime: 'image/svg+xml' }),
     ).rejects.toMatchObject({ code: 'object/invalid' });
+    // The image channel stays closed to file mimes.
+    await expect(
+      assets.import({ data: pdf, mime: 'application/pdf' }),
+    ).rejects.toMatchObject({ code: 'object/invalid' });
     await expect(
       assets.import({ data: new Uint8Array(0), mime: 'image/png' }),
     ).rejects.toMatchObject({ code: 'object/invalid' });
@@ -79,6 +85,105 @@ describe('document assets', () => {
     await store.close();
   });
 
+  it('imports and deduplicates downloadable file assets', async () => {
+    const { dir, store, assets } = await setup();
+    const first = await assets.importFile({
+      data: pdf,
+      mime: 'application/pdf',
+      name: '报告.pdf',
+    });
+    expect(first.id).toMatch(/^asset_/);
+    expect(first.mime).toBe('application/pdf');
+    expect(first.bytes).toBe(pdf.byteLength);
+    const file = assetFilePath(dir, first);
+    expect(file.endsWith('.pdf')).toBe(true);
+    expect(await readFile(file)).toEqual(Buffer.from(pdf));
+
+    const again = await assets.importFile({ data: pdf, mime: 'application/pdf' });
+    expect(again.id).toBe(first.id);
+    expect(again.name).toBe('报告.pdf');
+    expect((await assets.read(first.id))?.record.mime).toBe('application/pdf');
+
+    const other = await assets.importFile({
+      data: new Uint8Array([...pdf, 9]),
+      mime: 'application/pdf',
+    });
+    expect(other.id).not.toBe(first.id);
+    await store.close();
+  });
+
+  it('maps every whitelisted file mime to a stable extension', async () => {
+    const { dir, store, assets } = await setup();
+    const cases: Array<[string, string]> = [
+      ['image/png', 'png'],
+      ['application/pdf', 'pdf'],
+      ['text/plain', 'txt'],
+      ['text/markdown', 'md'],
+      ['text/csv', 'csv'],
+      ['application/json', 'json'],
+      ['application/zip', 'zip'],
+      [
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'docx',
+      ],
+      [
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'xlsx',
+      ],
+      [
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        'pptx',
+      ],
+    ];
+    for (const [index, [mime, extension]] of cases.entries()) {
+      const record = await assets.importFile({
+        data: new Uint8Array([index + 1, index + 2]),
+        mime,
+      });
+      expect(record.mime).toBe(mime);
+      expect(assetFilePath(dir, record).endsWith(`.${extension}`)).toBe(true);
+    }
+    // Unknown mimes cannot be imported, but legacy rows fall back to `bin`.
+    expect(
+      assetFilePath(dir, {
+        sha256: 'ab'.repeat(32),
+        mime: 'application/octet-stream',
+      }).endsWith('.bin'),
+    ).toBe(true);
+    await store.close();
+  });
+
+  it('rejects non-whitelisted, empty or oversized files', async () => {
+    const { store, assets } = await setup();
+    for (const mime of [
+      'text/html',
+      'image/svg+xml',
+      'application/javascript',
+      'application/octet-stream',
+    ]) {
+      await expect(
+        assets.importFile({ data: pdf, mime }),
+      ).rejects.toMatchObject({ code: 'object/invalid', message: expect.stringContaining('不支持的文件类型') });
+    }
+    await expect(
+      assets.importFile({ data: new Uint8Array(0), mime: 'application/pdf' }),
+    ).rejects.toMatchObject({ code: 'object/invalid' });
+    await expect(
+      assets.importFile({
+        data: new Uint8Array(MAX_FILE_BYTES + 1),
+        mime: 'application/pdf',
+      }),
+    ).rejects.toMatchObject({ code: 'doc/too-large' });
+    // The file channel applies its own 8 MiB limit: 4 MiB + 1 is fine here.
+    await expect(
+      assets.importFile({
+        data: new Uint8Array(MAX_ASSET_BYTES + 1),
+        mime: 'application/pdf',
+      }),
+    ).resolves.toMatchObject({ mime: 'application/pdf' });
+    await store.close();
+  });
+
   it('serves bytes over the exact asset route and 404s unknown ids', async () => {
     const { store, assets } = await setup();
     const record = await assets.import({ data: png, mime: 'image/png' });
@@ -90,6 +195,8 @@ describe('document assets', () => {
     expect(ok.status).toBe(200);
     expect(ok.headers.get('content-type')).toBe('image/png');
     expect(ok.headers.get('cache-control')).toContain('immutable');
+    expect(ok.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(ok.headers.get('content-disposition')).toBeNull();
     expect(Buffer.from(await ok.arrayBuffer())).toEqual(Buffer.from(png));
 
     const missing = await route(
@@ -102,6 +209,43 @@ describe('document assets', () => {
       }),
     );
     expect(post.status).toBe(405);
+    await store.close();
+  });
+
+  it('serves file assets as attachments with a safe filename', async () => {
+    const { store, assets } = await setup();
+    const route = createDocumentAssetRoute(assets);
+    const named = await assets.importFile({
+      data: pdf,
+      mime: 'application/pdf',
+      name: '报告 "v1"\r\nX-Injected: 1.pdf',
+    });
+    const response = await route(
+      new Request(`http://dsh.internal${ASSET_ROUTE_PATH}?id=${named.id}`),
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('application/pdf');
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(response.headers.get('cache-control')).toContain('immutable');
+    const disposition = response.headers.get('content-disposition') ?? '';
+    expect(disposition.startsWith('attachment; filename="')).toBe(true);
+    expect(disposition).not.toMatch(/[\r\n]/);
+    expect(disposition).not.toContain('"v1"');
+    expect(disposition).toContain("filename*=UTF-8''");
+    expect(disposition).toContain(encodeURIComponent('报告'));
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(Buffer.from(pdf));
+
+    // Without a display name the asset id is the download filename.
+    const anonymous = await assets.importFile({
+      data: new Uint8Array([...pdf, 7]),
+      mime: 'application/pdf',
+    });
+    const fallback = await route(
+      new Request(`http://dsh.internal${ASSET_ROUTE_PATH}?id=${anonymous.id}`),
+    );
+    expect(fallback.headers.get('content-disposition')).toContain(
+      `filename="${anonymous.id}"`,
+    );
     await store.close();
   });
 });

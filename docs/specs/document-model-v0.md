@@ -53,8 +53,8 @@ JSON 字符串；没有 `contentFormat` 之类的格式标记字段，也不存�
 - 结构上限：单文档 block 数 ≤ 5000、树深 ≤ 50；超限以 `doc/schema-invalid` 拒绝。
 - 禁止在 `content` 中放二进制或大 payload；图片走资产、思维导图/组件走对象侧表。
 - 节点模型不兼容变更时升 `schemaVersion`，旧数据由 Schema Registry 的 `migrate` 升级。
-- 文本抽取按 AST 块树提取纯文本（text 节点与对象 alt/caption/title），搜索、概览与新文档判断
-  都不把 AST JSON 当正文。
+- 文本抽取按 AST 块树提取纯文本（text 节点、对象 alt/caption/title 与文件卡 name），搜索、概览与
+  新文档判断都不把 AST JSON 当正文。
 
 ## 3. Block 节点
 
@@ -157,6 +157,7 @@ interface NodeTypeDefinition {
 | `table` | content | table | `headerRows?: number` | 读 + 结构 op（v0 限制） | GFM 表格 |
 | `tableRow` / `tableCell` | content | blocks / inline | — | 结构 op | GFM |
 | `image` | content | none | `assetId`, `alt?`, `caption?`, `width?` | 读 + 替换/属性 | `![alt](space-asset://…)` |
+| `file` | content | none | `assetId`, `name`, `mime`, `bytes?` | 读 + 替换/属性 | `[附件：name](space-asset://…)` |
 | `bookmark` | structured | none | `url`, `title?`, `description?`, `icon?` | 读写/属性+替换 | `[title](url)`（无 title 用 url） |
 | `docLink` | structured | none | `docId`, `title?` | 读写/属性+替换 | `[title](space-doc:<docId>)` |
 | `callout` | content | blocks | `tone: info\|warn\|success\|danger`, `title?`, `icon?`, `collapsed?` | 读写/结构+属性 | `:::callout{…}` 指令 |
@@ -166,6 +167,8 @@ interface NodeTypeDefinition {
 补充约束：
 
 - `image` 的 `space-asset://` URI 只由投影生成、不被 Markdown 解析器接受；插入图片必须用 `assetId`。
+- `file` 的 `space-asset://` URI 同样只由投影生成、不被 Markdown 解析器接受；插入文件必须用
+  `assetId`，`name` / `mime` / `bytes` 只用于卡片展示与下载。
 - `bookmark` / `docLink` 是结构化卡片：目标由 `url` / `docId` 属性承载，投影只输出链接，不内联网页内容。
   只读渲染只把 `http(s)` URL 渲染为可点击链接，其余形式降级为纯文本。
 - table 在 v0 只支持矩形、无合并单元格；合并单元格 v1 再议。
@@ -192,6 +195,7 @@ interface NodeTypeDefinition {
 | divider | `---` |
 | table | GFM 表格（首行表头） |
 | image | `![alt](space-asset://asset_…)` |
+| file | `[附件：name](space-asset://asset_…)` |
 | bookmark | `[title](url)`（无 title 时用 url 作标题） |
 | docLink | `[title](space-doc:<docId>)`（无 title 时用 docId） |
 | callout | `:::callout{tone="warn" title="…" #blk_id}` … `:::` |

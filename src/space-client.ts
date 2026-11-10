@@ -223,6 +223,28 @@ export interface SpaceImportedAsset {
   height?: number;
 }
 
+/** Browser upload input for `doc.importFile`. */
+export interface SpaceImportFileInput {
+  /**
+   * Whitelisted file media type: the image types, `application/pdf`,
+   * `text/plain`, `text/markdown`, `text/csv`, `application/json`,
+   * `application/zip` or an Office Open XML document type.
+   */
+  mime: string;
+  /** Pure base64 bytes (no data-URL prefix, no line breaks); ≤ 8 MiB decoded. */
+  dataBase64: string;
+  /** Optional display name, used as the download filename. */
+  name?: string;
+}
+
+/** Public file-asset metadata returned by `doc.importFile`. */
+export interface SpaceImportedFile {
+  assetId: string;
+  mime: string;
+  bytes: number;
+  name?: string;
+}
+
 /** Document client mirror of the Host `doc.*` RPC endpoints. */
 export interface SpaceDocumentClient {
   get(docId: string): Promise<unknown>;
@@ -260,6 +282,7 @@ export interface SpaceDocumentClient {
     markdown: string;
   }): Promise<unknown>;
   importAsset(input: SpaceImportAssetInput): Promise<SpaceImportedAsset>;
+  importFile(input: SpaceImportFileInput): Promise<SpaceImportedFile>;
   getObject(objectId: string): Promise<unknown>;
 }
 
@@ -295,6 +318,7 @@ export function createSpaceDocumentClient(
     restoreVersion: (input) => request('doc.restoreVersion', [input]),
     generate: (input) => request('doc.generate', [input]),
     importAsset: (input) => request('doc.importAsset', [input]),
+    importFile: (input) => request('doc.importFile', [input]),
     getObject: (objectId) => request('object.get', [objectId]),
   };
 }

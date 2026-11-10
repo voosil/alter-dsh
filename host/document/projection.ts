@@ -399,6 +399,19 @@ function renderImage(block: BlockNode): string {
   return `![${escapeAltText(alt)}](space-asset://${assetId}${title})`;
 }
 
+/** File card: `[附件：name](space-asset://asset_…)`. */
+function renderFile(block: BlockNode): string {
+  const assetId = block.attrs.assetId;
+  const name = typeof block.attrs.name === 'string' ? block.attrs.name.trim() : '';
+  if (typeof assetId !== 'string' || assetId === '') {
+    return `:::opaque{type="file"}\n[unsupported node: file without assetId]\n:::`;
+  }
+  const label = name === '' ? '附件' : name;
+  return `[${renderLinkLabel(`附件：${label}`)}](${renderLinkDestination(
+    `space-asset://${assetId}`,
+  )})`;
+}
+
 function directiveAttrsText(pairs: ReadonlyArray<readonly [string, JsonValue | undefined]>): string {
   const parts: string[] = [];
   for (const [key, value] of pairs) {
@@ -493,6 +506,8 @@ export function projectBlock(block: BlockNode): string {
       return renderTable(block);
     case 'image':
       return renderImage(block);
+    case 'file':
+      return renderFile(block);
     case 'bookmark':
       return renderBookmark(block);
     case 'docLink':

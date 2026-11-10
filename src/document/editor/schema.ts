@@ -10,7 +10,7 @@
  * - a global `blockId` attribute is attached to every block type (including
  *   `tableRow`/`tableCell`/`tableHeader`) so the AST ids survive editing and
  *   the diff can address blocks;
- * - `alterCallout` (container), `alterImage`, `alterMindmap`,
+ * - `alterCallout` (container), `alterImage`, `alterFile`, `alterMindmap`,
  *   `alterComponent`, `alterBookmark` and `alterDocLink` (atoms) are the
  *   custom blocks. They render safe `data-*` placeholder markup and a React
  *   node view; object payloads never enter the editor.
@@ -45,6 +45,7 @@ import {
   AlterCalloutView,
   AlterComponentNodeView,
   AlterDocLinkNodeView,
+  AlterFileNodeView,
   AlterImageNodeView,
   AlterMindmapNodeView,
 } from './node-views';
@@ -70,6 +71,7 @@ export const BLOCK_NODE_TYPES = [
   'tableHeader',
   'alterCallout',
   'alterImage',
+  'alterFile',
   'alterMindmap',
   'alterComponent',
   'alterBookmark',
@@ -109,6 +111,25 @@ function booleanAttribute(key: string): Attribute {
     renderHTML: (attributes: Record<string, unknown>) => {
       const value = attributes[key];
       return typeof value === 'boolean'
+        ? { [`data-${kebab(key)}`]: String(value) }
+        : {};
+    },
+  };
+}
+
+/** A nullable number attribute rendered/parsed as `data-<kebab>`. */
+function numberAttribute(key: string): Attribute {
+  return {
+    default: null,
+    parseHTML: (element: HTMLElement) => {
+      const raw = element.getAttribute(`data-${kebab(key)}`);
+      if (raw === null || raw.trim() === '') return null;
+      const value = Number(raw);
+      return Number.isFinite(value) ? value : null;
+    },
+    renderHTML: (attributes: Record<string, unknown>) => {
+      const value = attributes[key];
+      return typeof value === 'number' && Number.isFinite(value)
         ? { [`data-${kebab(key)}`]: String(value) }
         : {};
     },
@@ -222,6 +243,40 @@ const AlterImage = Node.create({
   },
   addNodeView() {
     return ReactNodeViewRenderer(AlterImageNodeView);
+  },
+});
+
+/** `alterFile`: atom card for one downloadable asset reference. */
+const AlterFile = Node.create({
+  name: 'alterFile',
+  group: 'block',
+  atom: true,
+  selectable: true,
+  draggable: true,
+  addAttributes() {
+    return {
+      assetId: textAttribute('assetId'),
+      name: textAttribute('name'),
+      mime: textAttribute('mime'),
+      bytes: numberAttribute('bytes'),
+    };
+  },
+  parseHTML() {
+    return [{ tag: 'figure[data-alter-file]' }];
+  },
+  renderHTML({ node, HTMLAttributes }) {
+    const attrs = node.attrs as Record<string, unknown>;
+    return [
+      'figure',
+      mergeAttributes(HTMLAttributes, {
+        class: 'alter-file',
+        'data-alter-file': '',
+      }),
+      ['div', { class: 'alter-file-name' }, stringAttr(attrs, 'name') ?? '附件'],
+    ];
+  },
+  addNodeView() {
+    return ReactNodeViewRenderer(AlterFileNodeView);
   },
 });
 
@@ -393,6 +448,7 @@ export const editorExtensions: Extensions = [
   BlockIdAttribute,
   AlterCallout,
   AlterImage,
+  AlterFile,
   AlterMindmap,
   AlterComponent,
   AlterBookmark,

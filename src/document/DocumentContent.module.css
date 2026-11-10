@@ -1,0 +1,48 @@
+/**
+ * Read-only renderer additions (version preview / SSR).
+ *
+ * Only new card styles live here; the rest of the renderer still uses the
+ * document shell styles.
+ */
+
+.fileCard {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 var(--alter-space-4, 16px);
+  padding: 12px 14px;
+  border: 1px solid var(--alter-border);
+  border-radius: var(--alter-radius-control);
+  background: var(--alter-surface-raised);
+  color: var(--alter-text);
+  text-decoration: none;
+}
+
+a.fileCard:hover {
+  background: var(--alter-surface-hover);
+}
+
+.fileIcon {
+  flex: none;
+  font-size: var(--alter-font-body);
+}
+
+.fileBody {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+
+.fileName {
+  overflow: hidden;
+  font-size: var(--alter-font-body-sm);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fileMeta {
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+}

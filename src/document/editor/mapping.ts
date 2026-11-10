@@ -50,6 +50,8 @@ const MAX_WIDTH = 32;
 const MAX_LANG = 32;
 const MAX_URL = 2048;
 const MAX_DOC_ID = 128;
+const MAX_FILE_NAME = 256;
+const MAX_FILE_MIME = 128;
 
 /** Empty paragraph node, used as a schema-required content filler. */
 function emptyParagraph(): JSONContent {
@@ -334,6 +336,21 @@ export function blockToTiptap(block: BlockNode): JSONContent {
         }),
       };
     }
+    case 'file': {
+      const assetId = asString(block.attrs.assetId, 200);
+      if (assetId === undefined) {
+        return placeholderParagraph(block, '[附件：缺少资产 id]');
+      }
+      return {
+        type: 'alterFile',
+        attrs: attrsOf(block, {
+          assetId,
+          name: asString(block.attrs.name, MAX_FILE_NAME),
+          mime: asString(block.attrs.mime, MAX_FILE_MIME),
+          bytes: asNumber(block.attrs.bytes),
+        }),
+      };
+    }
     case 'bookmark': {
       const url = asString(block.attrs.url, MAX_URL);
       if (url === undefined) {
@@ -610,6 +627,8 @@ function tiptapNodeToBlock(
       return tiptapToBlockCallout(node, used);
     case 'alterImage':
       return tiptapToBlockImage(node, used);
+    case 'alterFile':
+      return tiptapToBlockFile(node, used);
     case 'alterMindmap':
     case 'alterComponent':
       return tiptapToBlockObject(node, used);
@@ -711,6 +730,29 @@ function tiptapToBlockImage(node: JSONContent, used: Set<string>): BlockNode {
   const width = asString(node.attrs?.['width'], MAX_WIDTH);
   if (width !== undefined) attrs.width = width;
   return makeBlock(node, { type: 'image', attrs }, used);
+}
+
+function tiptapToBlockFile(node: JSONContent, used: Set<string>): BlockNode {
+  const assetId = asString(node.attrs?.['assetId'], 200);
+  if (assetId === undefined) {
+    return makeBlock(
+      node,
+      {
+        type: 'paragraph',
+        content: [{ type: 'text', text: '[附件：缺少资产 id]' }],
+      },
+      used,
+    );
+  }
+  const attrs: BlockNode['attrs'] = {
+    assetId,
+    name: asString(node.attrs?.['name'], MAX_FILE_NAME) ?? '附件',
+    mime:
+      asString(node.attrs?.['mime'], MAX_FILE_MIME) ?? 'application/octet-stream',
+  };
+  const bytes = asNumber(node.attrs?.['bytes']);
+  if (bytes !== undefined) attrs.bytes = bytes;
+  return makeBlock(node, { type: 'file', attrs }, used);
 }
 
 function tiptapToBlockObject(

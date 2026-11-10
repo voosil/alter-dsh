@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { documentAssetUrl } from './asset-url';
 import type { AlterDoc, BlockNode, InlineNode, Mark } from './types';
 import styles from './AlterDocumentView.module.css';
+import contentStyles from './DocumentContent.module.css';
 
 function safeHref(href: string | undefined): string | undefined {
   if (href === undefined) return undefined;
@@ -139,7 +140,11 @@ function objectPlaceholder(
       <div className={styles.objectMeta}>
         {typeof objectId === 'string' ? objectId : '（无对象）'}
       </div>
-      <div className={styles.objectHint}>对象渲染器随后接入</div>
+      <div className={styles.objectHint}>
+        {kind === 'mindmap'
+          ? '思维导图对象在编辑器中查看与编辑'
+          : '交互组件渲染器将在 P4 接入'}
+      </div>
     </div>
   );
 }
@@ -264,6 +269,58 @@ function AssetFigure({
   );
 }
 
+/** Human-readable byte size of a file card. */
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return '未知大小';
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Downloadable file card; only the asset route is ever linked. */
+function FileCard({ block }: { block: BlockNode }) {
+  const assetId = textAttr(block, 'assetId');
+  const name = textAttr(block, 'name') ?? '附件';
+  const mime = textAttr(block, 'mime');
+  const rawBytes = block.attrs.bytes;
+  const bytes =
+    typeof rawBytes === 'number' && Number.isFinite(rawBytes)
+      ? rawBytes
+      : undefined;
+  const body = (
+    <>
+      <span className={contentStyles.fileIcon} aria-hidden="true">
+        📎
+      </span>
+      <span className={contentStyles.fileBody}>
+        <span className={contentStyles.fileName}>{name}</span>
+        <span className={contentStyles.fileMeta}>
+          {mime ?? '未知类型'}
+          {bytes === undefined ? '' : ` · ${formatBytes(bytes)}`}
+        </span>
+      </span>
+    </>
+  );
+  if (assetId === undefined) {
+    return (
+      <div className={contentStyles.fileCard} data-card-kind="file">
+        {body}
+      </div>
+    );
+  }
+  return (
+    <a
+      className={contentStyles.fileCard}
+      data-card-kind="file"
+      href={documentAssetUrl(assetId)}
+      download={name}
+      rel="noopener noreferrer"
+    >
+      {body}
+    </a>
+  );
+}
+
 function renderBlock(block: BlockNode): ReactNode {
   switch (block.type) {
     case 'paragraph':
@@ -320,6 +377,8 @@ function renderBlock(block: BlockNode): ReactNode {
         />
       );
     }
+    case 'file':
+      return <FileCard key={block.id} block={block} />;
     case 'callout': {
       const tone = typeof block.attrs.tone === 'string' ? block.attrs.tone : 'info';
       const title = typeof block.attrs.title === 'string' ? block.attrs.title : undefined;

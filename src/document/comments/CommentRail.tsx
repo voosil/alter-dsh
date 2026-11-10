@@ -70,7 +70,11 @@ export function CommentRail({
   );
 
   return (
-    <aside className={styles.rail} aria-label="评论">
+    <aside
+      className={styles.rail}
+      aria-label="评论"
+      data-space-comment-rail=""
+    >
       {pendingQuote === null ? null : (
         <CommentComposer
           key={pendingQuote}

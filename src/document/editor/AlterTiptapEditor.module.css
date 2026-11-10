@@ -559,6 +559,117 @@
   color: var(--alter-danger);
 }
 
+.objectEdit {
+  flex: none;
+  padding: 2px 8px;
+  border: 1px solid var(--alter-control-border);
+  border-radius: var(--alter-radius-xs);
+  background: transparent;
+  color: var(--alter-text-secondary);
+  font-family: var(--alter-font-family);
+  font-size: var(--alter-font-micro);
+  cursor: pointer;
+}
+
+.objectEdit:hover {
+  border-color: var(--alter-accent);
+  color: var(--alter-accent-strong);
+}
+
+/* Inline attribute editor of an image card. */
+.objectPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--alter-border);
+  border-radius: var(--alter-radius-xs);
+  background: var(--alter-surface);
+}
+
+.objectField {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--alter-text-secondary);
+  font-size: var(--alter-font-caption);
+}
+
+.objectField > span {
+  flex: none;
+  width: 64px;
+}
+
+.objectInput {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--alter-control-border);
+  border-radius: var(--alter-radius-xs);
+  background: var(--alter-surface);
+  color: var(--alter-text);
+  font-family: var(--alter-font-family);
+  font-size: var(--alter-font-body-sm);
+}
+
+.objectInput:focus-visible {
+  outline: var(--alter-focus-width, 2px) solid
+    var(--alter-focus-ring, var(--alter-accent));
+  outline-offset: 1px;
+}
+
+.objectError {
+  margin: 0;
+  color: var(--alter-danger);
+  font-size: var(--alter-font-caption);
+}
+
+.objectPanelActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.objectSave {
+  flex: none;
+  padding: 2px 10px;
+  border: 1px solid var(--alter-accent);
+  border-radius: var(--alter-radius-xs);
+  background: var(--alter-accent);
+  color: var(--alter-surface);
+  font-family: var(--alter-font-family);
+  font-size: var(--alter-font-micro);
+  cursor: pointer;
+}
+
+.objectSave:hover {
+  background: var(--alter-accent-strong);
+}
+
+.objectCaptionLine {
+  margin-top: 6px;
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+  text-align: center;
+}
+
+/* File card download row. */
+.objectActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.objectDownload {
+  color: var(--alter-accent-strong);
+  font-size: var(--alter-font-caption);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 @media (max-width: 900px) {
   .toolbar {
     gap: var(--alter-space-1);

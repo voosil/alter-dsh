@@ -2,9 +2,10 @@
  * React node views for the custom Alter blocks.
  *
  * - `alterCallout` keeps its child blocks editable (`NodeViewContent`).
- * - `alterImage` / `alterMindmap` / `alterComponent` are atoms: they render a
- *   safe placeholder card (asset / object id + title) instead of executing
- *   anything. Object renderers are out of scope for v0.
+ * - `alterImage` is an atom with an inline attribute editor (alt / caption /
+ *   CSS width); `alterFile` is a downloadable attachment card; `alterMindmap`
+ *   opens the tree editor through a window event, `alterComponent` stays a
+ *   placeholder. Object payloads never enter the editor document.
  * - `alterBookmark` / `alterDocLink` are atom link cards: a web card opens its
  *   URL in a new tab, an internal card navigates through the Space router. The
  *   Space context is optional so the views degrade to read-only previews
@@ -15,7 +16,7 @@
  *
  * @module @alter-dsh/space/document/editor/node-views
  */
-import { useContext, type MouseEvent } from 'react';
+import { useContext, useState, type MouseEvent, type ReactNode } from 'react';
 import {
   NodeViewContent,
   NodeViewWrapper,
@@ -23,6 +24,10 @@ import {
 } from '@tiptap/react';
 import styles from './AlterTiptapEditor.module.css';
 import { documentAssetUrl } from '../asset-url';
+import {
+  MINDMAP_EDIT_EVENT,
+  type MindmapEditRequest,
+} from '../objects/mindmap';
 import { SpaceContext } from '../../../vendor/ui-space/src/runtime';
 import { docPath } from '../../../vendor/ui-space/src/space-route';
 
@@ -36,6 +41,44 @@ const CALLBACK_TONE_LABELS: Record<string, string> = {
 function attrText(props: ReactNodeViewProps, key: string): string | undefined {
   const value = (props.node.attrs as Record<string, unknown>)[key];
   return typeof value === 'string' && value.trim() !== '' ? value : undefined;
+}
+
+/** Read a finite number node attribute. */
+function attrNumber(props: ReactNodeViewProps, key: string): number | undefined {
+  const value = (props.node.attrs as Record<string, unknown>)[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+/** Human-readable byte size for file cards. */
+export function formatFileSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return '未知大小';
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * CSS width values accepted for `image.width` (empty clears the attribute).
+ * Only fixed units and `auto` are allowed; anything that could smuggle CSS
+ * (functions, `calc`, `url`, `;`) is rejected.
+ */
+const IMAGE_WIDTH_PATTERN = /^(?:\d+(?:\.\d+)?(?:px|%|rem|em|vw|vh|ch)|auto)$/;
+
+/** Readable validation error for an image width value, if any. */
+export function validateImageWidth(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (trimmed === '') return undefined;
+  if (trimmed.length > 32) return '宽度值过长（最多 32 个字符）';
+  if (!IMAGE_WIDTH_PATTERN.test(trimmed)) {
+    return '宽度格式不正确：支持 320px、50%、12rem 或 auto';
+  }
+  return undefined;
+}
+
+/** Normalize an image width input: trimmed value, or null when empty. */
+export function normalizeImageWidth(value: string): string | null {
+  const trimmed = value.trim();
+  return trimmed === '' ? null : trimmed;
 }
 
 function RemoveButton({
@@ -88,27 +131,124 @@ export function AlterCalloutView(props: ReactNodeViewProps) {
   );
 }
 
-/** Placeholder card for an image block (asset bytes are not loaded in v0). */
+/** Editable card for an image block: preview plus alt/caption/width editor. */
 export function AlterImageNodeView(props: ReactNodeViewProps) {
   const alt = attrText(props, 'alt');
   const caption = attrText(props, 'caption');
   const width = attrText(props, 'width');
   const assetId = attrText(props, 'assetId');
+  const editable = props.editor.isEditable;
+  const [editing, setEditing] = useState(false);
+  const [draftAlt, setDraftAlt] = useState('');
+  const [draftCaption, setDraftCaption] = useState('');
+  const [draftWidth, setDraftWidth] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const openEditor = (): void => {
+    setDraftAlt(alt ?? '');
+    setDraftCaption(caption ?? '');
+    setDraftWidth(width ?? '');
+    setError(null);
+    setEditing(true);
+  };
+
+  const save = (): void => {
+    const widthError = validateImageWidth(draftWidth);
+    if (widthError !== undefined) {
+      setError(widthError);
+      return;
+    }
+    // `updateAttributes` creates a normal editor transaction: the autosave
+    // diff turns it into `update_attrs` for the Host.
+    props.updateAttributes({
+      alt: draftAlt.trim() === '' ? null : draftAlt.trim(),
+      caption: draftCaption.trim() === '' ? null : draftCaption.trim(),
+      width: normalizeImageWidth(draftWidth),
+    });
+    setEditing(false);
+  };
+
   return (
     <NodeViewWrapper
       as="div"
       className={styles.objectCard}
       data-kind="image"
       data-selected={props.selected ? 'true' : undefined}
+      contentEditable={false}
     >
       <div className={styles.objectHead} contentEditable={false}>
         <span className={styles.objectKind}>图片</span>
         <span className={styles.objectTitle}>{alt ?? '图片块'}</span>
-        {caption === undefined ? null : (
-          <span className={styles.objectCaption}>{caption}</span>
-        )}
+        {editable ? (
+          <button
+            type="button"
+            className={styles.objectEdit}
+            aria-label="编辑图片"
+            title="编辑图片属性"
+            onClick={openEditor}
+          >
+            编辑
+          </button>
+        ) : null}
         <RemoveButton label="删除图片块" onRemove={props.deleteNode} />
       </div>
+      {editing ? (
+        <div className={styles.objectPanel} contentEditable={false}>
+          <label className={styles.objectField}>
+            <span>替代文本</span>
+            <input
+              className={styles.objectInput}
+              aria-label="替代文本"
+              value={draftAlt}
+              maxLength={500}
+              onChange={(event) => setDraftAlt(event.target.value)}
+            />
+          </label>
+          <label className={styles.objectField}>
+            <span>图片说明</span>
+            <input
+              className={styles.objectInput}
+              aria-label="图片说明"
+              value={draftCaption}
+              maxLength={500}
+              onChange={(event) => setDraftCaption(event.target.value)}
+            />
+          </label>
+          <label className={styles.objectField}>
+            <span>宽度</span>
+            <input
+              className={styles.objectInput}
+              aria-label="图片宽度"
+              placeholder="如 320px 或 50%"
+              value={draftWidth}
+              maxLength={32}
+              onChange={(event) => setDraftWidth(event.target.value)}
+            />
+          </label>
+          {error === null ? null : (
+            <p className={styles.objectError} role="alert">
+              {error}
+            </p>
+          )}
+          <div className={styles.objectPanelActions}>
+            <button
+              type="button"
+              className={styles.objectRemove}
+              onClick={() => setEditing(false)}
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              className={styles.objectSave}
+              aria-label="保存图片属性"
+              onClick={save}
+            >
+              保存
+            </button>
+          </div>
+        </div>
+      ) : null}
       <div className={styles.objectMeta} contentEditable={false}>
         {assetId ?? '（缺少资产 id）'}
         {width === undefined ? '' : ` · 宽 ${width}`}
@@ -119,9 +259,58 @@ export function AlterImageNodeView(props: ReactNodeViewProps) {
         ) : (
           <img
             className={styles.objectImage}
+            style={width === undefined ? undefined : { width }}
             src={documentAssetUrl(assetId)}
             alt={alt ?? '图片'}
           />
+        )}
+      </div>
+      {caption === undefined ? null : (
+        <div className={styles.objectCaptionLine} contentEditable={false}>
+          {caption}
+        </div>
+      )}
+    </NodeViewWrapper>
+  );
+}
+
+/** Downloadable file card: name, mime, size and an attachment link. */
+export function AlterFileNodeView(props: ReactNodeViewProps) {
+  const name = attrText(props, 'name') ?? '附件';
+  const mime = attrText(props, 'mime');
+  const assetId = attrText(props, 'assetId');
+  const bytes = attrNumber(props, 'bytes');
+  return (
+    <NodeViewWrapper
+      as="div"
+      className={styles.objectCard}
+      data-kind="file"
+      data-selected={props.selected ? 'true' : undefined}
+      contentEditable={false}
+    >
+      <div className={styles.objectHead} contentEditable={false}>
+        <span className={styles.objectKind} aria-hidden="true">
+          📎
+        </span>
+        <span className={styles.objectTitle}>{name}</span>
+        <RemoveButton label="删除文件卡" onRemove={props.deleteNode} />
+      </div>
+      <div className={styles.objectMeta} contentEditable={false}>
+        {mime ?? '未知类型'}
+        {bytes === undefined ? '' : ` · ${formatFileSize(bytes)}`}
+      </div>
+      <div className={styles.objectActions} contentEditable={false}>
+        {assetId === undefined ? (
+          <span className={styles.objectHint}>（缺少资产 id）</span>
+        ) : (
+          <a
+            className={styles.objectDownload}
+            href={documentAssetUrl(assetId)}
+            download={name}
+            rel="noopener noreferrer"
+          >
+            下载附件
+          </a>
         )}
       </div>
     </NodeViewWrapper>
@@ -134,6 +323,10 @@ function ObjectCard(props: {
   label: string;
   title: string | undefined;
   description: string | undefined;
+  /** Optional header action (mindmap edit entry). */
+  action?: ReactNode;
+  /** Placeholder body text. */
+  hint?: string;
 }) {
   const objectId = attrText(props.view, 'objectId');
   return (
@@ -146,6 +339,7 @@ function ObjectCard(props: {
       <div className={styles.objectHead} contentEditable={false}>
         <span className={styles.objectKind}>{props.label}</span>
         <span className={styles.objectTitle}>{props.title ?? objectId ?? '对象块'}</span>
+        {props.action}
         <RemoveButton
           label={`删除${props.label}块`}
           onRemove={props.view.deleteNode}
@@ -160,14 +354,47 @@ function ObjectCard(props: {
         </div>
       )}
       <div className={styles.objectPlaceholder} contentEditable={false}>
-        对象渲染器随后接入
+        {props.hint ?? '对象渲染器随后接入'}
       </div>
     </NodeViewWrapper>
   );
 }
 
-/** Placeholder card for a mindmap object block. */
+/** Edit entry of a mindmap card: asks the editor surface to open the dialog. */
+function MindmapEditButton({
+  view,
+  objectId,
+}: {
+  view: ReactNodeViewProps;
+  objectId: string | undefined;
+}) {
+  if (objectId === undefined || !view.editor.isEditable) return null;
+  const blockId = attrText(view, 'blockId');
+  return (
+    <button
+      type="button"
+      className={styles.objectEdit}
+      aria-label="编辑思维导图"
+      title="编辑思维导图"
+      onClick={() => {
+        if (typeof window === 'undefined') return;
+        const detail: MindmapEditRequest = {
+          objectId,
+          ...(blockId === undefined ? {} : { blockId }),
+        };
+        window.dispatchEvent(
+          new CustomEvent<MindmapEditRequest>(MINDMAP_EDIT_EVENT, { detail }),
+        );
+      }}
+    >
+      编辑思维导图
+    </button>
+  );
+}
+
+/** Mindmap card with the tree-editor entry; payload stays in the object side table. */
 export function AlterMindmapNodeView(props: ReactNodeViewProps) {
+  const objectId = attrText(props, 'objectId');
   return (
     <ObjectCard
       view={props}
@@ -175,6 +402,12 @@ export function AlterMindmapNodeView(props: ReactNodeViewProps) {
       label="思维导图"
       title={attrText(props, 'caption')}
       description={undefined}
+      action={<MindmapEditButton view={props} objectId={objectId} />}
+      hint={
+        props.editor.isEditable
+          ? '点击「编辑思维导图」编辑内容'
+          : '思维导图对象（只读）'
+      }
     />
   );
 }

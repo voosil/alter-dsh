@@ -151,6 +151,11 @@ describe('createSpaceDocumentClient', () => {
     });
     await document.generate({ spaceId: 'sp-1', markdown: '# x' });
     await document.importAsset({ mime: 'image/png', dataBase64: 'AA==' });
+    await document.importFile({
+      mime: 'application/pdf',
+      dataBase64: 'AA==',
+      name: 'a.pdf',
+    });
     await document.getObject('obj_1');
     expect(calls.map((call) => call.op)).toEqual([
       'doc.get',
@@ -162,11 +167,15 @@ describe('createSpaceDocumentClient', () => {
       'doc.restoreVersion',
       'doc.generate',
       'doc.importAsset',
+      'doc.importFile',
       'object.get',
     ]);
     expect(calls[2]?.args).toEqual(['doc-1', { maxChars: 2000 }]);
     expect(calls[8]?.args).toEqual([
       { mime: 'image/png', dataBase64: 'AA==' },
+    ]);
+    expect(calls[9]?.args).toEqual([
+      { mime: 'application/pdf', dataBase64: 'AA==', name: 'a.pdf' },
     ]);
   });
 
@@ -224,6 +233,62 @@ describe('createSpaceDocumentClient', () => {
       code: 'object/invalid',
       message: '资产内容不是合法的 base64',
     });
+  });
+
+  it('maps file uploads to doc.importFile and unwraps remote failures', async () => {
+    const calls: Array<{ op: string; args: unknown[] }> = [];
+    const rpc: SpaceRpcCaller = {
+      async call(_channel, _endpoint, payload) {
+        const { op, args } = payload as { op: string; args: unknown[] };
+        calls.push({ op, args });
+        const input = args[0] as { dataBase64?: string };
+        if (input.dataBase64 === 'huge')
+          return {
+            ok: true,
+            value: {
+              error: {
+                code: 'doc/too-large',
+                message: '文件超过上限 8388608 字节',
+              },
+            },
+          };
+        return {
+          ok: true,
+          value: {
+            value: {
+              assetId: 'asset_2',
+              mime: 'application/pdf',
+              bytes: 5,
+              name: 'a.pdf',
+            },
+          },
+        };
+      },
+    };
+    const document = createSpaceDocumentClient(rpc);
+    await expect(
+      document.importFile({
+        mime: 'application/pdf',
+        dataBase64: 'AAAA',
+        name: 'a.pdf',
+      }),
+    ).resolves.toEqual({
+      assetId: 'asset_2',
+      mime: 'application/pdf',
+      bytes: 5,
+      name: 'a.pdf',
+    });
+    expect(calls).toEqual([
+      {
+        op: 'doc.importFile',
+        args: [
+          { mime: 'application/pdf', dataBase64: 'AAAA', name: 'a.pdf' },
+        ],
+      },
+    ]);
+    await expect(
+      document.importFile({ mime: 'application/pdf', dataBase64: 'huge' }),
+    ).rejects.toMatchObject({ code: 'doc/too-large' });
   });
 
   it('does not expose the removed legacy migration endpoint', async () => {

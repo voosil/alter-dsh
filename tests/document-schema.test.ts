@@ -12,6 +12,7 @@ import {
   canTransform,
   createBlockNode,
   operationAllowedOn,
+  plainTextOfBlock,
   validateAlterDoc,
   validateObjectPayload,
 } from '../host/document/schema.js';
@@ -49,6 +50,14 @@ describe('document schema', () => {
       }),
       createBlockNode('blk_i', 'image', {
         attrs: { assetId: 'asset_1', alt: '图' },
+      }),
+      createBlockNode('blk_f', 'file', {
+        attrs: {
+          assetId: 'asset_file1',
+          name: '需求说明.pdf',
+          mime: 'application/pdf',
+          bytes: 2048,
+        },
       }),
       createBlockNode('blk_m', 'mindmap', { attrs: { objectId: 'obj_1' } }),
       createBlockNode('blk_b', 'bookmark', {
@@ -160,6 +169,95 @@ describe('document schema', () => {
     expect(operationAllowedOn('docLink', 'update_attrs')).toBe(true);
     expect(operationAllowedOn('bookmark', 'update_text')).toBe(false);
     expect(operationAllowedOn('docLink', 'update_text')).toBe(false);
+  });
+
+  it('enforces file card attribute rules', () => {
+    const valid = createBlockNode('blk_f', 'file', {
+      attrs: {
+        assetId: 'asset_file1',
+        name: '需求说明.pdf',
+        mime: 'application/pdf',
+        bytes: 2048,
+      },
+    });
+    expect(() => validateAlterDoc(doc([valid]))).not.toThrow();
+
+    expect(() =>
+      validateAlterDoc(doc([createBlockNode('blk_f', 'file')])),
+    ).toThrow(/缺少属性 assetId/);
+    expect(() =>
+      validateAlterDoc(
+        doc([
+          createBlockNode('blk_f', 'file', {
+            attrs: { assetId: 'asset_1', name: 'a.pdf' },
+          }),
+        ]),
+      ),
+    ).toThrow(/缺少属性 mime/);
+    expect(() =>
+      validateAlterDoc(
+        doc([
+          createBlockNode('blk_f', 'file', {
+            attrs: {
+              assetId: 'not-an-asset',
+              name: 'a.pdf',
+              mime: 'application/pdf',
+            },
+          }),
+        ]),
+      ),
+    ).toThrow(/不是有效资产 id/);
+    expect(() =>
+      validateAlterDoc(
+        doc([
+          createBlockNode('blk_f', 'file', {
+            attrs: {
+              assetId: 'asset_1',
+              name: 'a'.repeat(257),
+              mime: 'application/pdf',
+            },
+          }),
+        ]),
+      ),
+    ).toThrow(/超过长度上限/);
+    expect(() =>
+      validateAlterDoc(
+        doc([
+          {
+            id: 'blk_f',
+            type: 'file',
+            attrs: {
+              assetId: 'asset_1',
+              name: 'a.pdf',
+              mime: 'application/pdf',
+              bytes: 'big',
+            },
+          },
+        ]),
+      ),
+    ).toThrow(/必须是数字/);
+  });
+
+  it('projects file cards to attachment links and extracts their name', () => {
+    const card = createBlockNode('blk_f', 'file', {
+      attrs: {
+        assetId: 'asset_file1',
+        name: '需求 [说明].pdf',
+        mime: 'application/pdf',
+        bytes: 2048,
+      },
+    });
+    expect(projectBlock(card)).toBe(
+      '[附件：需求 \\[说明\\].pdf](space-asset://asset_file1)',
+    );
+    expect(plainTextOfBlock(card)).toBe('需求 [说明].pdf');
+    expect(operationAllowedOn('file', 'update_attrs')).toBe(true);
+    expect(operationAllowedOn('file', 'update_text')).toBe(false);
+    expect(operationAllowedOn('file', 'update_object')).toBe(false);
+    // A malformed card degrades to a visible opaque placeholder.
+    expect(
+      projectBlock({ id: 'blk_bad', type: 'file', attrs: { name: 'x.pdf' } }),
+    ).toContain('file without assetId');
   });
 
   it('enforces nesting rules', () => {
