@@ -102,7 +102,7 @@ export async function materializeLegacyAssets(
       image.setAttribute('data-asset-id', result.assetId);
       image.setAttribute('src', documentAssetUrl(result.assetId));
     } catch {
-      warnings.push('内联图片上传失败，已降级为占位文本');
+      warnings.push('内联图片上传失败，已保留原内容并阻止保存，请重试');
     }
   }
 
@@ -137,7 +137,7 @@ export async function materializeLegacyAssets(
       file.setAttribute('data-mime', result.mime || mime);
       file.setAttribute('data-bytes', String(result.bytes));
     } catch {
-      warnings.push('内联文件上传失败，已降级为占位文本');
+      warnings.push('内联文件上传失败，已保留原内容并阻止保存，请重试');
     }
   }
 

@@ -332,11 +332,11 @@ check(
     escaped.includes('directory-picker-unavailable'),
   'client bundle must route working-directory picking through the native picker override',
 );
-// The structured editor saves explicitly and carries its own failure
-// affordance; only that user-visible retry path is asserted here.
+// The restored legacy editor shows a silent-save error affordance only;
+// only that user-visible retry path is asserted here.
 check(
   escaped.includes('保存失败'),
-  'the structured document editor must surface a save-failure affordance',
+  'the restored document editor must surface a save-failure affordance',
 );
 check(
   !escaped.includes('createSpaceService'),
