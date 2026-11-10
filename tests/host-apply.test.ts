@@ -41,6 +41,52 @@ function fakeTools(): {
   };
 }
 
+interface RegisteredTool {
+  execute(
+    args: unknown,
+    exec: {
+      callId: string;
+      name: string;
+      arguments: unknown;
+      signal: AbortSignal;
+    },
+  ): Promise<unknown>;
+}
+
+/** Look up one tool definition captured from the Host registration. */
+function toolOf(
+  definitions: Map<string, unknown>,
+  name: string,
+): RegisteredTool {
+  const found = definitions.get(name);
+  if (found === undefined) throw new Error(`tool ${name} is not registered`);
+  return found as RegisteredTool;
+}
+
+const toolExec = (name: string) => ({
+  callId: `${name}-1`,
+  name,
+  arguments: {},
+  signal: new AbortController().signal,
+});
+
+interface AstBlockLike {
+  id: string;
+  type: string;
+  content?: Array<{ type: string; text?: string }>;
+}
+
+interface AstSnapshotLike {
+  revision: number;
+  doc: { blocks: AstBlockLike[] };
+}
+
+function astBlockText(block: AstBlockLike): string {
+  return (block.content ?? [])
+    .map((node) => (node.type === 'text' ? node.text ?? '' : ''))
+    .join('');
+}
+
 interface Harness {
   ctx: HostContextLike;
   routePath: () => string | undefined;
@@ -188,6 +234,7 @@ describe('host plugin apply', () => {
       'space_doc_generate',
       'space_doc_ops',
       'space_doc_outline',
+      'space_doc_patch',
       'space_doc_read',
       'space_doc_search',
       'space_doc_undo',
@@ -280,6 +327,256 @@ describe('host plugin apply', () => {
 
     await harness.teardown();
     expect(fake.definitions.size).toBe(0);
+  });
+
+  it('patches one block through space_doc_patch (CAS, dry_run, idempotency, undo)', async () => {
+    const dir = await tempDir();
+    const fake = fakeTools();
+    const harness = createHarness({ tools: fake.tools });
+    await apply(harness.ctx, { dataDir: dir });
+
+    const markdown = [
+      '# P5 文档',
+      '',
+      ...Array.from(
+        { length: 12 },
+        (_, index) => `段落${index + 1}：可精确改写的正文内容。`,
+      ),
+    ].join('\n\n');
+    const generated = (await harness.call('doc.generate', [
+      { spaceId: 'sp-inbox', title: 'P5 文档', markdown },
+    ])) as { docId: string; revision: number };
+    const docId = generated.docId;
+
+    const before = (await harness.call('doc.get', [docId])) as AstSnapshotLike;
+    expect(before.doc.blocks.length).toBeGreaterThanOrEqual(10);
+    const target = before.doc.blocks.find(
+      (block) => block.type === 'paragraph' && astBlockText(block).startsWith('段落1：'),
+    );
+    expect(target).toBeDefined();
+    const oldText = astBlockText(target!);
+    expect(oldText.length).toBeGreaterThan(0);
+    const newText = '已精确改写的内容';
+
+    const patch = toolOf(fake.definitions, 'space_doc_patch');
+    const patched = (await patch.execute(
+      {
+        doc_id: docId,
+        base_revision: before.revision,
+        block_id: target!.id,
+        old_text: oldText,
+        new_text: newText,
+      },
+      toolExec('space_doc_patch'),
+    )) as {
+      revision: number;
+      changed_block_ids: string[];
+      diff: { applied?: unknown[] };
+      undo_token?: string;
+      dry_run?: boolean;
+    };
+    expect(patched.revision).toBe(before.revision + 1);
+    expect(patched.changed_block_ids).toEqual([target!.id]);
+    expect(patched.undo_token).toBeTruthy();
+    expect(patched.dry_run).toBeUndefined();
+    expect(Array.isArray(patched.diff.applied)).toBe(true);
+    expect(patched.diff.applied!.length).toBeGreaterThan(0);
+
+    // Only the target block changed; every other block is byte-identical.
+    const after = (await harness.call('doc.get', [docId])) as AstSnapshotLike;
+    expect(after.revision).toBe(patched.revision);
+    expect(astBlockText(after.doc.blocks.find((block) => block.id === target!.id)!)).toBe(
+      newText,
+    );
+    expect(
+      after.doc.blocks.filter((block) => block.id !== target!.id),
+    ).toEqual(before.doc.blocks.filter((block) => block.id !== target!.id));
+    const read = (await harness.call('doc.read', [docId])) as { markdown: string };
+    expect(read.markdown).toContain(newText);
+    expect(read.markdown).not.toContain(oldText);
+
+    // dry_run previews the diff without writing or bumping the revision.
+    const preview = (await patch.execute(
+      {
+        doc_id: docId,
+        base_revision: after.revision,
+        block_id: target!.id,
+        old_text: newText,
+        new_text: '预览内容',
+        dry_run: true,
+      },
+      toolExec('space_doc_patch'),
+    )) as { revision: number; dry_run?: boolean; undo_token?: string };
+    expect(preview.dry_run).toBe(true);
+    expect(preview.revision).toBe(after.revision);
+    expect(preview.undo_token).toBeUndefined();
+    const afterPreview = (await harness.call('doc.get', [docId])) as AstSnapshotLike;
+    expect(afterPreview.revision).toBe(after.revision);
+    expect(
+      astBlockText(afterPreview.doc.blocks.find((block) => block.id === target!.id)!),
+    ).toBe(newText);
+
+    // A stale base_revision explains how to recover.
+    const conflict = await patch
+      .execute(
+        {
+          doc_id: docId,
+          base_revision: before.revision,
+          block_id: target!.id,
+          old_text: newText,
+          new_text: '不应写入',
+        },
+        toolExec('space_doc_patch'),
+      )
+      .then(
+        () => undefined,
+        (thrown: unknown) => thrown,
+      );
+    expect(conflict).toBeInstanceOf(Error);
+    expect((conflict as Error).message).toContain('space_doc_read');
+    expect((conflict as Error).message).toContain('space_doc_outline');
+    expect((conflict as Error).message).toContain('重试');
+
+    // Ambiguous old_text is rejected with a replace_all hint.
+    const duplicate = (await harness.call('doc.generate', [
+      { spaceId: 'sp-inbox', title: '重复', markdown: '重复内容重复内容\n' },
+    ])) as { docId: string; revision: number };
+    const duplicateSnapshot = (await harness.call('doc.get', [
+      duplicate.docId,
+    ])) as AstSnapshotLike;
+    const duplicateBlock = duplicateSnapshot.doc.blocks.find(
+      (block) => block.type === 'paragraph',
+    )!;
+    const ambiguous = await patch
+      .execute(
+        {
+          doc_id: duplicate.docId,
+          base_revision: duplicateSnapshot.revision,
+          block_id: duplicateBlock.id,
+          old_text: '重复内容',
+          new_text: '替换',
+        },
+        toolExec('space_doc_patch'),
+      )
+      .then(
+        () => undefined,
+        (thrown: unknown) => thrown,
+      );
+    expect(ambiguous).toBeInstanceOf(Error);
+    expect((ambiguous as Error).message).toContain('replace_all');
+    const replaced = (await patch.execute(
+      {
+        doc_id: duplicate.docId,
+        base_revision: duplicateSnapshot.revision,
+        block_id: duplicateBlock.id,
+        old_text: '重复内容',
+        new_text: '替换',
+        replace_all: true,
+      },
+      toolExec('space_doc_patch'),
+    )) as { revision: number };
+    expect(replaced.revision).toBe(duplicateSnapshot.revision + 1);
+    const duplicateRead = (await harness.call('doc.read', [duplicate.docId])) as {
+      markdown: string;
+    };
+    expect(duplicateRead.markdown).toContain('替换替换');
+
+    // Replaying the same idempotency_key returns the original result and does
+    // not write a second time.
+    const idempotentArgs = {
+      doc_id: docId,
+      base_revision: after.revision,
+      block_id: target!.id,
+      old_text: newText,
+      new_text: '幂等结果',
+      idempotency_key: 'patch-key-1',
+    };
+    const first = (await patch.execute(
+      idempotentArgs,
+      toolExec('space_doc_patch'),
+    )) as { revision: number; undo_token?: string };
+    const replay = (await patch.execute(
+      idempotentArgs,
+      toolExec('space_doc_patch'),
+    )) as { revision: number; undo_token?: string };
+    expect(replay.revision).toBe(first.revision);
+    expect(replay.undo_token).toBe(first.undo_token);
+    const afterReplay = (await harness.call('doc.get', [docId])) as AstSnapshotLike;
+    expect(afterReplay.revision).toBe(first.revision);
+
+    // space_doc_undo reverts the patch through the inverse operations.
+    const undone = (await harness.call('doc.undo', [
+      { docId, baseRevision: first.revision },
+    ])) as { revision: number };
+    expect(undone.revision).toBe(first.revision + 1);
+    const undoneRead = (await harness.call('doc.read', [docId])) as {
+      markdown: string;
+    };
+    expect(undoneRead.markdown).toContain(newText);
+    expect(undoneRead.markdown).not.toContain('幂等结果');
+
+    await harness.teardown();
+  });
+
+  it('applies three consecutive patches to a long document without full rewrites', async () => {
+    const dir = await tempDir();
+    const fake = fakeTools();
+    const harness = createHarness({ tools: fake.tools });
+    await apply(harness.ctx, { dataDir: dir });
+
+    const markdown = [
+      '# 多 patch 文档',
+      '',
+      ...Array.from(
+        { length: 12 },
+        (_, index) => `目标${index + 1}：多轮 patch 的正文。`,
+      ),
+    ].join('\n\n');
+    const generated = (await harness.call('doc.generate', [
+      { spaceId: 'sp-inbox', title: '多 patch 文档', markdown },
+    ])) as { docId: string; revision: number };
+    const docId = generated.docId;
+    const before = (await harness.call('doc.get', [docId])) as AstSnapshotLike;
+    const targets = before.doc.blocks
+      .filter((block) => block.type === 'paragraph')
+      .slice(0, 3);
+    expect(targets).toHaveLength(3);
+
+    const patch = toolOf(fake.definitions, 'space_doc_patch');
+    const replacement = ['改写甲', '改写乙', '改写丙'];
+    let revision = before.revision;
+    for (const [index, block] of targets.entries()) {
+      const result = (await patch.execute(
+        {
+          doc_id: docId,
+          base_revision: revision,
+          block_id: block.id,
+          old_text: astBlockText(block),
+          new_text: replacement[index],
+        },
+        toolExec('space_doc_patch'),
+      )) as { revision: number; changed_block_ids: string[] };
+      expect(result.revision).toBe(revision + 1);
+      expect(result.changed_block_ids).toEqual([block.id]);
+      revision = result.revision;
+    }
+
+    const after = (await harness.call('doc.get', [docId])) as AstSnapshotLike;
+    expect(after.revision).toBe(before.revision + 3);
+    expect(after.doc.blocks).toHaveLength(before.doc.blocks.length);
+    for (const [index, block] of targets.entries()) {
+      expect(
+        astBlockText(after.doc.blocks.find((item) => item.id === block.id)!),
+      ).toBe(replacement[index]);
+    }
+    const untouchedIds = new Set(targets.map((block) => block.id));
+    expect(
+      after.doc.blocks.filter((block) => !untouchedIds.has(block.id)),
+    ).toEqual(before.doc.blocks.filter((block) => !untouchedIds.has(block.id)));
+    const read = (await harness.call('doc.read', [docId])) as { markdown: string };
+    for (const text of replacement) expect(read.markdown).toContain(text);
+
+    await harness.teardown();
   });
 
   it('resolves the data directory from config, DSH_HOME or the home directory', () => {

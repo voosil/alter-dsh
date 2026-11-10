@@ -166,6 +166,7 @@ describe('document Agent tools', () => {
       'space_doc_generate',
       'space_doc_ops',
       'space_doc_outline',
+      'space_doc_patch',
       'space_doc_read',
       'space_doc_search',
       'space_doc_undo',
@@ -175,6 +176,7 @@ describe('document Agent tools', () => {
     expect(definitions.get('space_doc_outline')?.isConcurrencySafe?.({})).toBe(true);
     expect(definitions.get('space_doc_read')?.isConcurrencySafe?.({})).toBe(true);
     expect(definitions.get('space_doc_ops')?.isConcurrencySafe?.({})).toBe(false);
+    expect(definitions.get('space_doc_patch')?.isConcurrencySafe?.({})).toBe(false);
     expect(definitions.get('space_doc_generate')?.isConcurrencySafe?.({})).toBe(false);
     expect(definitions.has('space_doc_migrate')).toBe(false);
     dispose();
@@ -283,6 +285,27 @@ describe('document Agent tools', () => {
     ).rejects.toThrow('doc/conflict: revision 不匹配');
   });
 
+  it('labels a dry-run space_doc_ops result as a preview', async () => {
+    const { definitions } = setup();
+    const definition = definitions.get('space_doc_ops')!;
+    const value = await definition.execute(
+      {
+        doc_id: 'doc-1',
+        base_revision: 3,
+        ops: [{ op: 'delete_block', target: 'blk_2' }],
+        dry_run: true,
+      },
+      exec('space_doc_ops'),
+    );
+    const preview =
+      definition.output.render({ dry_run: true }, value)[0]?.text ?? '';
+    expect(preview).toContain('未写入');
+    expect(preview).not.toContain('已应用');
+    const applied =
+      definition.output.render({ dry_run: false }, value)[0]?.text ?? '';
+    expect(applied).toContain('已应用');
+  });
+
   it('maps object reads and updates', async () => {
     const { definitions } = setup();
     const object = await definitions.get('space_object_get')!.execute(
@@ -340,6 +363,218 @@ describe('document Agent tools', () => {
       bytes: 3,
       name: 'a.png',
     });
+  });
+
+  it('maps space_doc_patch to one exact update_text operation', async () => {
+    const applyOperations = vi.fn(async (input: { docId: string; baseRevision: number }) => ({
+      docId: input.docId,
+      revision: input.baseRevision + 1,
+      changedBlockIds: ['blk_2'],
+      diff: { applied: [{ index: 0, op: 'update_text' }] },
+      undoToken: 'op_patch',
+      warnings: [],
+    }));
+    const { definitions } = setup(fakeService({ applyOperations }));
+    const definition = definitions.get('space_doc_patch')!;
+    const value = await definition.execute(
+      {
+        doc_id: 'doc-1',
+        base_revision: 3,
+        block_id: 'blk_2',
+        old_text: '正文',
+        new_text: '新正文',
+        replace_all: true,
+        idempotency_key: 'turn-1',
+      },
+      exec('space_doc_patch'),
+    );
+    expect(applyOperations).toHaveBeenCalledWith({
+      docId: 'doc-1',
+      baseRevision: 3,
+      ops: [
+        {
+          op: 'update_text',
+          target: 'blk_2',
+          edits: [{ oldText: '正文', newText: '新正文', replaceAll: true }],
+        },
+      ],
+      idempotencyKey: 'turn-1',
+    });
+    expect(value).toEqual({
+      revision: 4,
+      changed_block_ids: ['blk_2'],
+      diff: { applied: [{ index: 0, op: 'update_text' }] },
+      undo_token: 'op_patch',
+    });
+    const rendered = definition.output.render({ block_id: 'blk_2' }, value);
+    expect(rendered[0]?.text).toContain('blk_2');
+    expect(rendered[0]?.text).toContain('space_doc_undo');
+  });
+
+  it('passes dry_run through and reports a preview without undo_token', async () => {
+    const applyOperations = vi.fn(async (input: { docId: string; baseRevision: number }) => ({
+      docId: input.docId,
+      revision: input.baseRevision,
+      changedBlockIds: ['blk_2'],
+      diff: { applied: [{ index: 0, op: 'update_text' }] },
+      warnings: [],
+    }));
+    const { definitions } = setup(fakeService({ applyOperations }));
+    const definition = definitions.get('space_doc_patch')!;
+    const value = await definition.execute(
+      {
+        doc_id: 'doc-1',
+        base_revision: 3,
+        block_id: 'blk_2',
+        old_text: '正文',
+        new_text: '',
+        dry_run: true,
+      },
+      exec('space_doc_patch'),
+    );
+    expect(applyOperations).toHaveBeenCalledWith({
+      docId: 'doc-1',
+      baseRevision: 3,
+      ops: [
+        {
+          op: 'update_text',
+          target: 'blk_2',
+          edits: [{ oldText: '正文', newText: '' }],
+        },
+      ],
+      dryRun: true,
+    });
+    expect(value).toEqual({
+      revision: 3,
+      changed_block_ids: ['blk_2'],
+      diff: { applied: [{ index: 0, op: 'update_text' }] },
+      dry_run: true,
+    });
+    expect(value).not.toHaveProperty('undo_token');
+    expect(definition.output.render({ block_id: 'blk_2' }, value)[0]?.text).toContain(
+      '未写入',
+    );
+  });
+
+  it('adds actionable guidance to patch failures', async () => {
+    const cases: Array<{
+      error: DocumentError;
+      needles: string[];
+    }> = [
+      {
+        error: new DocumentError('doc/conflict', '文档已被修改'),
+        needles: ['space_doc_read', 'space_doc_outline', '重试'],
+      },
+      {
+        error: new DocumentError(
+          'op/invalid',
+          'update_text 存在歧义："正文" 出现 2 次（可设置 replaceAll）',
+        ),
+        needles: ['replace_all'],
+      },
+      {
+        error: new DocumentError(
+          'op/invalid',
+          'update_text 未命中：找不到 "正文"',
+        ),
+        needles: ['space_doc_read', '纯文本'],
+      },
+      {
+        error: new DocumentError('node/not-found', '节点不存在：blk_2'),
+        needles: ['space_doc_read', 'blocks'],
+      },
+      {
+        error: new DocumentError(
+          'node/not-writable',
+          'update_text 只支持 textblock',
+        ),
+        needles: ['space_doc_ops'],
+      },
+      {
+        error: new DocumentError('idempotency/conflict', '同一 key 内容不同'),
+        needles: ['idempotency_key'],
+      },
+    ];
+    for (const { error, needles } of cases) {
+      const { definitions } = setup(
+        fakeService({
+          async applyOperations() {
+            throw error;
+          },
+        }),
+      );
+      const failure = await definitions
+        .get('space_doc_patch')!
+        .execute(
+          {
+            doc_id: 'doc-1',
+            base_revision: 3,
+            block_id: 'blk_2',
+            old_text: '正文',
+            new_text: '新正文',
+          },
+          exec('space_doc_patch'),
+        )
+        .then(
+          () => undefined,
+          (thrown: unknown) => thrown,
+        );
+      expect(failure).toBeInstanceOf(Error);
+      const message = (failure as Error).message;
+      expect(message).toContain(error.message);
+      for (const needle of needles) expect(message).toContain(needle);
+    }
+  });
+
+  it('describes the read → patch → undo workflow', () => {
+    const { definitions } = setup();
+    const patch = definitions.get('space_doc_patch')!;
+    expect(patch.parameters['required']).toEqual([
+      'doc_id',
+      'base_revision',
+      'block_id',
+      'old_text',
+      'new_text',
+    ]);
+    expect(
+      (patch.output.schema as { required?: string[] }).required,
+    ).toEqual(['revision', 'changed_block_ids', 'diff']);
+    expect(patch.description).toContain('space_doc_read');
+    expect(patch.description).toContain('space_doc_undo');
+    expect(patch.description.toLowerCase()).toContain(
+      'never rewrite the whole document',
+    );
+    expect(definitions.get('space_doc_read')!.description).toContain(
+      'space_doc_patch',
+    );
+    expect(definitions.get('space_doc_ops')!.description).toContain(
+      'space_doc_patch',
+    );
+  });
+
+  it('rejects malformed patch arguments with a stable prefix', async () => {
+    const { definitions } = setup();
+    const patch = definitions.get('space_doc_patch')!;
+    const valid = {
+      doc_id: 'doc-1',
+      base_revision: 3,
+      block_id: 'blk_2',
+      old_text: '正文',
+      new_text: '新正文',
+    };
+    for (const args of [
+      { ...valid, old_text: '' },
+      { ...valid, old_text: undefined },
+      { ...valid, new_text: undefined },
+      { ...valid, new_text: 42 },
+      { ...valid, block_id: '' },
+      { ...valid, base_revision: 1.5 },
+      { ...valid, base_revision: -1 },
+    ]) {
+      await expect(
+        patch.execute(args, exec('space_doc_patch')),
+      ).rejects.toThrow('space/invalid-args');
+    }
   });
 
   it('rejects malformed arguments with a stable prefix', async () => {

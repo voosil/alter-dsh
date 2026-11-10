@@ -19,6 +19,8 @@ updated: 2026-11-10
 - 文档级工具输出带 `revision`，供后续 ops 的 CAS 使用；对象读取工具返回对象本身，revision 需由
   调用方另行读取文档获得。工具输出不重复回传 `doc_id`（调用方已知）；新建文档的 `generate` 返回新
   `doc_id`，对象工具返回 `object_id`。
+- **patch-first**：单处纯文本修改优先用 `space_doc_patch`（一次 `update_text`）；只有多操作或结构
+  性变更才用 `space_doc_ops`。禁止用 `generate`/整块替换来重写整篇文档。
 - 所有 Space note 正文只有 `alter-doc/1` 一种格式；工具不感知也不接受其他正文格式，非法存储内容
   以 `doc/schema-invalid` 报错。
 - 未知/不可写节点在结果中以占位出现，并附 `unsupported` 说明。
@@ -75,7 +77,23 @@ updated: 2026-11-10
 - `dry_run` 用于预览：返回 diff，不落盘。
 - 写工具能力受 registry `ai.ops` 与全局写策略约束；本仓库当前策略为默认直接执行、不弹审批。
 
-### 2.5 `space_doc_undo`
+### 2.5 `space_doc_patch`
+
+```
+输入：{ doc_id, base_revision, block_id, old_text, new_text, replace_all?, dry_run?, idempotency_key? }
+输出：{ revision, changed_block_ids, diff, undo_token?, dry_run? }
+```
+
+- 单个 textblock 的精确纯文本替换：内部固定为一次 `update_text` Operation。`old_text` 非空且必须在
+  该块纯文本中唯一（重复出现时设 `replace_all: true`）；`new_text` 可为空字符串（删除文本）。
+- 面向 Agent 的一等编辑路径：先 `space_doc_read`（或 `space_doc_outline`）取 block id 与 revision，
+  再 patch 目标块；只改目标文本，**不整篇重写**。多操作/结构性修改仍用 `space_doc_ops`。
+- `dry_run` 只返回 diff，不落盘、不递增 revision；`idempotency_key` 重放返回原结果；
+  `undo_token` 交给 `space_doc_undo` 撤销本次 patch。
+- 错误带下一步动作：`doc/conflict` → 重新 read/outline 后重试；`old_text` 未命中 → 重新读取目标块
+  纯文本；`old_text` 不唯一 → 更长 `old_text` 或 `replace_all`；`node/not-found` → 重新读取 blocks。
+
+### 2.6 `space_doc_undo`
 
 ```
 输入：{ doc_id, base_revision, undo_token? }
@@ -85,7 +103,7 @@ updated: 2026-11-10
 - 应用一次已提交批次的反向操作（`inverseOps`），省略 `undo_token` 时撤销最近一次批次。
 - 撤销同样产生新 revision 与 op log 记录（撤销本身可再撤销）。
 
-### 2.6 `space_doc_generate`
+### 2.7 `space_doc_generate`
 
 ```
 输入：{ doc_id?, space_id?, title?, parent?: id, after?: id, markdown }
@@ -98,7 +116,7 @@ updated: 2026-11-10
 - `markdown` 必须走投影解析（见 [document-model-v0.md](document-model-v0.md) §7.3）；未知语法报错，
   不静默降级。
 
-### 2.7 对象工具
+### 2.8 对象工具
 
 | 工具 | 输入 | 输出 |
 | --- | --- | --- |
@@ -109,7 +127,7 @@ updated: 2026-11-10
 - 只有 registry 声明 `ai.writable` 的对象类型可用；application 组件只允许改 registry 暴露的
   props 子集。
 
-### 2.8 `space_asset_import`
+### 2.9 `space_asset_import`
 
 ```
 输入：{ mime, data_base64, name? }
@@ -122,7 +140,7 @@ updated: 2026-11-10
 
 ## 3. 预算与裁剪
 
-- 9 个核心工具 schema 约 +1.8–2.2k tokens；读投影单次 ≤ 12k tokens / ≤ 40k 字符。
+- 10 个核心工具 schema 约 +2.0–2.4k tokens；读投影单次 ≤ 12k tokens / ≤ 40k 字符。
 - 每个工具的输出 schema 只列模型真正需要消费的字段，不回传整篇文档或未变更内容。
 - 读工具超限必须截断并在 `next` 给出续读锚点；写工具不因预算裁剪而改变语义。
 - 结构摘要与检索结果有独立上限：outline ≤ 2k tokens，search 默认 20 条且 preview ≤ 60 字。
@@ -135,7 +153,7 @@ updated: 2026-11-10
 | 指标 | 目标 |
 | --- | --- |
 | 核心任务成功率 | ≥ 90% |
-| 单任务工具调用 | ≤ 4 次（读 outline + 定向 read + ops 为主） |
+| 单任务工具调用 | ≤ 4 次（读 outline + 定向 read + patch 为主） |
 | 单次读投影 | ≤ 12k tokens / ≤ 40k 字符 |
 | 投影保真 | 文本/列表/表格/图片/callout 可读可定位；占位不丢失 |
 | op 原子性 | 无效 op 整批回滚；冲突 `doc/conflict` 不落盘 |
@@ -153,7 +171,7 @@ Spike 不做：组件沙箱、实时协作。
 4. table 合并单元格、评论锚点、代码组件沙箱的 v1 方案。
 5. `doc_ops` 是否作为版本历史主存储（当前：快照 + op log 并存）。
 6. 版本预算（当前 10 版 / 64 KiB → 可配置累计字节）与备份资产目录的实施方案。
-7. 列表/发现工具与评论工具是否纳入 v0.1（当前 9 个工具不含列表与评论能力）。
+7. 列表/发现工具与评论工具是否纳入 v0.1（当前 10 个工具不含列表与评论能力）。
 
 ## 相关文档
 

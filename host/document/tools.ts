@@ -94,6 +94,13 @@ function requireString(args: Record<string, unknown>, key: string): string {
   return value;
 }
 
+/** A string argument that may be empty (e.g. `new_text: ''` deletes text). */
+function requireAnyString(args: Record<string, unknown>, key: string): string {
+  const value = args[key];
+  if (typeof value !== 'string') invalid(`${key} 必须是字符串`);
+  return value;
+}
+
 function optionalString(
   args: Record<string, unknown>,
   key: string,
@@ -156,6 +163,43 @@ function errorMessage(error: unknown): string {
   return String(error);
 }
 
+/** Stable document error code of a thrown value, when it carries one. */
+function errorCode(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null) return undefined;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === 'string' ? code : undefined;
+}
+
+/**
+ * Add the next actionable step to a `space_doc_patch` failure.
+ *
+ * The patch tool is the model's first-class exact-edit path, so every common
+ * failure must say what to do next instead of only echoing the error code.
+ */
+function patchErrorMessage(error: unknown): string {
+  const base = errorMessage(error);
+  switch (errorCode(error)) {
+    case 'doc/conflict':
+      return `${base}；base_revision 已过期：请重新 space_doc_read 或 space_doc_outline 获取最新 revision 后重试。`;
+    case 'node/not-found':
+      return `${base}；block_id 不存在或已被删除：请重新 space_doc_read 获取 blocks 后重试。`;
+    case 'op/invalid': {
+      const message = error instanceof Error ? error.message : '';
+      if (message.includes('歧义'))
+        return `${base}；old_text 不唯一：请提供更长的 old_text，或设置 replace_all=true。`;
+      if (message.includes('未命中'))
+        return `${base}；old_text 与目标块当前文本不一致：请重新 space_doc_read 后原样复制该块纯文本（不含 Markdown 标记）。`;
+      return `${base}；请检查 old_text/new_text 是否为目标块的纯文本。`;
+    }
+    case 'node/not-writable':
+      return `${base}；目标不是可精确改写的 textblock：请改用 space_doc_ops 的 replace_block 或 update_attrs。`;
+    case 'idempotency/conflict':
+      return `${base}；该 idempotency_key 已用于不同内容：请换用新的 key，或重放完全相同的 patch。`;
+    default:
+      return base;
+  }
+}
+
 function text(value: string): ToolTextBlock {
   return { type: 'text', text: value };
 }
@@ -183,17 +227,52 @@ function renderOutline(value: unknown): ToolTextBlock[] {
   ];
 }
 
-function renderOps(value: unknown): ToolTextBlock[] {
+function renderOps(args: unknown, value: unknown): ToolTextBlock[] {
+  const input = args as { dry_run?: boolean };
   const result = value as {
     revision: number;
     changed_block_ids: string[];
     undo_token?: string;
   };
+  const headline =
+    input.dry_run === true
+      ? `dry-run 预览（未写入 Host），revision=${result.revision}；将涉及块 ${result.changed_block_ids.length} 个。`
+      : `已应用，revision=${result.revision}；涉及块 ${result.changed_block_ids.length} 个。`;
   return [
     text(
       [
-        `已应用，revision=${result.revision}；涉及块 ${result.changed_block_ids.length} 个。`,
+        headline,
         result.undo_token === undefined ? '' : `undoToken=${result.undo_token}`,
+      ]
+        .filter(Boolean)
+        .join('\n'),
+    ),
+  ];
+}
+
+function renderPatch(args: unknown, value: unknown): ToolTextBlock[] {
+  const input = args as { block_id?: string };
+  const result = value as {
+    revision: number;
+    changed_block_ids: string[];
+    dry_run?: boolean;
+    undo_token?: string;
+  };
+  const target = input.block_id === undefined ? '目标块' : `block ${input.block_id}`;
+  if (result.dry_run === true) {
+    return [
+      text(
+        `patch 预览（未写入）：${target}，revision=${result.revision}，涉及块 ${result.changed_block_ids.length} 个。`,
+      ),
+    ];
+  }
+  return [
+    text(
+      [
+        `已 patch ${target}，revision=${result.revision}；涉及块 ${result.changed_block_ids.length} 个。`,
+        result.undo_token === undefined
+          ? ''
+          : `undoToken=${result.undo_token}；可用 space_doc_undo 撤销。`,
       ]
         .filter(Boolean)
         .join('\n'),
@@ -243,7 +322,7 @@ export function registerDocumentTools(
     tools.register({
       name: 'space_doc_outline',
       description:
-        'Read the block outline of one Space document (ids, types and short previews). Call this before reading or editing so you have stable block ids.',
+        'Read the block outline of one Space document (ids, types and short previews). Call this before reading or editing so you have stable block ids; outline ids are the block targets for space_doc_patch.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -311,7 +390,7 @@ export function registerDocumentTools(
     tools.register({
       name: 'space_doc_read',
       description:
-        'Read one Space document as Markdown with block anchors; use block_ids/after/limit for long documents. The revision returned must be used as base_revision for writes.',
+        'Read one Space document as Markdown with block anchors; use block_ids/after/limit for long documents. The revision returned must be used as base_revision for writes, and blocks[].id values are the targets for space_doc_patch.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -521,7 +600,7 @@ export function registerDocumentTools(
     tools.register({
       name: 'space_doc_ops',
       description:
-        'Apply a batch of Document Operations to one Space document. Every operation targets a block id; the batch is atomic and requires the current base_revision from a read/outline. For update_text, edits[].oldText must be the plain text without Markdown marks (bold text **x** matches x).',
+        'Apply a batch of Document Operations to one Space document. Every operation targets a block id; the batch is atomic and requires the current base_revision from a read/outline. For update_text, edits[].oldText must be the plain text without Markdown marks (bold text **x** matches x). For a single exact text replacement prefer space_doc_patch; use this tool for multiple operations or structural changes.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -561,7 +640,7 @@ export function registerDocumentTools(
             warnings: { type: 'array', items: { type: 'string' } },
           },
         },
-        render: (_args, value) => renderOps(value),
+        render: (args, value) => renderOps(args, value),
       },
       isConcurrencySafe: () => false,
       async execute(args) {
@@ -595,6 +674,110 @@ export function registerDocumentTools(
           title: 'Apply document operations',
           kind: 'edit',
         }),
+    }),
+  );
+
+  disposers.push(
+    tools.register({
+      name: 'space_doc_patch',
+      description:
+        'Patch one exact text range in one text block. Read the block with space_doc_read (or space_doc_outline) first to get its id and the current revision, then pass old_text exactly as shown (plain text, no Markdown marks). Only the target text changes — never rewrite the whole document. Revert with space_doc_undo; use space_doc_ops for multiple or structural edits.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['doc_id', 'base_revision', 'block_id', 'old_text', 'new_text'],
+        properties: {
+          doc_id: { type: 'string', description: 'Document id.' },
+          base_revision: {
+            type: 'integer',
+            description: 'Current revision from space_doc_read or space_doc_outline.',
+          },
+          block_id: {
+            type: 'string',
+            description:
+              'Target textblock id from space_doc_read/outline/search.',
+          },
+          old_text: {
+            type: 'string',
+            description:
+              'Exact plain text to replace (no Markdown marks). Must be unique in the block unless replace_all is set.',
+          },
+          new_text: {
+            type: 'string',
+            description: 'Replacement plain text; an empty string deletes the text.',
+          },
+          replace_all: {
+            type: 'boolean',
+            description: 'Replace every occurrence of old_text. Defaults to false.',
+          },
+          dry_run: {
+            type: 'boolean',
+            description: 'Validate and diff without writing.',
+          },
+          idempotency_key: {
+            type: 'string',
+            description: 'Optional replay key; replaying it returns the original result.',
+          },
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['revision', 'changed_block_ids', 'diff'],
+          properties: {
+            revision: { type: 'integer' },
+            changed_block_ids: { type: 'array', items: { type: 'string' } },
+            diff: { type: 'object', additionalProperties: true, properties: {} },
+            undo_token: { type: 'string' },
+            dry_run: { type: 'boolean' },
+          },
+        },
+        render: (args, value) => renderPatch(args, value),
+      },
+      isConcurrencySafe: () => false,
+      async execute(args) {
+        const input = asRecord(args);
+        try {
+          const replaceAll = optionalBoolean(input, 'replace_all');
+          const dryRun = optionalBoolean(input, 'dry_run');
+          const idempotencyKey = optionalString(input, 'idempotency_key');
+          const blockId = requireString(input, 'block_id');
+          const ops: ApplyOperationsInput['ops'] = [
+            {
+              op: 'update_text',
+              target: blockId,
+              edits: [
+                {
+                  oldText: requireString(input, 'old_text'),
+                  newText: requireAnyString(input, 'new_text'),
+                  ...(replaceAll === true ? { replaceAll: true } : {}),
+                },
+              ],
+            },
+          ];
+          const result = await service.applyOperations({
+            docId: requireString(input, 'doc_id'),
+            baseRevision: requireInteger(input, 'base_revision'),
+            ops,
+            ...(dryRun === undefined ? {} : { dryRun }),
+            ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+          });
+          return {
+            revision: result.revision,
+            changed_block_ids: result.changedBlockIds,
+            diff: result.diff as unknown as JsonValue,
+            ...(dryRun === true || result.undoToken === undefined
+              ? {}
+              : { undo_token: result.undoToken }),
+            ...(dryRun === true ? { dry_run: true } : {}),
+          };
+        } catch (error) {
+          throw new Error(patchErrorMessage(error));
+        }
+      },
+      presentCall: () =>
+        view({ card: 'generic', title: 'Patch document text', kind: 'edit' }),
     }),
   );
 
@@ -723,7 +906,7 @@ export function registerDocumentTools(
             warnings: { type: 'array', items: { type: 'string' } },
           },
         },
-        render: (_args, value) => renderOps(value),
+        render: (args, value) => renderOps(args, value),
       },
       isConcurrencySafe: () => false,
       async execute(args) {
