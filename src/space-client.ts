@@ -204,6 +204,25 @@ export interface SpaceDocumentBlockRef {
   type: string;
 }
 
+/** Browser upload input for `doc.importAsset`. */
+export interface SpaceImportAssetInput {
+  /** Image media type: `image/png`, `image/jpeg`, `image/webp` or `image/gif`. */
+  mime: string;
+  /** Pure base64 bytes (no data-URL prefix, no line breaks); ≤ 4 MiB decoded. */
+  dataBase64: string;
+  /** Optional display name. */
+  name?: string;
+}
+
+/** Public asset metadata returned by `doc.importAsset`. */
+export interface SpaceImportedAsset {
+  assetId: string;
+  mime: string;
+  bytes: number;
+  width?: number;
+  height?: number;
+}
+
 /** Document client mirror of the Host `doc.*` RPC endpoints. */
 export interface SpaceDocumentClient {
   get(docId: string): Promise<unknown>;
@@ -240,6 +259,7 @@ export interface SpaceDocumentClient {
     after?: string;
     markdown: string;
   }): Promise<unknown>;
+  importAsset(input: SpaceImportAssetInput): Promise<SpaceImportedAsset>;
   getObject(objectId: string): Promise<unknown>;
 }
 
@@ -274,6 +294,7 @@ export function createSpaceDocumentClient(
     undo: (input) => request('doc.undo', [input]),
     restoreVersion: (input) => request('doc.restoreVersion', [input]),
     generate: (input) => request('doc.generate', [input]),
+    importAsset: (input) => request('doc.importAsset', [input]),
     getObject: (objectId) => request('object.get', [objectId]),
   };
 }

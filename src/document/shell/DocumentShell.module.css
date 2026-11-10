@@ -1,0 +1,175 @@
+/**
+ * Shell chrome shared by the AST document view: breadcrumbs, title textarea,
+ * document metadata and the document menu trigger.
+ *
+ * Visual language follows the old HTML document view (`c73c3f6`): quiet
+ * monochrome chrome, 13px captions, no card borders around the title.
+ */
+
+/* ------------------------------------------------------------------------- */
+/* Breadcrumbs                                                                */
+/* ------------------------------------------------------------------------- */
+
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+}
+
+.crumbGroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.crumb {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: var(--alter-radius-xs);
+  background: transparent;
+  color: var(--alter-text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.crumb:hover {
+  background: var(--alter-surface-hover);
+  color: var(--alter-text);
+}
+
+.crumb:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: 1px;
+}
+
+.crumbText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 4px;
+  color: var(--alter-text-muted);
+  cursor: default;
+}
+
+.crumbChevron {
+  flex-shrink: 0;
+  color: var(--alter-text-muted);
+  opacity: 0.75;
+}
+
+.currentCrumb {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 4px;
+  color: var(--alter-text-secondary);
+}
+
+/* ------------------------------------------------------------------------- */
+/* Title                                                                      */
+/* ------------------------------------------------------------------------- */
+
+.title {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--alter-text);
+  font-family: var(--alter-font-family);
+  font-size: var(--alter-font-headline);
+  font-weight: 600;
+  letter-spacing: var(--alter-tracking-display);
+  line-height: var(--alter-line-display);
+  resize: none;
+  overflow: hidden;
+}
+
+.title::placeholder {
+  color: var(--alter-text-muted);
+}
+
+.title:focus {
+  outline: none;
+}
+
+.title:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--alter-radius-xs);
+}
+
+.title:disabled {
+  color: var(--alter-text-secondary);
+}
+
+/* ------------------------------------------------------------------------- */
+/* Metadata                                                                   */
+/* ------------------------------------------------------------------------- */
+
+.meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  min-height: 18px;
+  gap: 8px;
+  margin: 16px 0 0;
+  color: var(--alter-text-muted);
+  font-family: var(--alter-font-mono);
+  font-size: 11.5px;
+  line-height: var(--alter-line-ui);
+}
+
+.metaDot {
+  color: var(--alter-text-muted);
+  opacity: 0.7;
+}
+
+.archivedBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 4px;
+  padding: 1px 6px;
+  border-radius: var(--alter-radius-control);
+  background: var(--alter-surface-selected);
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+  white-space: nowrap;
+}
+
+.restoreAction {
+  padding: 1px 6px;
+  border: 0;
+  border-radius: var(--alter-radius-control);
+  background: transparent;
+  color: var(--alter-text-secondary);
+  font: inherit;
+  font-size: var(--alter-font-caption);
+  cursor: pointer;
+}
+
+.restoreAction:hover,
+.restoreAction:focus-visible {
+  background: var(--alter-surface-hover);
+  color: var(--alter-text);
+}
+
+.restoreAction:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: 1px;
+}

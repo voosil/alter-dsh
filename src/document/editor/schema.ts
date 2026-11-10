@@ -10,10 +10,10 @@
  * - a global `blockId` attribute is attached to every block type (including
  *   `tableRow`/`tableCell`/`tableHeader`) so the AST ids survive editing and
  *   the diff can address blocks;
- * - `alterCallout` (container), `alterImage`, `alterMindmap` and
- *   `alterComponent` (atoms) are the custom blocks. They render safe
- *   `data-*` placeholder markup and a React node view; object payloads never
- *   enter the editor.
+ * - `alterCallout` (container), `alterImage`, `alterMindmap`,
+ *   `alterComponent`, `alterBookmark` and `alterDocLink` (atoms) are the
+ *   custom blocks. They render safe `data-*` placeholder markup and a React
+ *   node view; object payloads never enter the editor.
  *
  * StarterKit already bundles Link and Underline; those are disabled there and
  * re-registered with explicit options so the schema stays intentional.
@@ -41,8 +41,10 @@ import {
 } from '@tiptap/extension-table';
 import { ReactNodeViewRenderer } from '@tiptap/react';
 import {
+  AlterBookmarkNodeView,
   AlterCalloutView,
   AlterComponentNodeView,
+  AlterDocLinkNodeView,
   AlterImageNodeView,
   AlterMindmapNodeView,
 } from './node-views';
@@ -70,6 +72,8 @@ export const BLOCK_NODE_TYPES = [
   'alterImage',
   'alterMindmap',
   'alterComponent',
+  'alterBookmark',
+  'alterDocLink',
 ] as const;
 
 /** `altText` → `alt-text` (data attribute names are kebab-case). */
@@ -290,6 +294,76 @@ const AlterComponent = Node.create({
   },
 });
 
+/** `alterBookmark`: atom card for one external web link. */
+const AlterBookmark = Node.create({
+  name: 'alterBookmark',
+  group: 'block',
+  atom: true,
+  selectable: true,
+  draggable: true,
+  addAttributes() {
+    return {
+      url: textAttribute('url'),
+      title: textAttribute('title'),
+      description: textAttribute('description'),
+      icon: textAttribute('icon'),
+    };
+  },
+  parseHTML() {
+    return [{ tag: 'div[data-alter-bookmark]' }];
+  },
+  renderHTML({ node, HTMLAttributes }) {
+    const attrs = node.attrs as Record<string, unknown>;
+    const title =
+      stringAttr(attrs, 'title') ?? stringAttr(attrs, 'url') ?? '网页链接';
+    return [
+      'div',
+      mergeAttributes(HTMLAttributes, {
+        class: 'alter-link-card',
+        'data-alter-bookmark': '',
+      }),
+      ['span', { class: 'alter-link-card-title' }, title],
+    ];
+  },
+  addNodeView() {
+    return ReactNodeViewRenderer(AlterBookmarkNodeView);
+  },
+});
+
+/** `alterDocLink`: atom card for one internal document reference. */
+const AlterDocLink = Node.create({
+  name: 'alterDocLink',
+  group: 'block',
+  atom: true,
+  selectable: true,
+  draggable: true,
+  addAttributes() {
+    return {
+      docId: textAttribute('docId'),
+      title: textAttribute('title'),
+    };
+  },
+  parseHTML() {
+    return [{ tag: 'div[data-alter-doc-link]' }];
+  },
+  renderHTML({ node, HTMLAttributes }) {
+    const attrs = node.attrs as Record<string, unknown>;
+    const title =
+      stringAttr(attrs, 'title') ?? stringAttr(attrs, 'docId') ?? '文档内链';
+    return [
+      'div',
+      mergeAttributes(HTMLAttributes, {
+        class: 'alter-link-card',
+        'data-alter-doc-link': '',
+      }),
+      ['span', { class: 'alter-link-card-title' }, title],
+    ];
+  },
+  addNodeView() {
+    return ReactNodeViewRenderer(AlterDocLinkNodeView);
+  },
+});
+
 /**
  * Full editor extension list. Markdown input rules from StarterKit are kept
  * (users type Markdown), but autolink/trailing-node behaviour is disabled so
@@ -321,4 +395,6 @@ export const editorExtensions: Extensions = [
   AlterImage,
   AlterMindmap,
   AlterComponent,
+  AlterBookmark,
+  AlterDocLink,
 ];

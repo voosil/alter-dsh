@@ -144,6 +144,95 @@ function objectPlaceholder(
   );
 }
 
+/** Read one non-empty string attribute without trusting its runtime type. */
+function textAttr(block: BlockNode, key: string): string | undefined {
+  const value = block.attrs[key];
+  return typeof value === 'string' && value !== '' ? value : undefined;
+}
+
+/** Host of a safe http(s) URL; undefined for any other URL form. */
+function linkHost(url: string | undefined): string | undefined {
+  if (url === undefined) return undefined;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+      ? parsed.host
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Web link card (version preview / SSR); only safe http(s) URLs link out. */
+function BookmarkCard({ block }: { block: BlockNode }) {
+  const url = textAttr(block, 'url');
+  const title = textAttr(block, 'title');
+  const description = textAttr(block, 'description');
+  const icon = textAttr(block, 'icon');
+  const host = linkHost(url);
+  const href = host === undefined || url === undefined ? undefined : url;
+  const label = title ?? host ?? url ?? '网页链接';
+  const body = (
+    <>
+      <span className={styles.linkCardIcon} aria-hidden="true">
+        {icon ?? '🔗'}
+      </span>
+      <span className={styles.linkCardBody}>
+        <span className={styles.linkCardTitle}>{label}</span>
+        {description === undefined ? null : (
+          <span className={styles.linkCardDescription}>{description}</span>
+        )}
+        <span className={styles.linkCardMeta}>
+          {host ?? url ?? '（缺少链接）'}
+        </span>
+      </span>
+    </>
+  );
+  if (href === undefined) {
+    return (
+      <div className={styles.linkCard} data-card-kind="bookmark">
+        {body}
+      </div>
+    );
+  }
+  return (
+    <a
+      className={styles.linkCard}
+      data-card-kind="bookmark"
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+    >
+      {body}
+    </a>
+  );
+}
+
+/** Internal document link card; the preview renderer never navigates. */
+function DocLinkCard({ block }: { block: BlockNode }) {
+  const docId = textAttr(block, 'docId');
+  const title = textAttr(block, 'title');
+  return (
+    <div
+      className={styles.linkCard}
+      data-card-kind="docLink"
+      data-doc-id={docId}
+    >
+      <span className={styles.linkCardIcon} aria-hidden="true">
+        📄
+      </span>
+      <span className={styles.linkCardBody}>
+        <span className={styles.linkCardTitle}>
+          {title ?? docId ?? '文档内链'}
+        </span>
+        <span className={styles.linkCardMeta}>
+          {docId === undefined ? '（缺少文档 id）' : `文档 · ${docId}`}
+        </span>
+      </span>
+    </div>
+  );
+}
+
 function AssetFigure({
   assetId,
   alt,
@@ -245,6 +334,10 @@ function renderBlock(block: BlockNode): ReactNode {
       return <div key={block.id}>{objectPlaceholder(block, 'mindmap')}</div>;
     case 'component':
       return <div key={block.id}>{objectPlaceholder(block, 'component')}</div>;
+    case 'bookmark':
+      return <BookmarkCard key={block.id} block={block} />;
+    case 'docLink':
+      return <DocLinkCard key={block.id} block={block} />;
     default:
       return (
         <div key={block.id} className={styles.opaque}>

@@ -52,6 +52,16 @@ const doc: AlterDoc = {
     block('blk_img', 'image', { assetId: 'asset_demo', alt: '架构图' }),
     block('blk_map', 'mindmap', { objectId: 'obj_demo', caption: '流程' }),
     block('blk_cmp', 'component', { objectId: 'obj_chart', title: '图表' }),
+    block('blk_link', 'bookmark', {
+      url: 'https://example.com/guide',
+      title: '外部指南',
+      description: '背景资料',
+      icon: '📚',
+    }),
+    block('blk_doc_link', 'docLink', {
+      docId: 'doc-related',
+      title: '相关文档',
+    }),
     block('blk_unknown', 'mystery'),
   ],
 };
@@ -71,6 +81,12 @@ describe('Alter document renderer', () => {
     expect(html).toContain('asset_demo');
     expect(html).toContain('obj_demo');
     expect(html).toContain('obj_chart');
+    expect(html).toContain('外部指南');
+    expect(html).toContain('背景资料');
+    expect(html).toContain('href="https://example.com/guide"');
+    expect(html).toContain('rel="noopener noreferrer"');
+    expect(html).toContain('相关文档');
+    expect(html).toContain('doc-related');
     expect(html).toContain('[unsupported node: mystery]');
     expect(html).not.toContain('{"format":"alter-doc/1"');
   });
@@ -90,11 +106,17 @@ describe('Alter document renderer', () => {
             },
           ],
         }),
+        block('blk_bad_card', 'bookmark', {
+          url: 'javascript:alert(1)',
+          title: '坏卡片',
+        }),
       ],
     };
     const html = renderToStaticMarkup(createElement(DocumentContent, { doc: unsafe }));
     expect(html).toContain('坏链接');
-    expect(html).not.toContain('javascript:');
+    expect(html).toContain('坏卡片');
+    // Unsafe targets may show as plain text, but never become anchors.
+    expect(html).not.toContain('href="javascript:');
     expect(html).not.toContain('<a');
   });
 });

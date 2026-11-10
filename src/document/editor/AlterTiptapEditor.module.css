@@ -93,6 +93,29 @@
   flex: 1;
 }
 
+/* Contextual table toolbar, shown while the caret is inside a table. */
+.tableBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--alter-space-2);
+  padding: 6px var(--alter-content-inset, 48px);
+  border-bottom: 1px solid var(--alter-border);
+  background: var(--alter-surface-rail);
+}
+
+.tableLabel {
+  margin-right: var(--alter-space-1, 4px);
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-micro);
+  letter-spacing: 0.08em;
+}
+
+/* Hidden picker used by the image toolbar button / slash command. */
+.fileInput {
+  display: none;
+}
+
 .savingHint {
   color: var(--alter-text-faint);
   font-size: var(--alter-font-caption);

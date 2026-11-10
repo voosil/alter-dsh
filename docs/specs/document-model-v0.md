@@ -156,6 +156,8 @@ interface NodeTypeDefinition {
 | `table` | content | table | `headerRows?: number` | 读 + 结构 op（v0 限制） | GFM 表格 |
 | `tableRow` / `tableCell` | content | blocks / inline | — | 结构 op | GFM |
 | `image` | content | none | `assetId`, `alt?`, `caption?`, `width?` | 读 + 替换/属性 | `![alt](space-asset://…)` |
+| `bookmark` | structured | none | `url`, `title?`, `description?`, `icon?` | 读写/属性+替换 | `[title](url)`（无 title 用 url） |
+| `docLink` | structured | none | `docId`, `title?` | 读写/属性+替换 | `[title](space-doc:<docId>)` |
 | `callout` | content | blocks | `tone: info\|warn\|success\|danger`, `title?`, `icon?`, `collapsed?` | 读写/结构+属性 | `:::callout{…}` 指令 |
 | `mindmap` | structured | none | `objectId`, `caption?` | 读占位 + `update_object` | `:::mindmap{objectId=…}` 占位 |
 | `component` | application | none | `objectId`, `title?`, `description?` | 读 `describe` + `update_object`（仅 props） | `:::component{objectId=…}` 占位 |
@@ -163,6 +165,8 @@ interface NodeTypeDefinition {
 补充约束：
 
 - `image` 的 `space-asset://` URI 只由投影生成、不被 Markdown 解析器接受；插入图片必须用 `assetId`。
+- `bookmark` / `docLink` 是结构化卡片：目标由 `url` / `docId` 属性承载，投影只输出链接，不内联网页内容。
+  只读渲染只把 `http(s)` URL 渲染为可点击链接，其余形式降级为纯文本。
 - table 在 v0 只支持矩形、无合并单元格；合并单元格 v1 再议。
 - mindmap/component 的大 payload 永不进 Markdown，投影只给占位。
 
@@ -187,6 +191,8 @@ interface NodeTypeDefinition {
 | divider | `---` |
 | table | GFM 表格（首行表头） |
 | image | `![alt](space-asset://asset_…)` |
+| bookmark | `[title](url)`（无 title 时用 url 作标题） |
+| docLink | `[title](space-doc:<docId>)`（无 title 时用 docId） |
 | callout | `:::callout{tone="warn" title="…" #blk_id}` … `:::` |
 | mindmap | `:::mindmap{objectId="obj_…" caption="…" #blk_id}` 空体 `:::` |
 | component | `:::component{objectId="obj_…" title="…" #blk_id}` 空体 `:::` |

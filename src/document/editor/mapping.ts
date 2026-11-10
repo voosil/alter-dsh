@@ -48,6 +48,8 @@ const MAX_ALT = 500;
 const MAX_ICON = 64;
 const MAX_WIDTH = 32;
 const MAX_LANG = 32;
+const MAX_URL = 2048;
+const MAX_DOC_ID = 128;
 
 /** Empty paragraph node, used as a schema-required content filler. */
 function emptyParagraph(): JSONContent {
@@ -332,6 +334,34 @@ export function blockToTiptap(block: BlockNode): JSONContent {
         }),
       };
     }
+    case 'bookmark': {
+      const url = asString(block.attrs.url, MAX_URL);
+      if (url === undefined) {
+        return placeholderParagraph(block, '[网页链接卡：缺少链接]');
+      }
+      return {
+        type: 'alterBookmark',
+        attrs: attrsOf(block, {
+          url,
+          title: asString(block.attrs.title, MAX_TITLE),
+          description: asString(block.attrs.description, MAX_CAPTION),
+          icon: asString(block.attrs.icon, MAX_ICON),
+        }),
+      };
+    }
+    case 'docLink': {
+      const docId = asString(block.attrs.docId, MAX_DOC_ID);
+      if (docId === undefined) {
+        return placeholderParagraph(block, '[文档内链卡：缺少文档 id]');
+      }
+      return {
+        type: 'alterDocLink',
+        attrs: attrsOf(block, {
+          docId,
+          title: asString(block.attrs.title, MAX_TITLE),
+        }),
+      };
+    }
     case 'callout': {
       const toneRaw = asString(block.attrs.tone, 16);
       const tone = CALL_TONES.includes(toneRaw as (typeof CALL_TONES)[number])
@@ -583,6 +613,10 @@ function tiptapNodeToBlock(
     case 'alterMindmap':
     case 'alterComponent':
       return tiptapToBlockObject(node, used);
+    case 'alterBookmark':
+      return tiptapToBlockBookmark(node, used);
+    case 'alterDocLink':
+      return tiptapToBlockDocLink(node, used);
     default:
       return degradedNodeToBlock(node, used);
   }
@@ -707,6 +741,46 @@ function tiptapToBlockObject(
     if (description !== undefined) attrs.description = description;
   }
   return makeBlock(node, { type: kind, attrs }, used);
+}
+
+function tiptapToBlockBookmark(node: JSONContent, used: Set<string>): BlockNode {
+  const url = asString(node.attrs?.['url'], MAX_URL);
+  if (url === undefined) {
+    return makeBlock(
+      node,
+      {
+        type: 'paragraph',
+        content: [{ type: 'text', text: '[网页链接卡：缺少链接]' }],
+      },
+      used,
+    );
+  }
+  const attrs: BlockNode['attrs'] = { url };
+  const title = asString(node.attrs?.['title'], MAX_TITLE);
+  if (title !== undefined) attrs.title = title;
+  const description = asString(node.attrs?.['description'], MAX_CAPTION);
+  if (description !== undefined) attrs.description = description;
+  const icon = asString(node.attrs?.['icon'], MAX_ICON);
+  if (icon !== undefined) attrs.icon = icon;
+  return makeBlock(node, { type: 'bookmark', attrs }, used);
+}
+
+function tiptapToBlockDocLink(node: JSONContent, used: Set<string>): BlockNode {
+  const docId = asString(node.attrs?.['docId'], MAX_DOC_ID);
+  if (docId === undefined) {
+    return makeBlock(
+      node,
+      {
+        type: 'paragraph',
+        content: [{ type: 'text', text: '[文档内链卡：缺少文档 id]' }],
+      },
+      used,
+    );
+  }
+  const attrs: BlockNode['attrs'] = { docId };
+  const title = asString(node.attrs?.['title'], MAX_TITLE);
+  if (title !== undefined) attrs.title = title;
+  return makeBlock(node, { type: 'docLink', attrs }, used);
 }
 
 function tiptapToBlockTable(node: JSONContent, used: Set<string>): BlockNode {

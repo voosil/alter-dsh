@@ -116,6 +116,7 @@ describe('createSpaceDocumentClient', () => {
       baseRevision: 3,
     });
     await document.generate({ spaceId: 'sp-1', markdown: '# x' });
+    await document.importAsset({ mime: 'image/png', dataBase64: 'AA==' });
     await document.getObject('obj_1');
     expect(calls.map((call) => call.op)).toEqual([
       'doc.get',
@@ -126,9 +127,69 @@ describe('createSpaceDocumentClient', () => {
       'doc.undo',
       'doc.restoreVersion',
       'doc.generate',
+      'doc.importAsset',
       'object.get',
     ]);
     expect(calls[2]?.args).toEqual(['doc-1', { maxChars: 2000 }]);
+    expect(calls[8]?.args).toEqual([
+      { mime: 'image/png', dataBase64: 'AA==' },
+    ]);
+  });
+
+  it('maps asset uploads to doc.importAsset and unwraps remote failures', async () => {
+    const calls: Array<{ op: string; args: unknown[] }> = [];
+    const rpc: SpaceRpcCaller = {
+      async call(_channel, _endpoint, payload) {
+        const { op, args } = payload as { op: string; args: unknown[] };
+        calls.push({ op, args });
+        const input = args[0] as { dataBase64?: string };
+        if (input.dataBase64 === 'bad')
+          return {
+            ok: true,
+            value: {
+              error: { code: 'object/invalid', message: '资产内容不是合法的 base64' },
+            },
+          };
+        return {
+          ok: true,
+          value: {
+            value: {
+              assetId: 'asset_1',
+              mime: 'image/png',
+              bytes: 3,
+              width: 1,
+              height: 2,
+            },
+          },
+        };
+      },
+    };
+    const document = createSpaceDocumentClient(rpc);
+    await expect(
+      document.importAsset({
+        mime: 'image/png',
+        dataBase64: 'AAAA',
+        name: 'a.png',
+      }),
+    ).resolves.toEqual({
+      assetId: 'asset_1',
+      mime: 'image/png',
+      bytes: 3,
+      width: 1,
+      height: 2,
+    });
+    expect(calls).toEqual([
+      {
+        op: 'doc.importAsset',
+        args: [{ mime: 'image/png', dataBase64: 'AAAA', name: 'a.png' }],
+      },
+    ]);
+    await expect(
+      document.importAsset({ mime: 'image/png', dataBase64: 'bad' }),
+    ).rejects.toMatchObject({
+      code: 'object/invalid',
+      message: '资产内容不是合法的 base64',
+    });
   });
 
   it('does not expose the removed legacy migration endpoint', async () => {

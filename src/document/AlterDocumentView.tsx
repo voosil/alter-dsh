@@ -3,9 +3,10 @@
  *
  * Every note is an `alter-doc/1` AST document: the view loads the canonical
  * snapshot over the document RPC and hands it to the Tiptap surface, which
- * autosaves through Document Operations. The view owns the document shell:
- * the title input (autosaved with the body), the crash-draft recovery banner
- * and the comments/history panel.
+ * autosaves through Document Operations. The view owns the document shell —
+ * directory entry, breadcrumbs, the auto-growing title (autosaved with the
+ * body), document menu, metadata/archive state, workbench entry and the
+ * comments/history panel.
  *
  * Draft recovery contract (P0):
  * - a draft whose `baseRevision` matches the server revision offers
@@ -19,8 +20,18 @@
  * @module @alter-dsh/space/document/AlterDocumentView
  */
 import { useEffect, useRef, useState } from 'react';
+import {
+  Archive,
+  ArchiveRestore,
+  Download,
+  FilePlus2,
+  Link2,
+} from 'lucide-react';
+import type { MenuAction } from '@alter/ui-system';
 import type { SpaceNode } from '@alter/protocol';
+import { DirectoryButton } from '../../vendor/ui-space/src/components/DirectoryButton';
 import { useSpaceContext } from '../../vendor/ui-space/src/runtime';
+import { displayTitle } from '../../vendor/ui-space/src/utils/tree';
 import { documentClientOf } from './client-access';
 import {
   AlterTiptapEditor,
@@ -34,6 +45,17 @@ import {
   type DocumentDraft,
 } from './editor/draft';
 import { DocumentSidePanel } from './DocumentSidePanel';
+import {
+  copyDocumentLink,
+  createChildDocument,
+  DocumentBreadcrumbs,
+  DocumentMenu,
+  DocumentMeta,
+  DocumentTitle,
+  downloadMarkdownFile,
+  readDocumentMarkdown,
+  WorkbenchEntry,
+} from './shell';
 import type { AlterDoc, DocumentSnapshot } from './types';
 import styles from './AlterDocumentView.module.css';
 
@@ -53,8 +75,25 @@ function describeError(error: unknown): string {
 /**
  * Structured renderer/editor for one Space note.
  */
-export function AlterDocumentView({ node }: { node: SpaceNode }) {
-  const { service } = useSpaceContext();
+export function AlterDocumentView({
+  node,
+  embedded = false,
+}: {
+  node: SpaceNode;
+  /** Rendered inside a Workbench preview pane: no directory entry. */
+  embedded?: boolean;
+}) {
+  const {
+    service,
+    router,
+    space,
+    spaceId,
+    nodes,
+    refresh,
+    toast,
+    addNodeToState,
+    workbench,
+  } = useSpaceContext();
   const client = documentClientOf(service);
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
   const [title, setTitle] = useState(node.title);
@@ -62,9 +101,39 @@ export function AlterDocumentView({ node }: { node: SpaceNode }) {
   const [banner, setBanner] = useState<DraftBanner | null>(null);
   const [bannerError, setBannerError] = useState<string | null>(null);
   const [restore, setRestore] = useState<EditorRestoreRequest | null>(null);
+  const [archived, setArchived] = useState(node.archived);
 
   const loadedRef = useRef(false);
   const titleEditedRef = useRef(false);
+
+  useEffect(() => {
+    setArchived(node.archived);
+  }, [node.archived]);
+
+  // Opening a document clears its unread state in the Space app (old view
+  // behaviour). Guarded: the document shell must render even when a minimal
+  // SpaceService stub lacks `recordOpen` (unit tests, older assemblies).
+  useEffect(() => {
+    const recordOpen = service.recordOpen;
+    if (typeof recordOpen !== 'function') return;
+    let alive = true;
+    void recordOpen
+      .call(service, node.id)
+      .then(() => {
+        if (!alive) return;
+        try {
+          refresh();
+        } catch {
+          // Refreshing the node list is best effort; unread state is cosmetic.
+        }
+      })
+      .catch(() => {
+        // Opening the document must not fail because the read receipt failed.
+      });
+    return () => {
+      alive = false;
+    };
+  }, [service, node.id, refresh]);
 
   useEffect(() => {
     let alive = true;
@@ -209,20 +278,136 @@ export function AlterDocumentView({ node }: { node: SpaceNode }) {
       });
   };
 
+  const copyLink = async () => {
+    const copied = await copyDocumentLink(spaceId, node.id);
+    toast(copied ? '链接已复制' : '复制失败，请检查浏览器权限');
+  };
+
+  const createChild = async () => {
+    try {
+      await createChildDocument({
+        service,
+        router,
+        spaceId,
+        parentId: node.id,
+        addNodeToState,
+        refresh,
+      });
+    } catch (error) {
+      toast(`新建子文档失败：${describeError(error)}`);
+    }
+  };
+
+  const exportMarkdown = async () => {
+    if (client === undefined) {
+      toast('文档模型客户端未装配：请刷新页面或重新安装插件');
+      return;
+    }
+    try {
+      const result = await readDocumentMarkdown(client, node.id);
+      downloadMarkdownFile(title.trim() || node.title, result.markdown);
+      toast(
+        result.truncated
+          ? '文档过长，Markdown 已导出（内容已截断）'
+          : 'Markdown 已导出',
+      );
+    } catch (error) {
+      toast(`导出失败：${describeError(error)}`);
+    }
+  };
+
+  const setDocumentArchived = async (next: boolean) => {
+    try {
+      await service.setArchived(node.id, next);
+      setArchived(next);
+      refresh();
+      toast(next ? '已归档' : '已恢复');
+    } catch (error) {
+      toast(`${next ? '归档' : '恢复'}失败：${describeError(error)}`);
+    }
+  };
+
+  const menuActions: MenuAction[] = [
+    {
+      id: 'copy-link',
+      label: '复制链接',
+      icon: <Link2 />,
+      onSelect: () => void copyLink(),
+    },
+    {
+      id: 'new-child',
+      label: '新建子文档',
+      icon: <FilePlus2 />,
+      onSelect: () => void createChild(),
+    },
+    {
+      id: 'export-markdown',
+      label: '导出 Markdown',
+      icon: <Download />,
+      separatorBefore: true,
+      onSelect: () => void exportMarkdown(),
+    },
+    archived
+      ? {
+          id: 'unarchive',
+          label: '取消归档',
+          icon: <ArchiveRestore />,
+          separatorBefore: true,
+          onSelect: () => void setDocumentArchived(false),
+        }
+      : {
+          id: 'archive',
+          label: '归档',
+          icon: <Archive />,
+          separatorBefore: true,
+          onSelect: () => void setDocumentArchived(true),
+        },
+  ];
+
   const titleLocked = banner !== null;
 
   return (
-    <article className={styles.page} data-doc-format="alter-doc/1">
+    <article
+      className={styles.page}
+      data-doc-format="alter-doc/1"
+      aria-label={displayTitle(title)}
+    >
       <header className={styles.header}>
-        <div className={styles.titleRow}>
-          <input
-            className={styles.titleInput}
+        <div className={styles.toolbar}>
+          {embedded ? null : <DirectoryButton />}
+          <DocumentBreadcrumbs
+            spaceId={spaceId}
+            spaceName={space.name}
+            nodes={nodes}
+            docId={node.id}
+            title={title}
+            onNavigate={(path) => router.navigate(path)}
+          />
+          <div className={styles.actions}>
+            {workbench === undefined ? null : (
+              <WorkbenchEntry
+                controller={workbench.controller}
+                scopeKey={workbench.scopeKey}
+              />
+            )}
+            <button
+              type="button"
+              className={panelOpen ? styles.panelToggleActive : styles.panelToggle}
+              aria-pressed={panelOpen}
+              onClick={() => setPanelOpen((open) => !open)}
+            >
+              评论与历史
+            </button>
+            <DocumentMenu actions={menuActions} />
+          </div>
+        </div>
+        <div className={styles.titleBlock}>
+          <DocumentTitle
             value={title}
-            aria-label="文档标题"
             disabled={titleLocked}
-            onChange={(event) => {
+            onChange={(next) => {
               titleEditedRef.current = true;
-              setTitle(event.target.value);
+              setTitle(next);
             }}
             onBlur={() => {
               if (title.trim() !== '') return;
@@ -231,26 +416,16 @@ export function AlterDocumentView({ node }: { node: SpaceNode }) {
               );
               titleEditedRef.current = false;
             }}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') event.currentTarget.blur();
-            }}
           />
-          <span className={styles.badge}>结构化文档</span>
-          <button
-            type="button"
-            className={panelOpen ? styles.panelToggleActive : styles.panelToggle}
-            aria-pressed={panelOpen}
-            onClick={() => setPanelOpen((open) => !open)}
-          >
-            评论与历史
-          </button>
-        </div>
-        <div className={styles.meta}>
-          {state.kind === 'ready'
-            ? `revision ${state.snapshot.revision}`
-            : state.kind === 'error'
-              ? '加载失败'
-              : '正在加载…'}
+          <DocumentMeta
+            creator={node.creator}
+            updatedAt={node.updatedAt}
+            revision={
+              state.kind === 'ready' ? state.snapshot.revision : undefined
+            }
+            archived={archived}
+            onRestore={() => void setDocumentArchived(false)}
+          />
         </div>
       </header>
       <div className={styles.bodyRow}>

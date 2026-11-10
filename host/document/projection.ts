@@ -152,6 +152,18 @@ function canonicalMarks(marks: readonly Mark[] | undefined): Mark[] {
   );
 }
 
+/** Escape one Markdown link destination (angle-bracket form when needed). */
+function renderLinkDestination(href: string): string {
+  return /[\s()]/.test(href)
+    ? `<${href.replaceAll('\\', '\\\\').replaceAll('>', '\\>')}>`
+    : href.replaceAll('\\', '\\\\').replaceAll('(', '\\(').replaceAll(')', '\\)');
+}
+
+/** Escape one Markdown link label; line breaks collapse to spaces. */
+function renderLinkLabel(value: string): string {
+  return escapeInlineText(value.replaceAll(/\r?\n/g, ' '));
+}
+
 function wrapMark(mark: Mark, body: string): string {
   switch (mark.type) {
     case 'code':
@@ -169,10 +181,7 @@ function wrapMark(mark: Mark, body: string): string {
     case 'link': {
       const href = mark.attrs?.href ?? '';
       if (href === '') return body;
-      const destination = /[\s()]/.test(href)
-        ? `<${href.replaceAll('\\', '\\\\').replaceAll('>', '\\>')}>`
-        : href.replaceAll('\\', '\\\\').replaceAll('(', '\\(').replaceAll(')', '\\)');
-      return `[${body}](${destination})`;
+      return `[${body}](${renderLinkDestination(href)})`;
     }
     default:
       // Future mark kinds: keep the text visible and flag it instead of
@@ -431,6 +440,26 @@ function renderOpaque(block: BlockNode): string {
   return `:::opaque{type="${escapeAttrValue(block.type)}"}\n[unsupported node]\n:::`;
 }
 
+/** Web link card: `[title](url)`, falling back to the URL as the label. */
+function renderBookmark(block: BlockNode): string {
+  const url = typeof block.attrs.url === 'string' ? block.attrs.url : '';
+  if (url === '')
+    return ':::opaque{type="bookmark"}\n[unsupported node: bookmark without url]\n:::';
+  const title = typeof block.attrs.title === 'string' ? block.attrs.title : '';
+  const label = title.trim() === '' ? url : title;
+  return `[${renderLinkLabel(label)}](${renderLinkDestination(url)})`;
+}
+
+/** Internal document link card: `[title](space-doc:<docId>)`. */
+function renderDocLink(block: BlockNode): string {
+  const docId = typeof block.attrs.docId === 'string' ? block.attrs.docId : '';
+  if (docId === '')
+    return ':::opaque{type="docLink"}\n[unsupported node: docLink without docId]\n:::';
+  const title = typeof block.attrs.title === 'string' ? block.attrs.title : '';
+  const label = title.trim() === '' ? docId : title;
+  return `[${renderLinkLabel(label)}](${renderLinkDestination(`space-doc:${docId}`)})`;
+}
+
 /**
  * Project a single block (recursively for containers) without a top-level
  * anchor comment.
@@ -464,6 +493,10 @@ export function projectBlock(block: BlockNode): string {
       return renderTable(block);
     case 'image':
       return renderImage(block);
+    case 'bookmark':
+      return renderBookmark(block);
+    case 'docLink':
+      return renderDocLink(block);
     case 'callout':
       return renderCallout(block);
     case 'mindmap':

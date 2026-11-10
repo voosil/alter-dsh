@@ -188,6 +188,7 @@ export async function apply(
       storage,
       workspaceSync: () => workspaceSync,
       document,
+      assets,
     });
     const attachDocumentTools = (child: HostContextLike): void => {
       const tools = child.tools ?? child.get?.('tools');

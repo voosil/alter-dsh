@@ -7,6 +7,11 @@
  * `{ value }` or `{ error: { code, message } }`.
  */
 import type { NewSpaceInput, SpacePatch, SpaceService } from '@alter/protocol';
+import {
+  MAX_ASSET_BYTES,
+  type DocumentAssets,
+  type ImportAssetInput,
+} from './document/assets.js';
 import type {
   ApplyOperationsInput,
   DocumentService,
@@ -100,6 +105,7 @@ const DOCUMENT_METHODS = [
   'undo',
   'restoreVersion',
   'generate',
+  'importAsset',
 ] as const;
 const OBJECT_METHODS = ['get'] as const;
 
@@ -141,6 +147,8 @@ export interface SpaceRpcOptions {
   workspaceSync?: () => SpaceWorkspaceSync | undefined;
   /** Document-model service; absent when the feature is disabled. */
   document?: DocumentService;
+  /** Document asset store; absent disables `doc.importAsset`. */
+  assets?: DocumentAssets;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -183,6 +191,76 @@ function readStoragePatch(input: unknown): Partial<StorageSettings> {
     patch[key] = value;
   }
   return patch;
+}
+
+/** Upper bound of a base64 payload that can still decode to {@link MAX_ASSET_BYTES}. */
+const MAX_ASSET_BASE64_LENGTH = Math.ceil(MAX_ASSET_BYTES / 3) * 4;
+/** Standard base64 with optional trailing padding; whitespace is rejected. */
+const BASE64_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
+
+/** Public fields `doc.importAsset` returns; hashes/timestamps stay Host-side. */
+interface ImportedAssetResult {
+  assetId: string;
+  mime: string;
+  bytes: number;
+  width?: number;
+  height?: number;
+}
+
+/** Decode one browser-uploaded asset payload, rejecting malformed base64. */
+function decodeAssetBase64(encoded: string): Uint8Array {
+  const compact = encoded.trim();
+  if (compact.length === 0)
+    throw new DocumentError('object/invalid', '资产内容为空');
+  if (compact.length > MAX_ASSET_BASE64_LENGTH)
+    throw new DocumentError(
+      'object/invalid',
+      `资产超过上限 ${MAX_ASSET_BYTES} 字节`,
+    );
+  if (compact.length % 4 !== 0 || !BASE64_PATTERN.test(compact))
+    throw new DocumentError('object/invalid', '资产内容不是合法的 base64');
+  const data = Buffer.from(compact, 'base64');
+  if (data.byteLength === 0)
+    throw new DocumentError('object/invalid', '资产内容为空');
+  return new Uint8Array(data);
+}
+
+/** Validate one `doc.importAsset` argument into a store import request. */
+function readImportAssetInput(input: unknown): ImportAssetInput {
+  if (!isPlainObject(input))
+    throw new DocumentError('object/invalid', '资产参数必须是对象');
+  const { mime, dataBase64, name } = input;
+  if (typeof mime !== 'string' || mime.trim() === '')
+    throw new DocumentError('object/invalid', 'mime 必须是非空字符串');
+  if (typeof dataBase64 !== 'string')
+    throw new DocumentError('object/invalid', 'dataBase64 必须是字符串');
+  if (name !== undefined && typeof name !== 'string')
+    throw new DocumentError('object/invalid', 'name 必须是字符串');
+  const trimmedName = name?.trim();
+  return {
+    data: decodeAssetBase64(dataBase64),
+    mime,
+    ...(trimmedName === undefined || trimmedName === ''
+      ? {}
+      : { name: trimmedName }),
+  };
+}
+
+/** Import one uploaded asset and project its public fields for the browser. */
+async function importDocumentAsset(
+  assets: DocumentAssets | undefined,
+  input: unknown,
+): Promise<ImportedAssetResult> {
+  if (assets === undefined)
+    throw new SpaceRpcError('doc/unavailable', '资产存储未启用');
+  const record = await assets.import(readImportAssetInput(input));
+  return {
+    assetId: record.id,
+    mime: record.mime,
+    bytes: record.bytes,
+    ...(record.width === undefined ? {} : { width: record.width }),
+    ...(record.height === undefined ? {} : { height: record.height }),
+  };
 }
 
 /**
@@ -243,6 +321,8 @@ export function createSpaceRpc(options: SpaceRpcOptions): SpaceRpcHandler {
         return { value: value === undefined ? null : value };
       }
       if (group === 'doc' && DOCUMENT_METHOD_SET.has(method)) {
+        if (method === 'importAsset')
+          return { value: await importDocumentAsset(options.assets, args[0]) };
         const document = options.document;
         if (document === undefined)
           throw new SpaceRpcError('doc/unavailable', '文档模型服务未启用');

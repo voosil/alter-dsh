@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createDocumentAssetRoute } from '../host/document/asset-route.js';
 import {
   ASSET_ROUTE_PATH,
+  MAX_ASSET_BYTES,
   assetFilePath,
   createDocumentAssets,
 } from '../host/document/assets.js';
@@ -62,6 +63,19 @@ describe('document assets', () => {
     await expect(
       assets.import({ data: new Uint8Array(4 * 1024 * 1024 + 1), mime: 'image/png' }),
     ).rejects.toMatchObject({ code: 'object/invalid' });
+    await store.close();
+  });
+
+  it('normalizes mime casing and accepts exactly the size limit', async () => {
+    const { dir, store, assets } = await setup();
+    const data = new Uint8Array(MAX_ASSET_BYTES);
+    data[0] = 0x89;
+    const record = await assets.import({ data, mime: 'IMAGE/PNG' });
+    expect(record.mime).toBe('image/png');
+    expect(record.bytes).toBe(MAX_ASSET_BYTES);
+    expect((await readFile(assetFilePath(dir, record))).byteLength).toBe(
+      MAX_ASSET_BYTES,
+    );
     await store.close();
   });
 

@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createSpaceAuthority } from '../host/authority.js';
+import { createDocumentAssets, MAX_ASSET_BYTES } from '../host/document/assets.js';
 import { createStructuredSpaceService } from '../host/document/notes.js';
 import { createDocumentService } from '../host/document/service.js';
 import { parseAlterDoc } from '../host/document/types.js';
@@ -34,8 +35,12 @@ afterEach(async () => {
 });
 
 const fixedNow = () => new Date('2026-11-06T00:00:00.000Z');
+const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+const PNG_BASE64 = Buffer.from(png).toString('base64');
 
-async function createHandler(options: { workspaceSync?: boolean } = {}) {
+async function createHandler(
+  options: { workspaceSync?: boolean; assets?: boolean } = {},
+) {
   const dir = await tempDir();
   const home = join(dir, 'home');
   await mkdir(home, { recursive: true });
@@ -46,6 +51,10 @@ async function createHandler(options: { workspaceSync?: boolean } = {}) {
     document,
   );
   const storage = createSpaceStorage({ store, directory: dir });
+  const assets =
+    options.assets === false
+      ? undefined
+      : createDocumentAssets({ store, directory: dir, now: fixedNow });
   let registry: FakeWorkspaceRegistry | undefined;
   let sync: SpaceWorkspaceSync | undefined;
   if (options.workspaceSync === true) {
@@ -62,8 +71,20 @@ async function createHandler(options: { workspaceSync?: boolean } = {}) {
     storage,
     workspaceSync: sync === undefined ? undefined : () => sync,
     document,
+    assets,
   });
-  return { dir, home, store, service, storage, document, handler, registry, sync };
+  return {
+    dir,
+    home,
+    store,
+    service,
+    storage,
+    document,
+    assets,
+    handler,
+    registry,
+    sync,
+  };
 }
 
 type HandlerResult = {
@@ -221,19 +242,22 @@ describe('Space RPC dispatch', () => {
     const store = await openSpaceStore({ directory: dir, now: fixedNow });
     const service = createSpaceAuthority(store, fixedNow);
     const storage = createSpaceStorage({ store, directory: dir });
-    const route = createSpaceFetchRoute({ service, storage });
-    const response = await route(
-      new Request('http://dsh.internal/api/alter-space', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          type: 'client-request',
-          rpcId: 'rpc-1',
-          method: 'alter-space',
-          payload: { op: 'space.listSpaces', args: [] },
+    const assets = createDocumentAssets({ store, directory: dir, now: fixedNow });
+    const route = createSpaceFetchRoute({ service, storage, assets });
+    const post = (rpcId: string, payload: unknown) =>
+      route(
+        new Request('http://dsh.internal/api/alter-space', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            type: 'client-request',
+            rpcId,
+            method: 'alter-space',
+            payload,
+          }),
         }),
-      }),
-    );
+      );
+    const response = await post('rpc-1', { op: 'space.listSpaces', args: [] });
     expect(response.status).toBe(200);
     const body = (await response.json()) as {
       type: string;
@@ -244,6 +268,35 @@ describe('Space RPC dispatch', () => {
     expect(body.rpcId).toBe('rpc-1');
     expect(body.result.ok).toBe(true);
     expect(body.result.value.value).toHaveLength(1);
+
+    const uploaded = await post('rpc-2', {
+      op: 'doc.importAsset',
+      args: [{ mime: 'image/png', dataBase64: PNG_BASE64 }],
+    });
+    const uploadedBody = (await uploaded.json()) as {
+      rpcId: string;
+      result: {
+        ok: boolean;
+        value: {
+          value?: { assetId: string; mime: string; bytes: number };
+          error?: { code: string; message: string };
+        };
+      };
+    };
+    expect(uploadedBody.rpcId).toBe('rpc-2');
+    expect(uploadedBody.result.value.value).toMatchObject({
+      mime: 'image/png',
+      bytes: png.byteLength,
+    });
+    const rejected = await post('rpc-3', {
+      op: 'doc.importAsset',
+      args: [{ mime: 'image/svg+xml', dataBase64: PNG_BASE64 }],
+    });
+    const rejectedBody = (await rejected.json()) as {
+      result: { value: { error?: { code: string; message: string } } };
+    };
+    expect(rejectedBody.result.value.error?.code).toBe('object/invalid');
+
     const bad = await route(
       new Request('http://dsh.internal/api/alter-space', {
         method: 'POST',
@@ -321,6 +374,125 @@ describe('Space RPC dispatch', () => {
       await handler('hub.get', { args: [spaceId] }, signal, {}),
     ) as { policy: string };
     expect(updated.policy).toBe('judge');
+    await store.close();
+  });
+});
+
+describe('doc.importAsset RPC', () => {
+  it('imports a browser-uploaded image and returns only public fields', async () => {
+    const { store, handler, assets } = await createHandler();
+    const result = await handler(
+      'doc.importAsset',
+      { args: [{ mime: 'image/png', dataBase64: PNG_BASE64, name: ' 图.png ' }] },
+      signal,
+      {},
+    );
+    expect(errorOf(result)).toBeUndefined();
+    const asset = valueOf(result) as Record<string, unknown>;
+    expect(asset).toEqual({
+      assetId: expect.stringMatching(/^asset_/),
+      mime: 'image/png',
+      bytes: png.byteLength,
+    });
+    expect(asset).not.toHaveProperty('sha256');
+    expect(asset).not.toHaveProperty('createdAt');
+    expect(asset).not.toHaveProperty('name');
+    const stored = await assets!.read(String(asset.assetId));
+    expect(stored?.record.name).toBe('图.png');
+    expect(Buffer.from(stored!.data)).toEqual(Buffer.from(png));
+    await store.close();
+  });
+
+  it('deduplicates identical uploads by content', async () => {
+    const { store, handler } = await createHandler();
+    const importOnce = async (bytes: Uint8Array) =>
+      valueOf(
+        await handler(
+          'doc.importAsset',
+          {
+            args: [
+              {
+                mime: 'image/png',
+                dataBase64: Buffer.from(bytes).toString('base64'),
+              },
+            ],
+          },
+          signal,
+          {},
+        ),
+      ) as { assetId: string };
+    const first = await importOnce(png);
+    const again = await importOnce(png);
+    const other = await importOnce(new Uint8Array([...png, 9]));
+    expect(again.assetId).toBe(first.assetId);
+    expect(other.assetId).not.toBe(first.assetId);
+    await store.close();
+  });
+
+  it('rejects unsupported mime, malformed base64 and bad arguments', async () => {
+    const { store, handler } = await createHandler();
+    const importAsset = (args: unknown) =>
+      handler('doc.importAsset', { args: [args] }, signal, {});
+
+    const svg = await importAsset({
+      mime: 'image/svg+xml',
+      dataBase64: PNG_BASE64,
+    });
+    expect(errorOf(svg)?.code).toBe('object/invalid');
+    expect(errorOf(svg)?.message).toContain('不支持的资产类型');
+
+    for (const dataBase64 of ['', 'abc', 'not base64!!', 'AAA A', 'A===']) {
+      const bad = await importAsset({ mime: 'image/png', dataBase64 });
+      expect(errorOf(bad)?.code).toBe('object/invalid');
+      expect(errorOf(bad)?.message).toMatch(/资产内容|base64/);
+    }
+
+    const badArgs: unknown[] = [
+      undefined,
+      'nope',
+      { dataBase64: PNG_BASE64 },
+      { mime: 42, dataBase64: PNG_BASE64 },
+      { mime: 'image/png' },
+      { mime: 'image/png', dataBase64: PNG_BASE64, name: 7 },
+    ];
+    for (const args of badArgs) {
+      const bad = await importAsset(args);
+      expect(errorOf(bad)?.code).toBe('object/invalid');
+    }
+    await store.close();
+  });
+
+  it('rejects payloads larger than the asset limit', async () => {
+    const { store, handler } = await createHandler();
+    const importAsset = (dataBase64: string) =>
+      handler(
+        'doc.importAsset',
+        { args: [{ mime: 'image/png', dataBase64 }] },
+        signal,
+        {},
+      );
+    const oversized = Buffer.alloc(MAX_ASSET_BYTES + 1).toString('base64');
+    const decodedTooLarge = await importAsset(oversized);
+    expect(errorOf(decodedTooLarge)?.code).toBe('object/invalid');
+    expect(errorOf(decodedTooLarge)?.message).toContain(String(MAX_ASSET_BYTES));
+    // Guarded before decoding so a pathological payload cannot be buffered.
+    const encodedTooLarge = await importAsset(
+      'A'.repeat(Math.ceil(MAX_ASSET_BYTES / 3) * 4 + 4),
+    );
+    expect(errorOf(encodedTooLarge)?.code).toBe('object/invalid');
+    expect(errorOf(encodedTooLarge)?.message).toContain('资产超过上限');
+    await store.close();
+  });
+
+  it('reports doc/unavailable when no asset store is attached', async () => {
+    const { store, handler } = await createHandler({ assets: false });
+    const result = await handler(
+      'doc.importAsset',
+      { args: [{ mime: 'image/png', dataBase64: PNG_BASE64 }] },
+      signal,
+      {},
+    );
+    expect(errorOf(result)?.code).toBe('doc/unavailable');
     await store.close();
   });
 });

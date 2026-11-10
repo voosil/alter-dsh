@@ -15,6 +15,7 @@ import {
   validateAlterDoc,
   validateObjectPayload,
 } from '../host/document/schema.js';
+import { projectBlock } from '../host/document/projection.js';
 
 function doc(blocks: AlterDoc['blocks']): AlterDoc {
   return {
@@ -50,6 +51,12 @@ describe('document schema', () => {
         attrs: { assetId: 'asset_1', alt: '图' },
       }),
       createBlockNode('blk_m', 'mindmap', { attrs: { objectId: 'obj_1' } }),
+      createBlockNode('blk_b', 'bookmark', {
+        attrs: { url: 'https://example.com/docs', title: '外部文档' },
+      }),
+      createBlockNode('blk_d', 'docLink', {
+        attrs: { docId: 'doc-1', title: '相关文档' },
+      }),
     ]);
     expect(() => validateAlterDoc(value)).not.toThrow();
   });
@@ -84,6 +91,75 @@ describe('document schema', () => {
         doc([{ id: 'blk_p', type: 'paragraph', attrs: { color: 'red' } }]),
       ),
     ).toThrow(/不支持属性/);
+  });
+
+  it('enforces link card attribute rules', () => {
+    expect(() =>
+      validateAlterDoc(doc([createBlockNode('blk_b', 'bookmark')])),
+    ).toThrow(/缺少属性 url/);
+    expect(() =>
+      validateAlterDoc(
+        doc([
+          createBlockNode('blk_b', 'bookmark', {
+            attrs: { url: `https://example.com/${'a'.repeat(2048)}` },
+          }),
+        ]),
+      ),
+    ).toThrow(/超过长度上限/);
+    expect(() =>
+      validateAlterDoc(doc([createBlockNode('blk_d', 'docLink')])),
+    ).toThrow(/缺少属性 docId/);
+    expect(() =>
+      validateAlterDoc(
+        doc([
+          {
+            id: 'blk_b',
+            type: 'bookmark',
+            attrs: { url: 'https://example.com', icon: 1 },
+          },
+        ]),
+      ),
+    ).toThrow(/必须是非空字符串/);
+  });
+
+  it('projects link cards to markdown links', () => {
+    expect(
+      projectBlock(
+        createBlockNode('blk_b', 'bookmark', {
+          attrs: { url: 'https://example.com/a', title: '示例文档' },
+        }),
+      ),
+    ).toBe('[示例文档](https://example.com/a)');
+    expect(
+      projectBlock(
+        createBlockNode('blk_b', 'bookmark', {
+          attrs: { url: 'https://example.com/a(b)', title: '示例 [文档]' },
+        }),
+      ),
+    ).toBe('[示例 \\[文档\\]](<https://example.com/a(b)>)');
+    expect(
+      projectBlock(
+        createBlockNode('blk_b', 'bookmark', {
+          attrs: { url: 'https://example.com/a' },
+        }),
+      ),
+    ).toBe('[https://example.com/a](https://example.com/a)');
+    expect(
+      projectBlock(
+        createBlockNode('blk_d', 'docLink', {
+          attrs: { docId: 'doc-1', title: '相关文档' },
+        }),
+      ),
+    ).toBe('[相关文档](space-doc:doc-1)');
+    expect(
+      projectBlock(
+        createBlockNode('blk_d', 'docLink', { attrs: { docId: 'doc-1' } }),
+      ),
+    ).toBe('[doc-1](space-doc:doc-1)');
+    expect(operationAllowedOn('bookmark', 'update_attrs')).toBe(true);
+    expect(operationAllowedOn('docLink', 'update_attrs')).toBe(true);
+    expect(operationAllowedOn('bookmark', 'update_text')).toBe(false);
+    expect(operationAllowedOn('docLink', 'update_text')).toBe(false);
   });
 
   it('enforces nesting rules', () => {

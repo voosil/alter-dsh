@@ -86,7 +86,7 @@ v0 限制：
 | `node/schema-invalid` | 节点/属性不符合 registry |
 | `node/unsupported-transform` | 类型转换不在白名单 |
 | `node/not-writable` | AI 能力声明禁止 |
-| `object/invalid` | 对象 payload 校验失败 |
+| `object/invalid` | 对象 payload 或资产内容校验失败 |
 | `parse/unsupported` | Markdown 含未知语法/指令 |
 | `idempotency/conflict` | 同 key 内容不同 |
 
@@ -161,7 +161,8 @@ v0 限制：
 - 内容寻址：同字节只存一份；id 为 `asset_<sha256 前 32 位>`，二进制放
   `${dataDir}/assets/<sha[0:2]>/<sha256>.<ext>`（0600），DB 只存元数据。
 - 只允许图片（png/jpeg/webp/gif），单资产 ≤ 4 MiB；导入时校验 mime/大小并去重。
-- 导入：Agent 工具 `space_asset_import` 接收 base64（≤ 4 MiB 解码后）；浏览器/编辑器后续可直接上传。
+- 导入：Agent 工具 `space_asset_import` 与浏览器 RPC `doc.importAsset`（`{ mime, dataBase64, name? }`
+  → `{ assetId, mime, bytes, width?, height? }`）接收 base64，解码后 ≤ 4 MiB；编辑器图片上传走后者。
 - 读取：Host 注册 `GET /api/alter-space/asset?id=<assetId>`（Connection 鉴权）返回原始字节，
   客户端用该 URL 渲染 `<img>`；`space-asset://` 只是 Markdown 投影里的引用写法。
 - 备份：资产目录必须纳入备份/恢复流程（见 §7）。每日快照会同时生成资产归档。
@@ -181,8 +182,9 @@ v0 限制：
 
 ## 8. RPC 暴露
 
-- 对应端点：`doc.get` / `doc.outline` / `doc.read` / `doc.search` / `doc.applyOps` / `doc.undo` / `doc.restoreVersion` / `doc.generate` / `object.get`；
-  其中 `doc.applyOps` / `doc.generate` / `doc.undo` / `doc.restoreVersion` 是正文写入入口，其余端点只读；
+- 对应端点：`doc.get` / `doc.outline` / `doc.read` / `doc.search` / `doc.applyOps` / `doc.undo` / `doc.restoreVersion` / `doc.generate` / `doc.importAsset` / `object.get`；
+  其中 `doc.applyOps` / `doc.generate` / `doc.undo` / `doc.restoreVersion` 是正文写入入口，
+  `doc.importAsset` 是资产上传入口，其余端点只读；
   `doc.get` 返回完整 AST（编辑器加载用），`doc.undo` 应用一次 op log 的 `inverseOps`；
   浏览器编辑器加载 AST、编辑后在客户端做 block 级 diff 生成 Operation 批次再提交，不整篇覆盖；
   新增端点必须同时加入 Host 路由白名单与浏览器客户端映射（约束见 [system-architecture.md](system-architecture.md)）。

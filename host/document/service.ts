@@ -274,8 +274,24 @@ function previewOf(block: BlockNode): string {
   return block.type;
 }
 
+/**
+ * Text attributes that carry searchable copy on structured/application blocks
+ * (object alt/caption/title, card title/description/url).
+ */
+const SEARCHABLE_ATTR_KEYS = [
+  'alt',
+  'caption',
+  'title',
+  'description',
+  'url',
+] as const;
+
 function textOfBlockTree(block: BlockNode): string {
   const parts: string[] = [plainTextOfBlock(block)];
+  for (const key of SEARCHABLE_ATTR_KEYS) {
+    const value = block.attrs[key];
+    if (typeof value === 'string' && value.trim() !== '') parts.push(value);
+  }
   if (block.children !== undefined)
     for (const child of block.children) parts.push(textOfBlockTree(child));
   return parts.join('\n');

@@ -8,9 +8,37 @@
  */
 export {
   AlterTiptapEditor,
+  MAX_IMAGE_BYTES,
+  SUPPORTED_IMAGE_MIMES,
+  uploadImageWithClient,
+  validateImageFile,
   type AlterTiptapEditorProps,
   type EditorRestoreRequest,
+  type ImageAssetResult,
+  type ImageUploader,
 } from './AlterTiptapEditor';
+export {
+  LinkBar,
+  isWebUrl,
+  linkRangeFromElement,
+  normalizeLinkHref,
+  parseInternalDocLink,
+  type InternalDocLink,
+  type LinkBarProps,
+} from './link-bar';
+export {
+  SlashMenu,
+  filterSlashCommands,
+  slashCommands,
+  slashMenuPosition,
+  slashParagraphRange,
+  slashQueryAtSelection,
+  type SlashCommand,
+  type SlashCommandContext,
+  type SlashMenuPosition,
+  type SlashMenuProps,
+  type SlashMenuState,
+} from './slash-menu';
 export {
   astToTiptap,
   blockToTiptap,

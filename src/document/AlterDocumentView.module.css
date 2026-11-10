@@ -3,65 +3,43 @@
   flex-direction: column;
   width: 100%;
   height: 100%;
-  overflow: auto;
+  overflow: hidden;
   background: var(--alter-surface);
   color: var(--alter-text);
 }
 
 .header {
-  position: sticky;
-  top: 0;
-  z-index: 1;
+  position: relative;
+  z-index: 2;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 28px 48px 18px;
+  gap: 4px;
+  padding: 12px 48px 18px;
   background: var(--alter-surface);
-  border-bottom: 1px solid var(--alter-line);
+  border-bottom: 1px solid var(--alter-border);
 }
 
-.titleRow {
+.toolbar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
+  gap: 10px;
+  min-height: 32px;
 }
 
-.titleInput {
-  flex: 1;
-  min-width: 0;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  outline: none;
-  background: transparent;
-  color: var(--alter-text);
-  font-family: var(--alter-font-family);
-  font-size: var(--alter-font-headline);
-  font-weight: 600;
-  letter-spacing: var(--alter-tracking-display);
-  line-height: var(--alter-line-display);
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
 }
 
-.titleInput:focus-visible {
-  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
-  outline-offset: 2px;
-  border-radius: var(--alter-radius-xs);
-}
-
-.badge {
-  padding: 2px 8px;
-  border: 1px solid var(--alter-control-line);
-  border-radius: var(--alter-radius-xs);
-  color: var(--alter-text-muted);
-  font-size: var(--alter-font-micro);
-  letter-spacing: 0.08em;
-  white-space: nowrap;
-}
-
-.meta {
-  color: var(--alter-text-muted);
-  font-size: var(--alter-font-caption);
+.titleBlock {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  /* Matches the editor surface content width so title and body share an axis. */
+  max-width: 760px;
+  margin: 0 auto;
 }
 
 .bodyRow {
@@ -79,19 +57,31 @@
 
 .panelToggle,
 .panelToggleActive {
-  margin-left: auto;
   padding: 5px 10px;
-  border: 1px solid var(--alter-control-line);
+  border: 1px solid var(--alter-control-border);
   border-radius: var(--alter-radius-xs);
   background: transparent;
   color: var(--alter-text-muted);
+  font-family: var(--alter-font-family);
   font-size: var(--alter-font-caption);
+  white-space: nowrap;
   cursor: pointer;
+}
+
+.panelToggle:hover {
+  background: var(--alter-surface-hover);
+  color: var(--alter-text);
 }
 
 .panelToggleActive {
   border-color: var(--alter-text);
   color: var(--alter-text);
+}
+
+.panelToggle:focus-visible,
+.panelToggleActive:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: 1px;
 }
 
 .state,
@@ -107,6 +97,20 @@
   border: 1px solid var(--alter-danger);
   border-radius: var(--alter-radius-control);
   color: var(--alter-danger);
+}
+
+@media (max-width: 900px) {
+  .header {
+    padding: 8px 16px 14px;
+  }
+
+  .toolbar {
+    gap: 6px;
+  }
+
+  .body {
+    padding: 20px 16px 64px;
+  }
 }
 
 .content {
@@ -306,6 +310,62 @@
   margin-top: 6px;
   font-size: var(--alter-font-caption);
   color: var(--alter-text-faint, var(--alter-text-muted));
+}
+
+/* ------------------------------------------------------------------------- */
+/* Link cards (web bookmark / internal document)                             */
+/* ------------------------------------------------------------------------- */
+
+.linkCard {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 0 0 var(--alter-space-paragraph, 24px);
+  padding: 12px 16px;
+  border: 1px solid var(--alter-line);
+  border-radius: var(--alter-radius-control);
+  background: var(--alter-surface-raised);
+  color: inherit;
+  text-decoration: none;
+}
+
+a.linkCard:hover {
+  border-color: var(--alter-accent, #d1512a);
+}
+
+.linkCardIcon {
+  flex: none;
+  font-size: var(--alter-font-body);
+  line-height: 1.4;
+}
+
+.linkCardBody {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.linkCardTitle {
+  overflow: hidden;
+  font-size: var(--alter-font-body-sm);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.linkCardDescription {
+  color: var(--alter-text-secondary);
+  font-size: var(--alter-font-caption);
+}
+
+.linkCardMeta {
+  overflow: hidden;
+  color: var(--alter-text-muted);
+  font-family: var(--alter-font-mono);
+  font-size: var(--alter-font-micro);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .opaque {

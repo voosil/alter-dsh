@@ -279,6 +279,44 @@ export const NODE_TYPES: Readonly<Record<string, NodeTypeDefinition>> = {
     markdown: { anchors: 'comment' },
     render: { editor: 'image', readOnly: 'image' },
   },
+  bookmark: {
+    type: 'bookmark',
+    schemaVersion: 1,
+    kind: 'structured',
+    contentModel: 'none',
+    attrs: {
+      url: { type: 'string', required: true, maxLength: 2048 },
+      title: { type: 'string', maxLength: 200 },
+      description: { type: 'string', maxLength: 500 },
+      icon: { type: 'string', maxLength: 64 },
+    },
+    ai: {
+      readable: true,
+      writable: true,
+      preview: 'markdown',
+      ops: [...MEDIA_OPS],
+    },
+    markdown: { anchors: 'comment' },
+    render: { editor: 'bookmark', readOnly: 'linkCard' },
+  },
+  docLink: {
+    type: 'docLink',
+    schemaVersion: 1,
+    kind: 'structured',
+    contentModel: 'none',
+    attrs: {
+      docId: { type: 'string', required: true, maxLength: 128 },
+      title: { type: 'string', maxLength: 200 },
+    },
+    ai: {
+      readable: true,
+      writable: true,
+      preview: 'markdown',
+      ops: [...MEDIA_OPS],
+    },
+    markdown: { anchors: 'comment' },
+    render: { editor: 'docLink', readOnly: 'linkCard' },
+  },
   callout: containerNode('callout', {
     attrs: {
       tone: {

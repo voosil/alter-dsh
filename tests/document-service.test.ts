@@ -382,6 +382,56 @@ describe('document service', () => {
     await store.close();
   });
 
+  it('searches card titles through structured attributes', async () => {
+    const { store } = await tempStore();
+    const service = createDocumentService({ store, now: fixedNow });
+    const created = await service.generate({
+      spaceId: DEFAULT_SPACE_ID,
+      markdown: '正文\n',
+    });
+    await service.applyOperations({
+      docId: created.docId,
+      baseRevision: 1,
+      ops: [
+        {
+          op: 'insert_blocks',
+          index: 1,
+          blocks: [
+            {
+              id: 'blk_card_bookmark',
+              type: 'bookmark',
+              attrs: {
+                url: 'https://example.com/ops',
+                title: '卡片标题',
+                description: '卡片描述',
+              },
+            },
+            {
+              id: 'blk_card_doclink',
+              type: 'docLink',
+              attrs: { docId: 'doc-target', title: '内链文档标题' },
+            },
+          ],
+        },
+      ],
+    });
+    const bookmarkHits = await service.search({
+      query: '卡片标题',
+      docId: created.docId,
+    });
+    expect(
+      bookmarkHits.hits.some((hit) => hit.blockId === 'blk_card_bookmark'),
+    ).toBe(true);
+    const docLinkHits = await service.search({
+      query: '内链文档标题',
+      docId: created.docId,
+    });
+    expect(
+      docLinkHits.hits.some((hit) => hit.blockId === 'blk_card_doclink'),
+    ).toBe(true);
+    await store.close();
+  });
+
   it('creates an empty AST note that document operations can edit', async () => {
     const { store } = await tempStore();
     const service = createDocumentService({ store, now: fixedNow });

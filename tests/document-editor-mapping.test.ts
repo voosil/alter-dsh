@@ -153,6 +153,16 @@ function richDoc(): AlterDoc {
       title: '指标看板',
       description: '展示核心指标',
     }),
+    block('blk_bookmark', 'bookmark', {
+      url: 'https://example.com/guide',
+      title: '外部指南',
+      description: '背景资料',
+      icon: '📚',
+    }),
+    block('blk_doc_link', 'docLink', {
+      docId: 'doc-0123456789',
+      title: '相关文档',
+    }),
   ]);
 }
 
@@ -233,6 +243,8 @@ describe('astToTiptap / tiptapToBlocks round-trip', () => {
       'alterImage',
       'alterMindmap',
       'alterComponent',
+      'alterBookmark',
+      'alterDocLink',
     ]);
     // Every projected block carries its AST id.
     for (const [index, node] of (json.content ?? []).entries()) {
@@ -297,7 +309,31 @@ describe('astToTiptap / tiptapToBlocks round-trip', () => {
       title: '指标看板',
       description: '展示核心指标',
     });
+    expect(byType('bookmark').attrs).toEqual({
+      url: 'https://example.com/guide',
+      title: '外部指南',
+      description: '背景资料',
+      icon: '📚',
+    });
+    expect(byType('docLink').attrs).toEqual({
+      docId: 'doc-0123456789',
+      title: '相关文档',
+    });
     expect(byType('codeBlock').attrs).toEqual({ lang: 'ts' });
+  });
+
+  it('round-trips link cards without optional attrs', () => {
+    const source = makeDoc([
+      block('blk_bookmark', 'bookmark', { url: 'https://example.com/a' }),
+      block('blk_doc_link', 'docLink', { docId: 'doc-1' }),
+    ]);
+    const json = astToTiptap(source);
+    expect((json.content ?? []).map((node) => node.type)).toEqual([
+      'alterBookmark',
+      'alterDocLink',
+    ]);
+    expect(tiptapToBlocks(json)).toEqual(source.blocks);
+    expect(() => validateAlterDoc(makeDoc(tiptapToBlocks(json)))).not.toThrow();
   });
 
   it('drops schema-filler wrappers for empty containers', () => {
@@ -392,6 +428,8 @@ describe('astToTiptap / tiptapToBlocks round-trip', () => {
         { type: 'alterImage', attrs: { blockId: 'blk_i' } },
         { type: 'alterMindmap', attrs: { blockId: 'blk_m' } },
         { type: 'alterComponent', attrs: { blockId: 'blk_c' } },
+        { type: 'alterBookmark', attrs: { blockId: 'blk_b' } },
+        { type: 'alterDocLink', attrs: { blockId: 'blk_d' } },
       ],
     };
     const blocks = tiptapToBlocks(json);
@@ -399,10 +437,14 @@ describe('astToTiptap / tiptapToBlocks round-trip', () => {
       'paragraph',
       'paragraph',
       'paragraph',
+      'paragraph',
+      'paragraph',
     ]);
     expect(JSON.stringify(blocks)).toContain('[图片：缺少资产 id]');
     expect(JSON.stringify(blocks)).toContain('[思维导图：缺少对象 id]');
     expect(JSON.stringify(blocks)).toContain('[交互组件：缺少对象 id]');
+    expect(JSON.stringify(blocks)).toContain('[网页链接卡：缺少链接]');
+    expect(JSON.stringify(blocks)).toContain('[文档内链卡：缺少文档 id]');
   });
 });
 
@@ -628,6 +670,26 @@ describe('computeOperations (verified with the Host engine)', () => {
     expect(newDoc.blocks[1]!.id).not.toBe('blk_orig');
     const ops = computeOperations(oldDoc, newDoc);
     expect(ops.some((op) => op.op === 'insert_blocks')).toBe(true);
+    expect(expectAppliesTo(oldDoc, newDoc, ops)).toEqual(newDoc.blocks);
+  });
+
+  it('replaces link cards through the host engine', () => {
+    const oldDoc = makeDoc([
+      block('blk_b', 'bookmark', {
+        url: 'https://example.com/a',
+        title: '旧标题',
+      }),
+      block('blk_d', 'docLink', { docId: 'doc-1' }),
+    ]);
+    const newDoc = withBlocks(oldDoc, [
+      block('blk_b', 'bookmark', {
+        url: 'https://example.com/b',
+        description: '新描述',
+      }),
+      block('blk_d', 'docLink', { docId: 'doc-2', title: '新文档' }),
+    ]);
+    const ops = computeOperations(oldDoc, newDoc);
+    expect(ops.map((op) => op.op)).toEqual(['replace_block', 'replace_block']);
     expect(expectAppliesTo(oldDoc, newDoc, ops)).toEqual(newDoc.blocks);
   });
 
