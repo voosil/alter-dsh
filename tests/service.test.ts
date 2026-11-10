@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createSpaceAuthority } from '../host/authority.js';
+import { createDocumentService } from '../host/document/service.js';
+import { parseAlterDoc } from '../host/document/types.js';
 import { DEFAULT_SPACE_ID, openSpaceStore } from '../host/store.js';
 
 const dirs: string[] = [];
@@ -19,6 +21,21 @@ afterEach(async () => {
 
 const fixedNow = () => new Date('2026-11-06T00:00:00.000Z');
 
+/** Serialize a document body the way the document service stores it. */
+function astContent(...paragraphs: string[]): string {
+  return JSON.stringify({
+    format: 'alter-doc/1',
+    schemaVersion: 1,
+    revision: 1,
+    blocks: paragraphs.map((text, index) => ({
+      id: `blk_service_${index + 1}`,
+      type: 'paragraph',
+      attrs: {},
+      content: [{ type: 'text', text }],
+    })),
+  });
+}
+
 describe('Space business service over SQLite', () => {
   it('persists documents, comments, versions and hub through a reopen', async () => {
     const dir = await tempDir();
@@ -32,7 +49,7 @@ describe('Space business service over SQLite', () => {
       title: '第一篇',
     });
     await service.saveNode(doc.id, {
-      content: '<p>hello world</p>',
+      content: astContent('hello world'),
     });
     const comment = await service.addComment({
       docId: doc.id,
@@ -45,8 +62,20 @@ describe('Space business service over SQLite', () => {
       spaceId: space.id,
       content: '一个随想',
     });
+    // Thoughts stay plain text and are searched without AST parsing.
+    const thoughtHits = await service.search(space.id, '随想');
+    expect(thoughtHits.some((hit) => hit.type === 'thought')).toBe(true);
     const converted = await service.convertThought(thought.id);
     expect(converted.node.spaceId).toBe(space.id);
+    expect(converted.thought.convertedDocId).toBe(converted.node.id);
+    const convertedDoc = parseAlterDoc(converted.node.content);
+    expect(convertedDoc.revision).toBe(1);
+    expect(convertedDoc.blocks).toEqual([]);
+    // The converted note is immediately openable through the document model.
+    const documents = createDocumentService({ store, now: fixedNow });
+    const opened = await documents.get(converted.node.id);
+    expect(opened.revision).toBe(1);
+    expect(opened.doc.blocks).toEqual([]);
     await service.hub.setPolicy(space.id, 'judge');
     await service.hub.setPluginEnabled(space.id, 'config', true);
     await service.hub.summarize(space.id);
@@ -65,16 +94,18 @@ describe('Space business service over SQLite', () => {
     const spaces = await restored.listSpaces();
     expect(spaces.map((item) => item.id)).toContain(space.id);
     const nodes = await restored.listNodes(space.id);
-    expect(nodes[0]?.content).toBe('<p>hello world</p>');
+    const reopenedDoc = nodes.find((node) => node.id === doc.id);
+    expect(reopenedDoc).toBeDefined();
+    expect(parseAlterDoc(reopenedDoc!.content).blocks).toHaveLength(1);
     const comments = await restored.listComments(doc.id);
     expect(comments[0]?.body).toBe('已修改');
-    // convertThought marks the thought as converted, so it leaves the list;
-    // its content now lives in the converted document.
-    expect(
-      (await restored.listNodes(space.id)).some(
-        (node) => node.content === '一个随想',
-      ),
-    ).toBe(true);
+    // convertThought marks the thought as converted and leaves an empty AST
+    // document that the client fills through Document Operations.
+    const convertedNode = (await restored.listNodes(space.id)).find(
+      (node) => node.id === converted.node.id,
+    );
+    expect(convertedNode).toBeDefined();
+    expect(parseAlterDoc(convertedNode!.content).blocks).toEqual([]);
     expect((await restored.hub.get(space.id)).policy).toBe('judge');
     await reopened.close();
   });
@@ -171,9 +202,9 @@ describe('Space business service over SQLite', () => {
       title: '访谈整理',
     });
     current = new Date('2026-11-01T09:10:00.000Z');
-    await service.saveNode(doc.id, { content: '<p>第一版</p>' });
+    await service.saveNode(doc.id, { content: astContent('第一版') });
     current = new Date('2026-11-01T09:20:00.000Z');
-    await service.saveNode(doc.id, { content: '<p>第二版</p>' });
+    await service.saveNode(doc.id, { content: astContent('第二版') });
 
     current = new Date('2026-11-01T10:00:00.000Z');
     const comment = await service.addComment({
@@ -199,7 +230,7 @@ describe('Space business service over SQLite', () => {
       kind: 'note',
       title: '旧稿',
     });
-    await service.saveNode(old.id, { content: '<p>旧内容</p>' });
+    await service.saveNode(old.id, { content: astContent('旧内容') });
     current = new Date('2026-11-01T12:05:00.000Z');
     await service.setArchived(old.id, true);
 
@@ -220,11 +251,11 @@ describe('Space business service over SQLite', () => {
     expect(titles).toContain('创建了空间「研究」');
     expect(titles).toContain('新建《访谈整理》');
     expect(titles).toContain('归档《旧稿》');
-    // 随想转成文档只按「新建文档」记一条，不单独记随想动作。
+    // 随想转出的空 AST 文档没有正文，不算「新建文档」；客户端填充内容后才补记。
     expect(
       entries.some((event) => event.id === `act-doc-create-${converted.node.id}`),
-    ).toBe(true);
-    expect(titles).toContain('新建《未命名文档》');
+    ).toBe(false);
+    expect(titles).not.toContain('新建《未命名文档》');
     // 编辑、随想、评论与事项都不进入活动记录。
     expect(titles.some((title) => title.includes('更新'))).toBe(false);
     expect(titles.some((title) => title.includes('随想'))).toBe(false);
@@ -232,12 +263,12 @@ describe('Space business service over SQLite', () => {
       titles.some((title) => title.includes('评论') || title.includes('讨论')),
     ).toBe(false);
     expect(titles.some((title) => title.includes('事项'))).toBe(false);
-    // 空白草稿不记；唯一的「未命名文档」来自随想转文档。
+    // 空白草稿（含随想转出的空文档）不记。
     expect(
       titles.filter(
         (title) => title.includes('新建') && title.includes('未命名文档'),
       ),
-    ).toHaveLength(1);
+    ).toHaveLength(0);
     // 热力图的计数只统计这些值得记的事件。
     expect(
       overview.activity.reduce((sum, day) => sum + day.count, 0),
@@ -259,13 +290,13 @@ describe('Space business service over SQLite', () => {
       kind: 'note',
       title: '资料',
     });
-    await service.saveNode(doc.id, { content: '<p>内容</p>' });
+    await service.saveNode(doc.id, { content: astContent('内容') });
     const idle = await service.createNode({
       spaceId: space.id,
       kind: 'note',
       title: '沉底旧文',
     });
-    await service.saveNode(idle.id, { content: '<p>内容</p>' });
+    await service.saveNode(idle.id, { content: astContent('内容') });
 
     await store.update((data) => {
       const node = data.nodes.find((item) => item.id === doc.id);

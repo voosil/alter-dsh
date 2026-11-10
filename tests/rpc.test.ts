@@ -3,6 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createSpaceAuthority } from '../host/authority.js';
+import { createStructuredSpaceService } from '../host/document/notes.js';
+import { createDocumentService } from '../host/document/service.js';
+import { parseAlterDoc } from '../host/document/types.js';
 import {
   RPC_ENDPOINT,
   RPC_ROUTE_PATH,
@@ -37,7 +40,11 @@ async function createHandler(options: { workspaceSync?: boolean } = {}) {
   const home = join(dir, 'home');
   await mkdir(home, { recursive: true });
   const store = await openSpaceStore({ directory: dir, now: fixedNow });
-  const service = createSpaceAuthority(store, fixedNow);
+  const document = createDocumentService({ store, now: fixedNow });
+  const service = createStructuredSpaceService(
+    createSpaceAuthority(store, fixedNow),
+    document,
+  );
   const storage = createSpaceStorage({ store, directory: dir });
   let registry: FakeWorkspaceRegistry | undefined;
   let sync: SpaceWorkspaceSync | undefined;
@@ -54,8 +61,9 @@ async function createHandler(options: { workspaceSync?: boolean } = {}) {
     service,
     storage,
     workspaceSync: sync === undefined ? undefined : () => sync,
+    document,
   });
-  return { dir, home, store, service, storage, handler, registry, sync };
+  return { dir, home, store, service, storage, document, handler, registry, sync };
 }
 
 type HandlerResult = {
@@ -99,12 +107,82 @@ describe('Space RPC dispatch', () => {
     expect(valueOf(result)).toBeNull();
     const failure = await handler(
       'space.saveNode',
-      { args: ['missing', { content: 'x' }] },
+      { args: ['missing', { title: 'x' }] },
       signal,
       {},
     );
     expect(errorOf(failure)?.code).toBe('space/failed');
     expect(errorOf(failure)?.message).toContain('文档');
+    const blocked = await handler(
+      'space.saveNode',
+      { args: ['missing', { content: 'x' }] },
+      signal,
+      {},
+    );
+    expect(errorOf(blocked)?.code).toBe('node/not-writable');
+    expect(errorOf(blocked)?.message).toContain('文档正文只能通过文档模型接口写入');
+    await store.close();
+  });
+
+  it('creates notes as AST documents and keeps body writes on the document path', async () => {
+    const { store, handler } = await createHandler();
+    const spaces = valueOf(
+      await handler('space.listSpaces', { args: [] }, signal, {}),
+    ) as Array<{ id: string }>;
+    const spaceId = spaces[0]!.id;
+    const created = valueOf(
+      await handler(
+        'space.createNode',
+        { args: [{ spaceId, kind: 'note', title: '新文档' }] },
+        signal,
+        {},
+      ),
+    ) as { id: string; content: string; creator: string; title: string };
+    expect(created.id).toMatch(/^doc-/);
+    expect(created.title).toBe('新文档');
+    expect(created.creator).toBe('me');
+    expect(created).not.toHaveProperty('contentFormat');
+    const doc = parseAlterDoc(created.content);
+    expect(doc.revision).toBe(1);
+    expect(doc.blocks).toEqual([]);
+    const loaded = valueOf(
+      await handler('doc.get', { args: [created.id] }, signal, {}),
+    ) as { revision: number };
+    expect(loaded.revision).toBe(1);
+
+    const blocked = await handler(
+      'space.saveNode',
+      { args: [created.id, { content: '<p>正文</p>' }] },
+      signal,
+      {},
+    );
+    expect(errorOf(blocked)?.code).toBe('node/not-writable');
+    const renamed = valueOf(
+      await handler(
+        'space.saveNode',
+        { args: [created.id, { title: '改名后' }] },
+        signal,
+        {},
+      ),
+    ) as { title: string };
+    expect(renamed.title).toBe('改名后');
+
+    const folder = valueOf(
+      await handler(
+        'space.createNode',
+        { args: [{ spaceId, kind: 'folder' }] },
+        signal,
+        {},
+      ),
+    ) as { kind: string };
+    expect(folder.kind).toBe('folder');
+    await store.close();
+  });
+
+  it('does not expose the removed doc.migrate endpoint', async () => {
+    const { store, handler } = await createHandler();
+    const result = await handler('doc.migrate', { args: [] }, signal, {});
+    expect(errorOf(result)?.code).toBe('space/not-found');
     await store.close();
   });
 

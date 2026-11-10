@@ -44,6 +44,12 @@ export default defineConfig({
         find: /^@alter\/client-modules$/,
         replacement: path.join(vendorSrc('client-modules'), 'index.ts'),
       },
+      {
+        // Same seam as the build and tsconfig: the vendored views render
+        // every note through the structured AST document view.
+        find: /^@alter-space\/document-view$/,
+        replacement: path.join(root, 'src/document/AlterDocumentView.tsx'),
+      },
     ],
   },
   test: {

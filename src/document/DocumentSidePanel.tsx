@@ -38,23 +38,10 @@ function formatTime(value: string): string {
   )}:${pad(date.getMinutes())}`;
 }
 
-function legacyText(content: string): string {
-  return content
-    .replace(/<[^>]*>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 240);
-}
-
-function VersionPreview({ version }: { version: DocVersion }) {
+export function VersionPreview({ version }: { version: DocVersion }) {
   const doc = parseAlterDocContent(version.content);
   if (doc === undefined)
-    return (
-      <p className={styles.legacyPreview}>
-        旧 HTML 版本：{legacyText(version.content) || '（空内容）'}
-      </p>
-    );
+    return <p className={styles.unparsedPreview}>版本内容无法解析</p>;
   return (
     <div className={styles.versionPreview}>
       <DocumentContent doc={doc} />

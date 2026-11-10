@@ -29,6 +29,7 @@ import {
   DocumentError,
   parseAlterDoc,
   serializeAlterDoc,
+  tryParseAlterDoc,
   type AlterDoc,
   type BlockNode,
   type DocumentActor,
@@ -39,9 +40,6 @@ import {
   type OperationDiff,
   type OpsResult,
 } from './types.js';
-
-/** Node shape stored in SQLite; `contentFormat` marks AST-backed documents. */
-type DocNode = SpaceNode & { contentFormat?: string };
 
 /** One top-level block summary returned by `outline`. */
 export interface DocumentOutlineEntry {
@@ -172,6 +170,12 @@ export interface DocumentService {
     actor?: DocumentActor;
   }): Promise<ApplyOperationsResult>;
   generate(input: GenerateDocumentInput): Promise<GenerateDocumentResult>;
+  /** Create an empty AST-backed note (revision 1) in a Space. */
+  createNote(input: {
+    spaceId: string;
+    title?: string;
+    parentId?: string | null;
+  }): Promise<SpaceNode>;
   getObject(objectId: string): Promise<DocumentObjectRecord | undefined>;
   updateObject(input: {
     docId: string;
@@ -217,20 +221,10 @@ function findNode(data: SpaceStoreData, docId: string): SpaceNode | undefined {
   ) as SpaceNode | undefined;
 }
 
-function asDocNode(node: SpaceNode): DocNode {
-  return node as DocNode;
-}
-
-/** Load one AST-backed document or fail with a stable code. */
+/** Load one document or fail with a stable code. */
 function loadDocument(node: SpaceNode | undefined): AlterDoc {
   if (node === undefined) throw new DocumentError('doc/not-found', '文档不存在或已删除');
-  const stored = parseAlterDoc(node.content);
-  if (stored.kind !== 'alter-doc')
-    throw new DocumentError(
-      'doc/legacy-format',
-      '该文档仍是旧 HTML 格式，暂不支持结构化读写；请先迁移后再使用文档模型工具',
-    );
-  return stored.doc;
+  return parseAlterDoc(node.content);
 }
 
 function assertWritable(definition: { ai: { writable: boolean } }, op: string): void {
@@ -340,6 +334,73 @@ function nextTopLevelId(
   return blocks[index + 1]?.id;
 }
 
+/** One note creation request; generate and createNote share the same write path. */
+interface InsertNoteInput {
+  spaceId: string;
+  title: string;
+  parentId: string | null;
+  creator: 'me' | 'alter';
+  blocks: BlockNode[];
+  actor: DocumentActor;
+  at: string;
+  settings: ReturnType<SpaceStoreHandle['getStorageSettings']>;
+}
+
+/**
+ * Append one AST-backed note to the store data and record its first version.
+ * Callers run inside {@link SpaceStoreHandle.transactDocument}.
+ */
+function insertNote(data: SpaceStoreData, input: InsertNoteInput): SpaceNode {
+  const space = data.spaces.find((item) => item.id === input.spaceId);
+  if (space === undefined) throw new DocumentError('doc/not-found', '空间不存在');
+  const parentId = input.parentId;
+  if (parentId !== null) {
+    const parent = findNode(data, parentId);
+    if (parent === undefined || parent.spaceId !== input.spaceId)
+      throw new DocumentError('op/invalid', '目标文件夹不存在');
+    if (parent.kind !== 'folder')
+      throw new DocumentError('op/invalid', '父节点必须是文件夹');
+  }
+  const siblings = data.nodes.filter(
+    (node) =>
+      node.spaceId === input.spaceId &&
+      node.parentId === parentId &&
+      node.deletedAt === null,
+  );
+  const node: SpaceNode = {
+    id: newNodeId(),
+    spaceId: input.spaceId,
+    kind: 'note',
+    title: input.title,
+    parentId,
+    creator: input.creator,
+    pinned: false,
+    archived: false,
+    archivedBy: null,
+    archivedAt: null,
+    deletedAt: null,
+    deletedRoot: false,
+    originalParentId: null,
+    unread: false,
+    content: serializeAlterDoc({
+      format: ALTER_DOC_FORMAT,
+      schemaVersion: ALTER_DOC_SCHEMA_VERSION,
+      revision: 1,
+      blocks: input.blocks,
+    }),
+    activity: 100,
+    activityAt: input.at,
+    lastOpenCreditAt: null,
+    lastEditCreditAt: input.at,
+    createdAt: input.at,
+    updatedAt: input.at,
+    order: siblings.reduce((min, item) => Math.min(min, item.order), 0) - 1,
+  };
+  data.nodes.push(node);
+  recordVersion(data, node, input.actor, input.at, input.settings);
+  return node;
+}
+
 /**
  * Create the document service over one opened store.
  * @param options - raw store handle and business clock.
@@ -433,21 +494,21 @@ export function createDocumentService(
       }
       const hits: DocumentSearchHit[] = [];
       for (const node of docs) {
-        const stored = parseAlterDoc(node.content);
-        if (stored.kind !== 'alter-doc') continue;
+        const doc = tryParseAlterDoc(node.content);
+        if (doc === undefined) continue;
         const titleMatches = node.title.toLowerCase().includes(query);
         if (titleMatches) {
           hits.push({
             docId: node.id,
             spaceId: node.spaceId,
             title: node.title,
-            blockId: stored.doc.blocks[0]?.id ?? null,
+            blockId: doc.blocks[0]?.id ?? null,
             type: 'document',
             preview: node.title.slice(0, 60),
           });
           if (hits.length >= limit) break;
         }
-        const stack = [...stored.doc.blocks];
+        const stack = [...doc.blocks];
         while (stack.length > 0) {
           const block = stack.pop()!;
           const text = textOfBlockTree(block).toLowerCase();
@@ -521,7 +582,6 @@ export function createDocumentService(
         const nextDoc: AlterDoc = { ...result.doc, revision };
         const content = serializeAlterDoc(nextDoc);
         node.content = content;
-        asDocNode(node).contentFormat = ALTER_DOC_FORMAT;
         touchNodeContent(data, node, actor, at, settings);
         const op: DocumentOpRecord = {
           id: newOperationId(),
@@ -591,7 +651,6 @@ export function createDocumentService(
         const revision = doc.revision + 1;
         const content = serializeAlterDoc({ ...result.doc, revision });
         node.content = content;
-        asDocNode(node).contentFormat = ALTER_DOC_FORMAT;
         touchNodeContent(data, node, actor, at, settings);
         const op: DocumentOpRecord = {
           id: newOperationId(),
@@ -634,22 +693,17 @@ export function createDocumentService(
         );
         if (version === undefined)
           throw new DocumentError('op/invalid', '历史版本不存在');
-        const stored = parseAlterDoc(version.content);
-        if (stored.kind !== 'alter-doc')
-          throw new DocumentError(
-            'doc/legacy-format',
-            '该历史版本是旧 HTML 格式，暂不支持恢复到结构化文档',
-          );
+        const restored = parseAlterDoc(version.content);
         const ops: Operation[] = doc.blocks.map((block) => ({
           op: 'delete_block' as const,
           target: block.id,
         }));
-        if (stored.doc.blocks.length > 0) {
+        if (restored.blocks.length > 0) {
           ops.push({
             op: 'insert_blocks',
             parent: null,
             index: 0,
-            blocks: stored.doc.blocks,
+            blocks: restored.blocks,
           });
         }
         if (ops.length === 0) throw new DocumentError('op/invalid', '没有可恢复的内容');
@@ -662,7 +716,6 @@ export function createDocumentService(
         const revision = doc.revision + 1;
         const content = serializeAlterDoc({ ...result.doc, revision });
         node.content = content;
-        asDocNode(node).contentFormat = ALTER_DOC_FORMAT;
         node.title = version.title;
         touchNodeContent(data, node, actor, at, settings);
         sidecar.appendOp({
@@ -714,7 +767,6 @@ export function createDocumentService(
           const revision = doc.revision + 1;
           const content = serializeAlterDoc({ ...result.doc, revision });
           node.content = content;
-          asDocNode(node).contentFormat = ALTER_DOC_FORMAT;
           if (typeof input.title === 'string' && input.title.trim() !== '')
             node.title = input.title.trim();
           touchNodeContent(data, node, actor, at, settings);
@@ -753,57 +805,40 @@ export function createDocumentService(
       };
       validateAlterDoc(initial);
       return store.transactDocument((data) => {
-        const space = data.spaces.find((item) => item.id === spaceId);
-        if (space === undefined) throw new DocumentError('doc/not-found', '空间不存在');
-        const parentId = input.parent ?? null;
-        if (parentId !== null) {
-          const parent = findNode(data, parentId);
-          if (parent === undefined || parent.spaceId !== spaceId)
-            throw new DocumentError('op/invalid', '目标文件夹不存在');
-          if (parent.kind !== 'folder')
-            throw new DocumentError('op/invalid', '父节点必须是文件夹');
-        }
-        const siblings = data.nodes.filter(
-          (node) =>
-            node.spaceId === spaceId &&
-            node.parentId === parentId &&
-            node.deletedAt === null,
-        );
-        const docId = newNodeId();
-        const node: DocNode = {
-          id: docId,
+        const node = insertNote(data, {
           spaceId,
-          kind: 'note',
           title: input.title?.trim() ?? '',
-          parentId,
+          parentId: input.parent ?? null,
           creator: actor === 'alter' ? 'alter' : 'me',
-          pinned: false,
-          archived: false,
-          archivedBy: null,
-          archivedAt: null,
-          deletedAt: null,
-          deletedRoot: false,
-          originalParentId: null,
-          unread: false,
-          content: serializeAlterDoc({ ...initial, revision: 1 }),
-          contentFormat: ALTER_DOC_FORMAT,
-          activity: 100,
-          activityAt: at,
-          lastOpenCreditAt: null,
-          lastEditCreditAt: at,
-          createdAt: at,
-          updatedAt: at,
-          order:
-            siblings.reduce((min, item) => Math.min(min, item.order), 0) - 1,
-        };
-        data.nodes.push(node);
-        recordVersion(data, node, actor, at, settings);
+          blocks,
+          actor,
+          at,
+          settings,
+        });
         return {
-          docId,
+          docId: node.id,
           revision: 1,
           changedBlockIds: blocks.map((block) => block.id),
           title: node.title,
         };
+      });
+    },
+
+    async createNote(input) {
+      const at = nowIsoOf(now);
+      const settings = store.getStorageSettings();
+      return store.transactDocument((data) => {
+        const node = insertNote(data, {
+          spaceId: input.spaceId,
+          title: input.title?.trim() ?? '',
+          parentId: input.parentId ?? null,
+          creator: 'me',
+          blocks: [],
+          actor: 'user',
+          at,
+          settings,
+        });
+        return { ...node };
       });
     },
 

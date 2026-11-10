@@ -1,7 +1,7 @@
 ---
 type: spec
 status: active
-updated: 2026-11-09
+updated: 2026-11-10
 ---
 
 # 系统架构与持久化约束
@@ -26,7 +26,7 @@ updated: 2026-11-09
 - 插件自有数据放 SQLite 侧表（如空间 ↔ 工作区绑定），不写入 `vendor/` 的实体结构。
 - 本仓库是 Space 协议、业务服务、编辑器、UI 与 Host 的唯一实现源（单仓库、自包含）。
 - `vendor/` 是项目自有源码，可以修改但须克制：新增逻辑优先放 `host/`、`src/`；确需改 `vendor/`
-  时保持既有行为与约定一致，并在 `vendor/README.md` 的「构建期模块覆盖 / 关键行为约定」中更新。
+  时保持既有行为与约定一致，并在 `vendor/README.md` 的「构建期模块覆盖与别名 / 关键行为约定」中更新。
 
 ## 2. 传输协议约束
 
@@ -53,8 +53,8 @@ updated: 2026-11-09
   `document_objects` / `document_assets` / `document_ops` 文档侧表）；每实体一张 `(id, data)` 表存
   JSON，`hub(space_id, data)`，`meta(key, value)` 保存数组顺序与簿记。
   低版本库启动时原地加表升级、业务数据不动；schema 版本高于插件支持时拒绝启动。
-- **文档内容**：存 `SpaceNode.content` 字符串并由 `contentFormat` 标记格式；新表/新字段只加插件
-  自有侧表并通过 `user_version` 升级，不改 `vendor/` 实体结构。
+- **文档内容**：`SpaceNode.content` 只保存 `alter-doc/1` AST JSON，没有其他正文格式或格式标记；
+  新表/新字段只加插件自有侧表并通过 `user_version` 升级，不改 `vendor/` 实体结构。
 - **写入**：所有变更进入单写者队列；每笔变更只写「新增/修改/删除的实体行 + 顺序数组 + meta」，
   在一个事务里提交，提交成功才 resolve；失败回滚内存快照并抛错。普通编辑只更新一行，不重写整库。
 - **归属与裁剪**：写入路径必须保留实体归属（用户 / AI `alter`），并在同一事务内完成内容写入、
@@ -89,8 +89,9 @@ updated: 2026-11-09
 
 - 要求 Node.js ≥ 24 与 pnpm；`client.js`、`lib/` 是生成产物，不入库，安装或更新前必须先构建。
 - 构建期适配集中在 `build/build.mjs`（CSS 适配 + 模块级覆盖）；当前生效的模块覆盖只有
-  `DirectoryField → src/native-directory-field.tsx`（宿主目录选择），新增覆盖须在
-  `vendor/README.md` 登记。
+  `DirectoryField → src/native-directory-field.tsx`（宿主目录选择）。文档视图不做模块覆盖：
+  `@alter-space/document-view` 别名在 `build/build.mjs` 与 `tsconfig.json` paths 两处声明，
+  指向 `src/document/` 的结构化视图。新增覆盖或别名须在 `vendor/README.md` 登记。
 - 客户端 bundle 自包含：外置依赖仅限 react 族，新增第三方库必须打进 bundle；
   Host 侧新增依赖不得引入 `@deepseek-ai/*` 运行时依赖。
 - 交付前 `pnpm check`（build + verify + docs:check + typecheck + test）必须全绿；

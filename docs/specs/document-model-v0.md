@@ -1,15 +1,15 @@
 ---
 type: spec
 status: draft
-updated: 2026-11-09
+updated: 2026-11-10
 ---
 
 # 文档模型 v0
 
-本篇规范约束 Space 文档的权威内容表示：顶层信封、Block/Inline 节点、Marks、Schema Registry、
-v0 节点类型与 Markdown 投影规则。它是 `contentFormat: "alter-doc/1"` 文档的读写、校验、投影与
-迁移的实施基准；任何写入都必须走 [document-operations-v0.md](document-operations-v0.md) 定义的
-Operation 通道。
+本篇规范约束 Space 文档的权威内容表示：单一 `alter-doc/1` 格式的顶层信封、Block/Inline 节点、
+Marks、Schema Registry、v0 节点类型与 Markdown 投影规则。它是所有 Space note 正文的读写、校验与
+投影的实施基准；任何正文写入都必须走 [document-operations-v0.md](document-operations-v0.md)
+定义的 Operation 通道。
 
 ## 1. 目标与非目标
 
@@ -25,15 +25,15 @@ Operation 通道。
 
 v0 非目标：
 
-- 不做实时协作/CRDT；revision 与 op 设计保留迁移空间。
+- 不做实时协作/CRDT；revision 与 op 设计保留演进空间。
 - 不做任意 AI 生成代码的执行；代码组件走后续审核通道。
 - 不做 Markdown 全量回写解析（禁止整篇 Markdown → AST）。
 - 不改 `vendor/protocol` 实体结构；新能力通过 `content` 字符串 + 插件自有侧表承载。
 
-## 2. 顶层信封
+## 2. 顶层信封与单一格式
 
-`SpaceNode.content` 保存序列化后的 `AlterDoc` JSON 字符串，`contentFormat: "alter-doc/1"`；
-旧 HTML 文档继续按原格式读取，Host 按 `contentFormat` 路由读写、搜索与渲染。
+所有 Space note 正文只有 `alter-doc/1` 一种格式：`SpaceNode.content` 保存序列化后的 `AlterDoc`
+JSON 字符串；没有 `contentFormat` 之类的格式标记字段，也不存在其他正文格式或双格式路由。
 
 ```jsonc
 {
@@ -46,15 +46,15 @@ v0 非目标：
 
 约束：
 
-- `revision` 从 0 开始，单调递增、不回退；恢复历史版本也 +1。
+- 新建文档即为 revision 1 的 AST 空文档（`blocks: []`）；revision 单调递增、不回退，恢复历史版本也 +1。
+- 正文写入只经 Document Operations（`applyOps` / `generate` / `undo` / `restoreVersion`）；
+  `space.saveNode` 只更新标题等元数据，不接受正文。
 - 文档级大小上限：序列化后 ≤ 512 KiB（可配置）；超限以 `doc/too-large` 拒绝写入。
 - 结构上限：单文档 block 数 ≤ 5000、树深 ≤ 50；超限以 `doc/schema-invalid` 拒绝。
 - 禁止在 `content` 中放二进制或大 payload；图片走资产、思维导图/组件走对象侧表。
 - 节点模型不兼容变更时升 `schemaVersion`，旧数据由 Schema Registry 的 `migrate` 升级。
-- 存量迁移双格式共存：旧 HTML 文档继续可读，经 `doc.migrate` / `space_doc_migrate` 按需或批量
-  转为 AST（只保语义、不保像素）；旧版本快照保留 HTML 渲染，且不能恢复到 AST 文档。
-- 文本抽取按 `contentFormat` 路由：旧 HTML 走 HTML 去标签，AST 走块树纯文本（text 节点与对象
-  alt/caption/title），搜索、概览与新文档判断都不把 AST JSON 当正文。
+- 文本抽取按 AST 块树提取纯文本（text 节点与对象 alt/caption/title），搜索、概览与新文档判断
+  都不把 AST JSON 当正文。
 
 ## 3. Block 节点
 
@@ -101,7 +101,7 @@ v0 行内子集与投影：
 
 ## 6. Schema Registry（唯一事实源）
 
-所有消费方——存储校验、Tiptap node spec、AI 工具 JSON Schema、Markdown 投影、迁移、能力声明——
+所有消费方——存储校验、Tiptap node spec、AI 工具 JSON Schema、Markdown 投影、schemaVersion 迁移、能力声明——
 都从同一份 registry 生成：
 
 ```ts
@@ -137,7 +137,7 @@ interface NodeTypeDefinition {
 
 规则：
 
-- v0 registry 规模 ≤ 20 个节点类型；新增类型必须同时提供 schema、投影、渲染、迁移与能力声明。
+- v0 registry 规模 ≤ 20 个节点类型；新增类型必须同时提供 schema、投影、渲染、schemaVersion 迁移与能力声明。
 - `ai.writable` 与 `ai.ops` 是 Agent 写能力的唯一声明处，工具层不得硬编码节点类型特例。
 
 ### 6.1 v0 节点类型

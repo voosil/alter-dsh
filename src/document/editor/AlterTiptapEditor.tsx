@@ -78,8 +78,6 @@ function describeSaveError(error: unknown): string {
         return '文档不存在或已被删除，请刷新页面后重试。';
       case 'doc/too-large':
         return '文档超过服务端体量上限，无法保存。请精简内容后重试。';
-      case 'doc/legacy-format':
-        return '该文档仍是旧版 HTML 格式，暂不支持结构化编辑保存。';
       case 'doc/schema-invalid':
       case 'node/schema-invalid':
         return `文档结构未通过服务端校验：${error.message}`;

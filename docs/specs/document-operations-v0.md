@@ -1,7 +1,7 @@
 ---
 type: spec
 status: draft
-updated: 2026-11-09
+updated: 2026-11-10
 ---
 
 # 文档操作 v0
@@ -78,8 +78,7 @@ v0 限制：
 | `doc/not-found` | 文档不存在/已删 |
 | `doc/conflict` | `baseRevision` 不匹配 |
 | `doc/too-large` | AST 序列化超上限 |
-| `doc/schema-invalid` | AST 结构、`format`、`schemaVersion` 或 `revision` 不合法 |
-| `doc/legacy-format` | 目标文档仍是旧 HTML 格式，暂不支持结构化读写 |
+| `doc/schema-invalid` | AST 结构、`format`、`schemaVersion`、`revision` 或存储内容不合法 |
 | `op/invalid` | op 参数非法/未知 op |
 | `node/not-found` | target 不存在或已删除 |
 | `node/schema-invalid` | 节点/属性不符合 registry |
@@ -162,7 +161,7 @@ v0 限制：
 - 只允许图片（png/jpeg/webp/gif），单资产 ≤ 4 MiB；导入时校验 mime/大小并去重。
 - 导入：Agent 工具 `space_asset_import` 接收 base64（≤ 4 MiB 解码后）；浏览器/编辑器后续可直接上传。
 - 读取：Host 注册 `GET /api/alter-space/asset?id=<assetId>`（Connection 鉴权）返回原始字节，
-  客户端用该 URL 渲染 `<img>`；`space-asset://` 只是 Markdown 投影里的引用写法，不直接进 HTML。
+  客户端用该 URL 渲染 `<img>`；`space-asset://` 只是 Markdown 投影里的引用写法。
 - 备份：资产目录必须纳入备份/恢复流程（见 §7）。每日快照会同时生成资产归档。
 
 ## 7. 版本、快照与备份
@@ -175,12 +174,13 @@ v0 限制：
 - **版本预算**：当前「每篇 10 版 / 64 KiB」由存储设置控制、在写入事务内从最旧裁剪；
   AST 快照更大，预算重估仍开放（见 [agent-doc-tools-v0.md](agent-doc-tools-v0.md)）。
 - **恢复**：restore 历史快照 = 通过 delete+insert Operations 重放该 AST、revision+1、追加 op log；
-  旧对象/资产按引用保活；旧 HTML 历史版本对 AST 文档拒绝恢复（需先迁移）。
+  旧对象/资产按引用保活；版本历史全部为 AST 快照，恢复只接受 AST。
 - **备份**：数据库快照 + `assets/` 归档（`space-YYYYMMDD.assets.tar.gz`）成对生成与保留；恢复流程同时覆盖两者。
 
 ## 8. RPC 暴露
 
-- 对应端点：`doc.get` / `doc.outline` / `doc.read` / `doc.search` / `doc.applyOps` / `doc.undo` / `doc.restoreVersion` / `doc.generate` / `doc.migrate` / `object.get`；
+- 对应端点：`doc.get` / `doc.outline` / `doc.read` / `doc.search` / `doc.applyOps` / `doc.undo` / `doc.restoreVersion` / `doc.generate` / `object.get`；
+  其中 `doc.applyOps` / `doc.generate` / `doc.undo` / `doc.restoreVersion` 是正文写入入口，其余端点只读；
   `doc.get` 返回完整 AST（编辑器加载用），`doc.undo` 应用一次 op log 的 `inverseOps`；
   浏览器编辑器加载 AST、编辑后在客户端做 block 级 diff 生成 Operation 批次再提交，不整篇覆盖；
   新增端点必须同时加入 Host 路由白名单与浏览器客户端映射（约束见 [system-architecture.md](system-architecture.md)）。

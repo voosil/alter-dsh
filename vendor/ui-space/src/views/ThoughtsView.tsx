@@ -24,6 +24,11 @@ import { MoveThoughtDialog } from '../components/MoveThoughtDialog';
 import { Menu, type MenuAction } from '@alter/ui-system';
 import { EmptyState } from '../components/EmptyState';
 import { DirectoryButton } from '../components/DirectoryButton';
+import {
+  DocumentModelUnavailableError,
+  convertThoughtToDocument,
+  createDocumentFromHtml,
+} from '../thought-conversion';
 import styles from './ThoughtsView.module.css';
 
 export function ThoughtsView({ selectedId }: { selectedId?: string }) {
@@ -83,21 +88,28 @@ export function ThoughtsView({ selectedId }: { selectedId?: string }) {
   }
 
   async function convertDraft(html: string) {
-    const node = await service.createNode({ spaceId, kind: 'note' });
-    const saved = await service.saveNode(node.id, { content: html });
-    addNodeToState(saved);
+    const node = await createDocumentFromHtml(service, { spaceId, html });
+    addNodeToState(node);
     refresh();
     toast('已转为文档');
-    router.navigate(docPath(spaceId, saved.id));
+    router.navigate(docPath(spaceId, node.id));
   }
 
   async function convert(thought: Thought) {
-    const result = await service.convertThought(thought.id);
-    addNodeToState(result.node);
-    setOpenThought(null);
-    refresh();
-    toast('已转为文档');
-    router.navigate(docPath(spaceId, result.node.id));
+    try {
+      const node = await convertThoughtToDocument(service, thought);
+      addNodeToState(node);
+      setOpenThought(null);
+      refresh();
+      toast('已转为文档');
+      router.navigate(docPath(spaceId, node.id));
+    } catch (cause) {
+      toast(
+        cause instanceof DocumentModelUnavailableError
+          ? cause.message
+          : '转换失败，请重试',
+      );
+    }
   }
 
   async function archive(thought: Thought, archived: boolean) {

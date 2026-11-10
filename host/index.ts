@@ -16,7 +16,7 @@ import { createSnapshotScheduler } from './backup.js';
 import { createDocumentAssetRoute } from './document/asset-route.js';
 import { ASSET_ROUTE_PATH, createDocumentAssets } from './document/assets.js';
 import { gcDocumentArtifacts } from './document/gc.js';
-import { createDocumentMigration } from './document/migrate.js';
+import { createStructuredSpaceService } from './document/notes.js';
 import { createDocumentService } from './document/service.js';
 import {
   registerDocumentTools,
@@ -169,11 +169,15 @@ export async function apply(
     const retainedStore = withVersionRetention(store, () =>
       store.getStorageSettings(),
     );
-    const service = createSpaceAuthority(retainedStore, now);
-    const storage = createSpaceStorage({ store, directory });
     const document = createDocumentService({ store, now });
+    // Notes are AST-backed documents: creation and body writes go through the
+    // document service while every other Space method delegates unchanged.
+    const service = createStructuredSpaceService(
+      createSpaceAuthority(retainedStore, now),
+      document,
+    );
+    const storage = createSpaceStorage({ store, directory });
     const assets = createDocumentAssets({ store, directory, now });
-    const migration = createDocumentMigration({ store, assets, now, logger });
     void gcDocumentArtifacts({ store, directory, logger }).catch((error: unknown) => {
       logger.warn?.(`[alter-dsh-space] 文档对象/资产 GC 失败：${describeError(error)}`);
     });
@@ -184,7 +188,6 @@ export async function apply(
       storage,
       workspaceSync: () => workspaceSync,
       document,
-      migration,
     });
     const attachDocumentTools = (child: HostContextLike): void => {
       const tools = child.tools ?? child.get?.('tools');
@@ -195,7 +198,6 @@ export async function apply(
       const dispose = registerDocumentTools(tools, {
         service: document,
         assets,
-        migration,
       });
       disposeDocumentTools = dispose;
       const cleanup = () => {

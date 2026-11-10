@@ -27,7 +27,7 @@ import { PanelResizer } from '@alter/ui-system';
 import { SearchPanel } from './components/SearchPanel';
 import { ThoughtComposerModal } from './components/ThoughtComposerModal';
 import { CreateSpaceDialog } from './components/CreateSpaceDialog';
-import { DocumentView } from './views/DocumentView';
+import { AlterDocumentView as DocumentView } from '@alter-space/document-view';
 import { ThoughtsView } from './views/ThoughtsView';
 import { SpaceHubView } from './hub/plugins';
 import { createSpaceHubRegistry } from './hub/registry';

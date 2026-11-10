@@ -229,7 +229,7 @@
   font-size: var(--alter-font-body-sm);
 }
 
-.legacyPreview {
+.unparsedPreview {
   margin: 0;
   color: var(--alter-text-muted);
   font-size: var(--alter-font-caption);

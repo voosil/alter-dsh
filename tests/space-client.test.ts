@@ -115,7 +115,6 @@ describe('createSpaceDocumentClient', () => {
       versionId: 'ver_1',
       baseRevision: 3,
     });
-    await document.migrate({ docId: 'doc-1' });
     await document.generate({ spaceId: 'sp-1', markdown: '# x' });
     await document.getObject('obj_1');
     expect(calls.map((call) => call.op)).toEqual([
@@ -126,10 +125,24 @@ describe('createSpaceDocumentClient', () => {
       'doc.applyOps',
       'doc.undo',
       'doc.restoreVersion',
-      'doc.migrate',
       'doc.generate',
       'object.get',
     ]);
     expect(calls[2]?.args).toEqual(['doc-1', { maxChars: 2000 }]);
+  });
+
+  it('does not expose the removed legacy migration endpoint', async () => {
+    const calls: string[] = [];
+    const rpc: SpaceRpcCaller = {
+      async call(_channel, _endpoint, payload) {
+        const { op } = payload as { op: string };
+        calls.push(op);
+        return { ok: true, value: { value: null } };
+      },
+    };
+    const document = createSpaceDocumentClient(rpc);
+    expect('migrate' in document).toBe(false);
+    await document.get('doc-1');
+    expect(calls).toEqual(['doc.get']);
   });
 });

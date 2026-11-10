@@ -64,10 +64,6 @@
   font-size: var(--alter-font-caption);
 }
 
-.metaDivider {
-  margin: 0 6px;
-}
-
 .bodyRow {
   flex: 1;
   display: flex;

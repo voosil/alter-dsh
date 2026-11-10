@@ -113,4 +113,59 @@ describe('document artifact GC', () => {
     expect(await assets.get(keep.id)).toBeDefined();
     await store.close();
   });
+
+  it('skips non-AST content instead of failing GC', async () => {
+    const { dir, store } = await setup();
+    await store.update((data) => {
+      (data.nodes as unknown as Array<Record<string, unknown>>).push({
+        id: 'doc-plain',
+        spaceId: DEFAULT_SPACE_ID,
+        kind: 'note',
+        title: '非结构化文档',
+        parentId: null,
+        creator: 'me',
+        pinned: false,
+        archived: false,
+        archivedBy: null,
+        archivedAt: null,
+        deletedAt: null,
+        deletedRoot: false,
+        originalParentId: null,
+        unread: false,
+        content: '<p>obj_node_ref</p>',
+        activity: 0,
+        activityAt: fixedNow().toISOString(),
+        lastOpenCreditAt: null,
+        lastEditCreditAt: null,
+        createdAt: fixedNow().toISOString(),
+        updatedAt: fixedNow().toISOString(),
+        order: 0,
+      });
+      data.versions.push({
+        id: 'ver-plain',
+        docId: 'doc-plain',
+        title: '旧快照',
+        content: '<p>obj_version_ref</p>',
+        author: 'me',
+        at: fixedNow().toISOString(),
+      });
+    });
+    await store.transactDocument((_data, sidecar) => {
+      for (const id of ['obj_node_ref', 'obj_version_ref']) {
+        sidecar.putObject({
+          id,
+          docId: 'doc-plain',
+          type: 'mindmap',
+          schemaVersion: 1,
+          payload: { root: { id: 'n1', text: id } },
+          createdAt: fixedNow().toISOString(),
+        });
+      }
+    });
+    const result = await gcDocumentArtifacts({ store, directory: dir });
+    expect(result.objectsRemoved).toBe(2);
+    expect(await store.getDocumentObject('obj_node_ref')).toBeUndefined();
+    expect(await store.getDocumentObject('obj_version_ref')).toBeUndefined();
+    await store.close();
+  });
 });

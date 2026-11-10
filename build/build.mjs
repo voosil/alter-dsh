@@ -23,7 +23,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'vite';
 import { createDirectoryFieldOverride } from './directory-field-override.mjs';
-import { createDocumentViewOverride } from './document-view-override.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const pluginRoot = path.resolve(here, '..');
@@ -78,10 +77,15 @@ const alias = [
     find: /^@alter\/client-modules$/,
     replacement: path.join(vendorSrc('client-modules'), 'index.ts'),
   },
+  {
+    // Plugin-owned seam: the vendored Space views render every note through
+    // the structured AST document view (`src/document/AlterDocumentView.tsx`).
+    find: /^@alter-space\/document-view$/,
+    replacement: path.join(pluginRoot, 'src', 'document', 'AlterDocumentView.tsx'),
+  },
 ];
 
 const directoryFieldOverride = createDirectoryFieldOverride(pluginRoot);
-const documentViewOverride = createDocumentViewOverride(pluginRoot);
 
 await rm(distDir, { recursive: true, force: true });
 
@@ -91,7 +95,7 @@ await build({
   logLevel: 'warn',
   define: { 'process.env.NODE_ENV': JSON.stringify('production') },
   resolve: { alias },
-  plugins: [directoryFieldOverride, documentViewOverride],
+  plugins: [directoryFieldOverride],
   build: {
     outDir: 'dist',
     emptyOutDir: true,

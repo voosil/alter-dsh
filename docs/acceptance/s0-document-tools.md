@@ -1,7 +1,7 @@
 ---
 type: acceptance
 status: active
-updated: 2026-11-09
+updated: 2026-11-10
 ---
 
 # Agent 文档工具 v0 · 真机验收记录
@@ -13,9 +13,10 @@ DSH desktop profile 中的注册与读写链路。结论：**PASS（安装 / 工
 
 | 项 | 结论 |
 | --- | --- |
-| 构建与测试 | `pnpm check` 全绿（build + verify + docs:check + typecheck + 19 文件 / 194 测试）。 |
-| 安装与注册 | `remove_bundle` → `install_bundle`：`application: applied`，warnings 空；Host `Tool.listTools` 出现 7 个工具：`space_doc_outline/read/search/ops/generate`、`space_object_get/update`。 |
+| 构建与测试 | `pnpm check` 全绿（build + verify + docs:check + typecheck + test）。 |
+| 安装与注册 | `remove_bundle` → `install_bundle`：`application: applied`，warnings 空；Host `Tool.listTools` 出现 9 个工具：`space_doc_outline/read/search/ops/undo/generate`、`space_object_get/update`、`space_asset_import`。 |
 | 生成 | `space_doc_generate` 在 `sp-inbox` 创建 title=「S0 验收测试（可删除）」的 AST 文档：revision=1，18 个块 / 7 个顶层块。 |
+| 新建文档 | 新建文档即 revision 1 的 `alter-doc/1` AST 文档（空文档 `blocks: []`）；`space.saveNode` 只更新标题等元数据，不接受正文写入。 |
 | 读取 | `space_doc_read` 返回带 `<!-- blk:… -->` 锚点的 Markdown，callout/mindmap 指令、代码块与 GFM 表格均正确投影。 |
 | 精确修改 | `space_doc_ops` + `update_text`：revision 1→2；`oldText` 必须用投影纯文本（`**` 不计入）。 |
 | 并发 | 用旧 revision 重放同一批 ops → `doc/conflict`（当前 revision=2，提交基于 1），未落盘。 |
@@ -24,14 +25,13 @@ DSH desktop profile 中的注册与读写链路。结论：**PASS（安装 / 工
 | 归属 | 工具写入按 `alter` 归属；版本/op log 随事务写入。 |
 | 完整 AST 读取 | `doc.get` 返回 revision/title/doc 块树；`tests/document-service.test.ts` 与 `host-apply` 集成用例覆盖。 |
 | 撤销 | `doc.undo` 应用 op log 的 inverseOps：revision+1、旧内容恢复；过期 base 报 `doc/conflict`，未知 token 报 `op/invalid`。 |
-| 结构化文档 UI | 构建期把 `DocumentView` 重定向到 `src/document/adaptive-document-view.tsx`：旧 HTML 文档走原编辑器，AST 文档走 Tiptap 编辑器（标题/块树/工具栏/保存/冲突重载）；保存由客户端 block diff → `doc.applyOps`，不整篇覆盖。`client.js` 产物断言、映射/diff 单测与只读渲染 SSR 测试覆盖；未做浏览器点击验证。 |
+| 结构化文档 UI | 所有 note 都走结构化编辑器（`src/document/` 的 Tiptap 编辑面：标题/块树/工具栏/保存/冲突重载）；保存由客户端 block diff → `doc.applyOps`，不整篇覆盖。`client.js` 产物断言、映射/diff 单测与只读渲染 SSR 测试覆盖；未做浏览器点击验证。 |
 | 撤销工具 | `space_doc_undo`：按 `undo_token` 或最近一次 batch 应用 `inverseOps`，生成新 revision 与 op log；冲突/未知 token 错误码覆盖。 |
-| 资产 | `space_asset_import` + 内容寻址资产表/文件：去重、mime/大小校验、`GET /api/alter-space/asset` 读取；客户端图片块用该 URL 渲染，失败回退占位。资产备份目录仍待纳入每日快照。 |
-| 评论与历史 | AST 文档侧栏：评论列表/发布/解决；版本列表、AST 预览与「恢复此版本」。恢复走 `doc.restoreVersion`（delete+insert Operations，revision+1，不倒退 revision），旧 HTML 历史版本明确拒绝。 |
+| 资产 | `space_asset_import` + 内容寻址资产表/文件：去重、mime/大小校验、`GET /api/alter-space/asset` 读取；客户端图片块用该 URL 渲染，失败回退占位。 |
+| 评论与历史 | 文档侧栏：评论列表/发布/解决；版本列表、AST 预览与「恢复此版本」。恢复走 `doc.restoreVersion`（delete+insert Operations，revision+1，不倒退 revision）；版本历史全部为 AST 快照，恢复只接受 AST。 |
 | 对象/资产 GC | 启动时扫描当前文档与保留版本的引用，删除未引用对象与资产元数据/字节；版本中仍引用的对象保留。 |
 | 资产备份 | 每日快照同时生成 `space-YYYYMMDD.assets.tar.gz`（无资产跳过），二者按同一 keep 策略保留；恢复流程同时覆盖。 |
-| 旧文档迁移 | `doc.migrate` / `space_doc_migrate`：旧 HTML 语义级转 AST（段落/标题/列表/引用/代码/表格/marks/内联图片），dataURL 图片导入资产；已迁移文档跳过、旧 HTML 版本保留但拒绝恢复；批量迁移逐篇隔离失败。 |
-| AST 文本抽取 | 全局搜索、概览活动与新文档内容判断按 `contentFormat` 提取正文：AST 文档取块树纯文本（含对象 alt/caption/title），不再命中 JSON 字段；旧 HTML 文档行为不变。 |
+| AST 文本抽取 | 全局搜索、概览活动与新文档内容判断按 AST 块树提取正文纯文本（含对象 alt/caption/title），不命中 JSON 字段。 |
 
 真机测试文档：`doc-b16dc506-1186-45ab-bcf9-59e98291a2a4`（「S0 验收测试（可删除）」）。
 v0 没有删除工具，需在空间面板中手动删除。
@@ -61,13 +61,13 @@ v0 没有删除工具，需在空间面板中手动删除。
 
 ## 当前完成度
 
-S0 Host 工具面、S1 Tiptap 编辑器、评论/历史、资产、撤销、GC、备份、旧文档迁移与 AST 搜索结果均已实现并有测试覆盖；剩余仅上节的浏览器视觉验收与人工目验。
+S0 Host 工具面、S1 Tiptap 编辑器、评论/历史、资产、撤销、GC、备份与 AST 搜索结果均已实现并有测试覆盖；正文只有 `alter-doc/1` AST 一种格式，无旧格式、旧编辑器与迁移工具。剩余仅上节的浏览器视觉验收与人工目验。
 
 ## 限制
 
-- 旧 HTML 文档对工具返回 `doc/legacy-format`，可用 `space_doc_migrate` 迁移；AST 文档已有 Tiptap 编辑器、图片资产渲染、评论/历史侧栏与资产/对象 GC、资产备份。
+- 所有 note 正文都是 AST，工具按 AST 读写；Tiptap 编辑器已支持图片资产渲染、评论/历史侧栏、资产/对象 GC 与资产备份。
 - `space_doc_outline` 的 `total_blocks` 计入嵌套块（示例 18），`outline` 只列顶层块（示例 7）。
-- 资产导入、undo 端点、对象 GC、组件运行时不在本切片。
+- 组件运行时不在本切片。
 
 ## 相关文档
 

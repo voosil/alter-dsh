@@ -28,8 +28,9 @@
 
 ## 数量预算（硬上限，自动校验）
 
-- markdown 只允许出现在 `AGENTS.md`、`README.md`、`docs/**` 与 `vendor/README.md` 这几处；
-  仓库根目录只允许 `AGENTS.md`、`README.md` 两个 markdown 文件，其他位置新增 markdown 校验会失败。
+- markdown 只允许出现在 `AGENTS.md`、`README.md`、`docs/**`、`vendor/README.md` 与 `.agents/**`
+  （项目级 Agent 技能等工具文件，不属于知识库、不计入预算）这几处；仓库根目录只允许
+  `AGENTS.md`、`README.md` 两个 markdown 文件，其他位置新增 markdown 校验会失败。
 - `docs/` 最多 6 个分类目录；当前固定 4 个，新增分类须先改本文件与校验脚本。
 - 单个分类目录最多 8 个 markdown 文件（含该目录的 `README.md`）。
 - 知识文档（根目录 2 个 + `docs/**/*.md` + `vendor/README.md`）总数最多 24 个。
@@ -95,6 +96,6 @@ updated: 2026-11-09
 | 分类 | 入口 | 内容 |
 | --- | --- | --- |
 | 规范 | [specs/README.md](specs/README.md) | 文档模型、Operations、Agent 工具契约、系统架构与持久化边界 |
-| 方案 | [designs/README.md](designs/README.md) | 文档内容架构方向、Agent 文档工具方案与决策 |
+| 方案 | [designs/README.md](designs/README.md) | 文档内容架构方向、Agent 文档工具方案、编辑器健壮性方向与决策 |
 | 调研 | [research/README.md](research/README.md) | 文档存储格式调研、DSH Agent 创建调研 |
-| 验收 | [acceptance/README.md](acceptance/README.md) | 空间↔工作区映射清单、协作者创建验证记录 |
+| 验收 | [acceptance/README.md](acceptance/README.md) | 空间↔工作区映射、协作者创建、文档工具与编辑器健壮性验收 |

@@ -6,7 +6,7 @@ import { WorkbenchFrame, type WorkbenchController } from '@alter/ui-workbench';
 import type { WorkbenchService } from '@alter/mock-workbench';
 import { SpaceContext, useSpaceContext } from './runtime';
 import { SearchPanel } from './components/SearchPanel';
-import { DocumentView } from './views/DocumentView';
+import { AlterDocumentView as DocumentView } from '@alter-space/document-view';
 import { parseSpaceRoute } from './space-route';
 import { displayTitle } from './utils/tree';
 
@@ -90,7 +90,7 @@ export function SpaceWorkbench({
           };
           return (
             <SpaceContext.Provider value={previewContext}>
-              <DocumentView key={node.id} node={node} embedded />
+              <DocumentView key={node.id} node={node} />
             </SpaceContext.Provider>
           );
         }}

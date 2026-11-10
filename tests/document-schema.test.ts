@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   ALTER_DOC_FORMAT,
   ALTER_DOC_SCHEMA_VERSION,
+  DocumentError,
   parseAlterDoc,
   serializeAlterDoc,
+  tryParseAlterDoc,
   type AlterDoc,
 } from '../host/document/types.js';
 import {
@@ -129,16 +131,25 @@ describe('document schema', () => {
     ).toThrow(/href/);
   });
 
-  it('parses stored alter-doc content and falls back to legacy html', () => {
+  it('strict-parses stored alter-doc content and rejects anything else', () => {
     const value = doc([createBlockNode('blk_p', 'paragraph')]);
-    expect(parseAlterDoc(serializeAlterDoc(value))).toEqual({
-      kind: 'alter-doc',
-      doc: value,
-    });
-    expect(parseAlterDoc('<p>旧文档</p>')).toEqual({
-      kind: 'legacy',
-      html: '<p>旧文档</p>',
-    });
+    expect(parseAlterDoc(serializeAlterDoc(value))).toEqual(value);
+    expect(tryParseAlterDoc(serializeAlterDoc(value))).toEqual(value);
+    for (const invalid of [
+      '<p>旧文档</p>',
+      '',
+      '{"format":"alter-doc/1"}',
+      '{"format":"other","schemaVersion":1,"revision":1,"blocks":[]}',
+    ]) {
+      expect(() => parseAlterDoc(invalid)).toThrow(DocumentError);
+      expect(() => parseAlterDoc(invalid)).toThrow('文档内容不是合法的 alter-doc/1');
+      expect(tryParseAlterDoc(invalid)).toBeUndefined();
+    }
+    try {
+      parseAlterDoc('<p>旧文档</p>');
+    } catch (error) {
+      expect((error as DocumentError).code).toBe('doc/schema-invalid');
+    }
   });
 
   it('validates object payloads and type capabilities', () => {

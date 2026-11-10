@@ -7,6 +7,7 @@ import {
   resolveDataDirectory,
   type HostContextLike,
 } from '../host/index.js';
+import { parseAlterDoc } from '../host/document/types.js';
 import { RPC_ENDPOINT, RPC_ROUTE_PATH } from '../host/rpc.js';
 import { SPACE_DB_FILE, openSpaceStore } from '../host/store.js';
 import type { SpaceRpcHandler } from '../host/rpc.js';
@@ -185,7 +186,6 @@ describe('host plugin apply', () => {
     expect([...fake.definitions.keys()].sort()).toEqual([
       'space_asset_import',
       'space_doc_generate',
-      'space_doc_migrate',
       'space_doc_ops',
       'space_doc_outline',
       'space_doc_read',
@@ -262,6 +262,21 @@ describe('host plugin apply', () => {
       markdown: string;
     };
     expect(restored.markdown).toContain('正文段落');
+
+    // Note creation goes through the document service: empty AST, no format tag.
+    const note = (await harness.call('space.createNode', [
+      { spaceId: 'sp-inbox', kind: 'note', title: '新建文档' },
+    ])) as { id: string; content: string };
+    expect(note).not.toHaveProperty('contentFormat');
+    const noteDoc = parseAlterDoc(note.content);
+    expect(noteDoc.revision).toBe(1);
+    expect(noteDoc.blocks).toEqual([]);
+    await expect(
+      harness.call('space.saveNode', [note.id, { content: '<p>正文</p>' }]),
+    ).rejects.toThrow('node/not-writable');
+    await expect(harness.call('doc.migrate', [])).rejects.toThrow(
+      'space/not-found',
+    );
 
     await harness.teardown();
     expect(fake.definitions.size).toBe(0);

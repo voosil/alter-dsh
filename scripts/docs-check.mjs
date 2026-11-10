@@ -44,6 +44,8 @@ const IGNORED_DIRS = new Set([
   'node_modules',
   '.git',
   '.dsh-build',
+  // Project-level agent tooling (skills, instructions) is not knowledge documentation.
+  '.agents',
   'lib',
   'dist',
   'coverage',

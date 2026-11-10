@@ -69,7 +69,7 @@ describe('AST content text extraction', () => {
     await store.update((data) => {
       (data.nodes as unknown as Array<Record<string, unknown>>).push(
         node('doc-ast', '结构化文档', astContent('token 刷新策略')),
-        node('doc-legacy', '旧文档', '<p>token 旧版内容</p>'),
+        node('doc-plain', '非结构化内容', '<p>token 纯文本内容</p>'),
       );
     });
     const service = createSpaceAuthority(store, fixedNow);
@@ -79,8 +79,8 @@ describe('AST content text extraction', () => {
     expect(astHit?.excerpt).toContain('token');
     expect(astHit?.excerpt).not.toContain('"format"');
     expect(astHit?.excerpt).not.toContain('blk_');
-    const legacyHit = results.find((result) => result.id === 'doc-legacy');
-    expect(legacyHit?.excerpt).toContain('token');
+    // Non-AST bodies yield no searchable text (no HTML stripping fallback).
+    expect(results.find((result) => result.id === 'doc-plain')).toBeUndefined();
     await store.close();
   });
 

@@ -12,7 +12,6 @@ import type {
   DocumentService,
   GenerateDocumentInput,
 } from './document/service.js';
-import type { DocumentMigration } from './document/migrate.js';
 import { DocumentError } from './document/types.js';
 import type { SpaceStorageApi } from './storage.js';
 import { WorkspaceSyncError, type SpaceWorkspaceSync } from './workspace-sync.js';
@@ -101,7 +100,6 @@ const DOCUMENT_METHODS = [
   'undo',
   'restoreVersion',
   'generate',
-  'migrate',
 ] as const;
 const OBJECT_METHODS = ['get'] as const;
 
@@ -143,8 +141,6 @@ export interface SpaceRpcOptions {
   workspaceSync?: () => SpaceWorkspaceSync | undefined;
   /** Document-model service; absent when the feature is disabled. */
   document?: DocumentService;
-  /** Legacy HTML → AST migration; absent when disabled. */
-  migration?: DocumentMigration;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -280,21 +276,6 @@ export function createSpaceRpc(options: SpaceRpcOptions): SpaceRpcHandler {
                 (args[0] ?? {}) as Parameters<DocumentService['undo']>[0],
               ),
             };
-          case 'migrate': {
-            const migration = options.migration;
-            if (migration === undefined)
-              throw new SpaceRpcError('doc/unavailable', '文档迁移未启用');
-            const input = args[0];
-            const docId =
-              typeof input === 'string'
-                ? input
-                : typeof input === 'object' && input !== null
-                  ? (input as { docId?: unknown }).docId
-                  : undefined;
-            if (typeof docId === 'string' && docId !== '')
-              return { value: await migration.migrateDocument(docId) };
-            return { value: await migration.migrateAll() };
-          }
           case 'restoreVersion':
             return {
               value: await document.restoreVersion(

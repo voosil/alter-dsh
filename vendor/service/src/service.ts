@@ -64,22 +64,6 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
-function htmlToText(html: string) {
-  return html
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/(p|div|li|h[1-6]|blockquote|tr)>/gi, '\n')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/\u200b/g, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
 /** Extract the plain text of one AST block tree (alter-doc/1). */
 function astBlockText(block: unknown): string[] {
   if (typeof block !== 'object' || block === null || Array.isArray(block))
@@ -107,33 +91,43 @@ function astBlockText(block: unknown): string[] {
 }
 
 /**
- * Read the searchable text of a document body. AST documents store JSON, so
- * the HTML stripper would otherwise leak node types and ids into search.
+ * Serialize the empty `alter-doc/1` document a converted thought starts from.
+ * The client fills the body through Document Operations afterwards.
+ */
+function emptyDocumentContent() {
+  return JSON.stringify({
+    format: 'alter-doc/1',
+    schemaVersion: 1,
+    revision: 1,
+    blocks: [],
+  });
+}
+
+/**
+ * Read the searchable text of a document body. Note bodies are `alter-doc/1`
+ * AST JSON, so only the block tree yields text; anything else is empty.
  */
 function contentText(content: string) {
-  const trimmed = content.trimStart();
-  if (trimmed.startsWith('{')) {
-    try {
-      const parsed: unknown = JSON.parse(content);
-      if (
-        typeof parsed === 'object' &&
-        parsed !== null &&
-        !Array.isArray(parsed) &&
-        (parsed as { format?: unknown }).format === 'alter-doc/1' &&
-        Array.isArray((parsed as { blocks?: unknown }).blocks)
-      ) {
-        const blocks = (parsed as { blocks: unknown[] }).blocks;
-        return blocks
-          .flatMap((block) => astBlockText(block))
-          .join('\n')
-          .replace(/\n{3,}/g, '\n\n')
-          .trim();
-      }
-    } catch {
-      // Not JSON: fall through to the legacy HTML path.
-    }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return '';
   }
-  return htmlToText(content);
+  if (
+    typeof parsed !== 'object' ||
+    parsed === null ||
+    Array.isArray(parsed) ||
+    (parsed as { format?: unknown }).format !== 'alter-doc/1' ||
+    !Array.isArray((parsed as { blocks?: unknown }).blocks)
+  )
+    return '';
+  const blocks = (parsed as { blocks: unknown[] }).blocks;
+  return blocks
+    .flatMap((block) => astBlockText(block))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 function excerptAround(text: string, query: string) {
@@ -937,7 +931,7 @@ export function createContentService(
           deletedRoot: false,
           originalParentId: null,
           unread: false,
-          content: thought.content,
+          content: emptyDocumentContent(),
           activity: 100,
           activityAt: timestamp,
           lastOpenCreditAt: null,
@@ -1039,10 +1033,10 @@ export function createContentService(
           thought.spaceId !== spaceId ||
           thought.deletedAt ||
           thought.convertedDocId ||
-          !contentText(thought.content).toLowerCase().includes(normalized)
+          !thought.content.toLowerCase().includes(normalized)
         )
           continue;
-        const text = contentText(thought.content);
+        const text = thought.content;
         thoughts.push({
           id: thought.id,
           type: 'thought',

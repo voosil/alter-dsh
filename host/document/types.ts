@@ -182,7 +182,6 @@ export type DocumentErrorCode =
   | 'doc/conflict'
   | 'doc/too-large'
   | 'doc/schema-invalid'
-  | 'doc/legacy-format'
   | 'op/invalid'
   | 'node/not-found'
   | 'node/schema-invalid'
@@ -260,11 +259,6 @@ export interface DocumentSidecar {
   appendOp(record: DocumentOpRecord): void;
 }
 
-/** Result of parsing a stored node that may hold either format. */
-export type StoredDocument =
-  | { kind: 'alter-doc'; doc: AlterDoc }
-  | { kind: 'legacy'; html: string; format?: string };
-
 /** Whether a value is a plain JSON object. */
 export function isPlainObject(
   value: unknown,
@@ -282,13 +276,21 @@ export function createEmptyDoc(revision = 0): AlterDoc {
   };
 }
 
-/** Parse a stored content string into the canonical document when possible. */
-export function parseAlterDoc(content: string): StoredDocument {
+/** Parse a stored content string as the canonical document; invalid input throws. */
+export function parseAlterDoc(content: string): AlterDoc {
+  const doc = tryParseAlterDoc(content);
+  if (doc === undefined)
+    throw new DocumentError('doc/schema-invalid', '文档内容不是合法的 alter-doc/1');
+  return doc;
+}
+
+/** Parse stored content into the canonical document, or `undefined` when invalid. */
+export function tryParseAlterDoc(content: string): AlterDoc | undefined {
   let parsed: unknown;
   try {
     parsed = JSON.parse(content);
   } catch {
-    return { kind: 'legacy', html: content };
+    return undefined;
   }
   if (
     isPlainObject(parsed) &&
@@ -297,9 +299,9 @@ export function parseAlterDoc(content: string): StoredDocument {
     typeof parsed.revision === 'number' &&
     Array.isArray(parsed.blocks)
   ) {
-    return { kind: 'alter-doc', doc: parsed as unknown as AlterDoc };
+    return parsed as unknown as AlterDoc;
   }
-  return { kind: 'legacy', html: content };
+  return undefined;
 }
 
 /** Serialize one document for persistence in `SpaceNode.content`. */

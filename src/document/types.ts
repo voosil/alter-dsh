@@ -100,7 +100,7 @@ export type Operation =
     }
   | { op: 'update_object'; target: string; payload: JsonValue };
 
-/** Parse stored content into an AST document, or undefined for legacy HTML. */
+/** Parse stored content into an AST document, or undefined when it is not one. */
 export function parseAlterDocContent(content: string): AlterDoc | undefined {
   const trimmed = content.trimStart();
   if (!trimmed.startsWith('{')) return undefined;

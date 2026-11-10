@@ -2,8 +2,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { createSpaceAuthority } from '../host/authority.js';
 import { createDocumentService } from '../host/document/service.js';
-import { DocumentError } from '../host/document/types.js';
+import { DocumentError, parseAlterDoc } from '../host/document/types.js';
 import { DEFAULT_SPACE_ID, openSpaceStore, type SpaceStoreHandle } from '../host/store.js';
 
 const dirs: string[] = [];
@@ -264,7 +265,7 @@ describe('document service', () => {
     await store.close();
   });
 
-  it('searches text and reports legacy HTML documents explicitly', async () => {
+  it('searches AST text and skips non-AST content', async () => {
     const { store } = await tempStore();
     const service = createDocumentService({ store, now: fixedNow });
     const created = await service.generate({
@@ -289,10 +290,10 @@ describe('document service', () => {
 
     await store.update((data) => {
       (data.nodes as unknown as Array<Record<string, unknown>>).push({
-        id: 'doc-legacy',
+        id: 'doc-plain',
         spaceId: DEFAULT_SPACE_ID,
         kind: 'note',
-        title: '旧文档',
+        title: '非结构化文档',
         parentId: null,
         creator: 'me',
         pinned: false,
@@ -313,13 +314,105 @@ describe('document service', () => {
         order: 0,
       });
     });
-    await expect(service.outline('doc-legacy')).rejects.toMatchObject({
-      code: 'doc/legacy-format',
+    await expect(service.outline('doc-plain')).rejects.toMatchObject({
+      code: 'doc/schema-invalid',
     });
+    await expect(service.get('doc-plain')).rejects.toMatchObject({
+      code: 'doc/schema-invalid',
+    });
+    const plainHits = await service.search({
+      query: '旧内容',
+      spaceId: DEFAULT_SPACE_ID,
+    });
+    expect(plainHits.hits.some((hit) => hit.docId === 'doc-plain')).toBe(false);
     await expect(service.outline('doc-missing')).rejects.toMatchObject({
       code: 'doc/not-found',
     });
     expect(DocumentError).toBeDefined();
+    await store.close();
+  });
+
+  it('creates an empty AST note that document operations can edit', async () => {
+    const { store } = await tempStore();
+    const service = createDocumentService({ store, now: fixedNow });
+    const created = await service.createNote({
+      spaceId: DEFAULT_SPACE_ID,
+      title: '  空白文档  ',
+    });
+    expect(created.id).toMatch(/^doc-/);
+    expect(created.kind).toBe('note');
+    expect(created.title).toBe('空白文档');
+    expect(created.creator).toBe('me');
+    expect(created.parentId).toBeNull();
+    expect(created).not.toHaveProperty('contentFormat');
+    const doc = parseAlterDoc(created.content);
+    expect(doc.format).toBe('alter-doc/1');
+    expect(doc.revision).toBe(1);
+    expect(doc.blocks).toEqual([]);
+
+    const read = await service.read(created.id);
+    expect(read.revision).toBe(1);
+    expect(read.markdown).toBe('');
+    const edited = await service.applyOperations({
+      docId: created.id,
+      baseRevision: 1,
+      ops: [{ op: 'insert_markdown', markdown: '第一段\n' }],
+    });
+    expect(edited.revision).toBe(2);
+    expect((await service.read(created.id)).markdown).toContain('第一段');
+    await store.close();
+  });
+
+  it('places new notes in a folder and rejects invalid parents', async () => {
+    const { store } = await tempStore();
+    const service = createDocumentService({ store, now: fixedNow });
+    const space = createSpaceAuthority(store, fixedNow);
+    const folder = await space.createNode({
+      spaceId: DEFAULT_SPACE_ID,
+      kind: 'folder',
+    });
+    const inFolder = await service.createNote({
+      spaceId: DEFAULT_SPACE_ID,
+      parentId: folder.id,
+    });
+    expect(inFolder.parentId).toBe(folder.id);
+    const note = await service.createNote({ spaceId: DEFAULT_SPACE_ID });
+    await expect(
+      service.createNote({ spaceId: DEFAULT_SPACE_ID, parentId: note.id }),
+    ).rejects.toMatchObject({ code: 'op/invalid' });
+    await expect(
+      service.createNote({ spaceId: DEFAULT_SPACE_ID, parentId: 'missing' }),
+    ).rejects.toMatchObject({ code: 'op/invalid' });
+    await expect(
+      service.createNote({ spaceId: 'sp-missing' }),
+    ).rejects.toMatchObject({ code: 'doc/not-found' });
+    await store.close();
+  });
+
+  it('rejects restoring a historical version that is not a valid AST', async () => {
+    const { store } = await tempStore();
+    const service = createDocumentService({ store, now: fixedNow });
+    const created = await service.generate({
+      spaceId: DEFAULT_SPACE_ID,
+      markdown: '原文\n',
+    });
+    await store.update((data) => {
+      data.versions.push({
+        id: 'ver-plain',
+        docId: created.docId,
+        title: '旧快照',
+        content: '<p>旧内容</p>',
+        author: 'me',
+        at: fixedNow().toISOString(),
+      });
+    });
+    await expect(
+      service.restoreVersion({
+        docId: created.docId,
+        versionId: 'ver-plain',
+        baseRevision: 1,
+      }),
+    ).rejects.toMatchObject({ code: 'doc/schema-invalid' });
     await store.close();
   });
 });

@@ -1,7 +1,7 @@
 ---
 type: design
 status: active
-updated: 2026-11-09
+updated: 2026-11-10
 ---
 
 # Agent 空间文档读写方案
@@ -43,8 +43,8 @@ updated: 2026-11-09
 这些保证要么退化成「先查后写」的竞态，要么需要在协议层重新实现一遍事务。
 
 工具面按 spec v0 收敛为 `space_doc_outline` / `space_doc_read` / `space_doc_search` /
-`space_doc_ops` / `space_doc_generate` 与对象工具（资产工具 v0.1 规划中）；旧 HTML 精确替换工具契约
-已被 spec v0 的 outline/read/ops/generate 取代，不再展开，见 [specs/agent-doc-tools-v0.md](../specs/agent-doc-tools-v0.md)。
+`space_doc_ops` / `space_doc_generate` 与对象/资产工具；正文只有 AST 一种格式，正文写入只经 Operations。
+完整契约见 [specs/agent-doc-tools-v0.md](../specs/agent-doc-tools-v0.md)。
 
 工具划分的设计取舍：
 
@@ -65,7 +65,7 @@ updated: 2026-11-09
 | 机制 | 解决的问题 | 做法 |
 | --- | --- | --- |
 | **归属** | vendor 把创建/版本/评论作者硬编码为 `'me'`，Agent 写入会冒充用户 | 在 store 外层加 `withWriteScope` 包装器：Agent 写入在同一事务里把新增节点/版本/评论打标为 `'alter'`，活动流自然显示「Alter 更新了」 |
-| **CAS** | Agent 与用户可能基于旧内容互相覆盖 | 读结果返回 revision（旧 HTML 文档为 `updated_at`），写操作必须回传 base；门禁放在**同一个 store.update 事务内**复核，不是先查后写 |
+| **CAS** | Agent 与用户可能基于旧内容互相覆盖 | 读结果返回 revision，写操作必须回传 base；门禁放在**同一个 store.update 事务内**复核，不是先查后写 |
 | **强制版本** | vendor 版本记录有 5 分钟节流，被覆盖的内容可能无历史可恢复 | Agent 写入若本次没有产生版本，宿主在同一事务补记一条 `'alter'` 版本（默认开，受版本条数/字节裁剪约束） |
 
 要点与理由：
@@ -98,9 +98,6 @@ updated: 2026-11-09
 
 - **主路径是 schema 校验**：写入走 Operations 与 Schema Registry；未知节点类型、非法 props、
   越界 payload 直接拒绝落盘，不静默降级。Markdown 只用于新内容生成，解析失败即报错。
-- **过渡期 HTML**：产品 UI 目前以 `innerHTML` 渲染正文，旧 HTML 写入路径仍必须做白名单清洗
-  （去 `script`/`on*`/`javascript:`、限制 URL 协议），整篇重写全量清洗、片段替换只过滤新增内容。
-  这条随 AST 编辑器上线而退役，不应作为长期契约。
 - **不伪造活动**：读工具不调用 `recordOpen`，不改变用户活动度与未读状态；读路径的归档 sweep
   是产品既有副作用，接受并记录。
 - **大小上限**：单篇正文 ≤ 512 KiB（见 [document-model-v0.md](../specs/document-model-v0.md) §2）；
@@ -174,7 +171,7 @@ updated: 2026-11-09
 | --- | --- | --- |
 | 用户旧草稿覆盖 Agent 写入 | Agent 内容被覆盖（非实时，刷新才可见） | 强制版本 + 每日快照可恢复；首期不做浏览器拦截（已接受） |
 | Agent 覆盖用户正在编辑的内容 | 用户草稿丢失 | Agent 侧 CAS：过期 base 拒绝，不自动 merge |
-| 注入/恶意内容进入正文 | 面板渲染异常、脚本执行 | schema 校验 + 过渡期 HTML 白名单清洗 + 组件沙箱 |
+| 注入/恶意内容进入正文 | 面板渲染异常、脚本执行 | schema 校验 + 编辑器粘贴清洗 + 组件沙箱 |
 | 工具对所有 Agent（含子 Agent）可见 | 任意 Agent 都能写空间 | 配置门禁；后续按 preset 或插件作用域收窄 |
 | `vendor` 同步后行为漂移 | 依赖字段/行为变化导致归属/CAS 失效 | 升级 vendor 后跑工具与写作用域测试；依赖面尽量收敛 |
 | 版本历史被裁剪 | 久远内容无法从历史恢复 | 调高版本上限（建议 20–30）；长期恢复依赖每日快照 |
@@ -188,7 +185,7 @@ updated: 2026-11-09
 | A1 | 工具可见 | 安装后工具列表出现 spec v0 的 `space_doc_*` 工具；`pnpm check` 通过 |
 | A2 | 读准确 | outline/read 返回的 block id 与投影正文和 AST 一致；范围读可按续读锚点拼接 |
 | A3 | 写归属 | Agent 新建/修改后节点 `creator='alter'`、新版本 `author='alter'`、活动流显示「Alter 更新了」 |
-| A4 | 冲突不落盘 | 过期 `baseRevision`/`base_updated_at` 调用 → 冲突错误，回读内容与版本均不变 |
+| A4 | 冲突不落盘 | 过期 `baseRevision` 调用 → 冲突错误，回读内容与版本均不变 |
 | A5 | 可恢复 | Agent 写入后用户保存旧草稿，新内容仍可从版本历史恢复（强制版本生效） |
 | A6 | 非法写入被拒 | 未知节点类型、非法 props、越界大小被拒绝且不落盘 |
 | A7 | 读不改活动 | 连续读不改变 `activity`/`lastOpenCreditAt` |

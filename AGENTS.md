@@ -15,11 +15,13 @@ Host 半侧（`host/` → `lib/`）是 Cordis 插件，持有 SQLite 与业务�
 - **新增 RPC 端点**必须同时改 `host/rpc.ts` 白名单与 `src/space-client.ts` 映射；通道常量
   `('/api', 'alter-space')` 两处保持同步。传输信封与端点语义以 spec 为准。
 - **`vendor/` 可改但克制**：新增逻辑优先放 `host/`、`src/`；确实要改 `vendor/` 时保持行为与
-  既有约定一致。构建期模块覆盖集中在 `build/build.mjs`，当前生效的覆盖写在 `vendor/README.md`。
+  既有约定一致。构建期覆盖与别名集中在 `build/build.mjs`，当前生效的清单写在 `vendor/README.md`。
 - **客户端 bundle 自包含**：外置依赖仅限 react 族；新增第三方库必须打进 bundle。
 - **空间 ↔ 工作区不变量**：一个空间只把主工作目录（`directories[0]`）映射为一个 DSH 工作区；
   工作区以 canonical 路径为唯一身份；同一目录只能归属一个空间（含已归档空间）；标题前缀 `🪐 `；
   绑定只落 `workspace_links` 侧表，**不要写进 Space 实体**。
+- **文档正文单一格式**：所有 Space note 正文只有 `alter-doc/1` AST 一种格式；正文写入必须经
+  Document Operations，`space.saveNode` 只更新元数据、不接受正文。
 - **文档有预算**：单文档、单目录数量、关键文档体量都有硬上限（见 docs/README.md），
   由 `pnpm docs:check` 强制；关键文档只放导航、规则与约束，不写实现细节、源码说明、变更历史。
 - **版本历史与快照**是恢复底线：改动写入路径时必须保留归属（`me` / `alter`）、事务与裁剪语义。

@@ -1,7 +1,7 @@
 ---
 type: spec
 status: draft
-updated: 2026-11-09
+updated: 2026-11-10
 ---
 
 # Agent 文档工具 v0
@@ -19,6 +19,8 @@ updated: 2026-11-09
 - 文档级工具输出带 `revision`，供后续 ops 的 CAS 使用；对象读取工具返回对象本身，revision 需由
   调用方另行读取文档获得。工具输出不重复回传 `doc_id`（调用方已知）；新建文档的 `generate` 返回新
   `doc_id`，对象工具返回 `object_id`。
+- 所有 Space note 正文只有 `alter-doc/1` 一种格式；工具不感知也不接受其他正文格式，非法存储内容
+  以 `doc/schema-invalid` 报错。
 - 未知/不可写节点在结果中以占位出现，并附 `unsupported` 说明。
 - 工具错误使用 [document-operations-v0.md](document-operations-v0.md) §5 的错误码；写工具能力受
   registry `ai.ops` 与全局写策略约束。
@@ -92,6 +94,7 @@ updated: 2026-11-09
 
 - 仅生成**新内容**：创建文档或向明确位置插入；内部使用 `insert_markdown` / `replace_block`，
   不触碰其他块。
+- 不传 `doc_id` 时新建 revision 1 的 AST 空文档，再写入本次生成内容。
 - `markdown` 必须走投影解析（见 [document-model-v0.md](document-model-v0.md) §7.3）；未知语法报错，
   不静默降级。
 
@@ -117,21 +120,9 @@ updated: 2026-11-09
 - 生成/编辑图片块时把返回的 `asset_id` 写入 `image.attrs.assetId`；渲染 URL 由客户端拼
   `GET /api/alter-space/asset?id=…`。
 
-### 2.9 `space_doc_migrate`
-
-```
-输入：{ doc_id? }
-输出：{ migrated, skipped, failed, assets_imported, warnings? }
-```
-
-- 旧 HTML 文档 → AST 的语义级迁移；省略 `doc_id` 时迁移全部旧文档，已迁移文档跳过。
-- 转换保语义不保像素：段落/标题/列表/引用/代码/表格/行内 marks/内联 dataURL 图片尽量保留，
-  颜色、对齐与未知结构退化为纯文本；旧 HTML 版本快照保留在历史中但不可恢复到 AST 文档。
-- 只由用户或管理员显式触发，不在启动时自动执行。
-
 ## 3. 预算与裁剪
 
-- 10 个核心工具 schema 约 +1.8–2.2k tokens；读投影单次 ≤ 12k tokens / ≤ 40k 字符。
+- 9 个核心工具 schema 约 +1.8–2.2k tokens；读投影单次 ≤ 12k tokens / ≤ 40k 字符。
 - 每个工具的输出 schema 只列模型真正需要消费的字段，不回传整篇文档或未变更内容。
 - 读工具超限必须截断并在 `next` 给出续读锚点；写工具不因预算裁剪而改变语义。
 - 结构摘要与检索结果有独立上限：outline ≤ 2k tokens，search 默认 20 条且 preview ≤ 60 字。
@@ -152,7 +143,7 @@ updated: 2026-11-09
 | 版本/资产 | 恢复旧版本后对象/资产仍可渲染 |
 | 性能 | 单次 op apply（1 万块级文档）≤ 200ms（本机） |
 
-Spike 不做：组件沙箱、实时协作；存量迁移见 `space_doc_migrate`。
+Spike 不做：组件沙箱、实时协作。
 
 ## 5. 开放决策项
 
@@ -162,7 +153,7 @@ Spike 不做：组件沙箱、实时协作；存量迁移见 `space_doc_migrate`
 4. table 合并单元格、评论锚点、代码组件沙箱的 v1 方案。
 5. `doc_ops` 是否作为版本历史主存储（当前：快照 + op log 并存）。
 6. 版本预算（当前 10 版 / 64 KiB → 可配置累计字节）与备份资产目录的实施方案。
-7. 列表/发现工具与评论工具是否纳入 v0.1（当前 7 个工具不含列表与评论能力）。
+7. 列表/发现工具与评论工具是否纳入 v0.1（当前 9 个工具不含列表与评论能力）。
 
 ## 相关文档
 

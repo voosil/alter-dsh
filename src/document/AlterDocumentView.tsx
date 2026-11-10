@@ -13,11 +13,12 @@ type LoadState =
   | { kind: 'ready'; snapshot: DocumentSnapshot };
 
 /**
- * Read-only renderer for AST-backed Space documents.
+ * Structured renderer/editor for Space documents.
  *
- * Editing, comments and history remain on the vendored document view until
- * the Tiptap editor lands; this component exists so AST documents no longer
- * render as raw JSON in the Space panel.
+ * Every note is an `alter-doc/1` AST document: the view loads the canonical
+ * snapshot over the document RPC and hands it to the Tiptap surface, which
+ * writes back through Document Operations. Comments and version history live
+ * in `DocumentSidePanel`.
  */
 export function AlterDocumentView({ node }: { node: SpaceNode }) {
   const { service } = useSpaceContext();
@@ -96,8 +97,6 @@ export function AlterDocumentView({ node }: { node: SpaceNode }) {
             : state.kind === 'error'
               ? '加载失败'
               : '正在加载…'}
-          <span className={styles.metaDivider}>·</span>
-          评论与版本历史将在后续接入
         </div>
       </header>
       <div className={styles.bodyRow}>
@@ -114,7 +113,7 @@ export function AlterDocumentView({ node }: { node: SpaceNode }) {
           </div>
         ) : (
           <AlterTiptapEditor
-            key={state.snapshot.revision}
+            key={node.id}
             docId={node.id}
             initialDoc={state.snapshot.doc}
             baseRevision={state.snapshot.revision}

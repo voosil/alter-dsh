@@ -1,7 +1,7 @@
 ---
 type: acceptance
 status: active
-updated: 2026-11-09
+updated: 2026-11-10
 ---
 
 # 验收
@@ -15,7 +15,9 @@ updated: 2026-11-09
 | --- | --- | --- |
 | [space-workspace.md](space-workspace.md) | 空间 ↔ DSH 工作区映射：创建、改名、主目录变更、归档/恢复、删除、双向共存、数据与工程 | 已验收；依赖运行时联调项标 `[~]` |
 | [agent-collaborators.md](agent-collaborators.md) | Space AI 协作者创建：`#/settings` 设置页复用、协作者创建/选择链路、安装与产物 | 已验证（浏览器点击链路未自动化） |
-| [s0-document-tools.md](s0-document-tools.md) | 文档模型 S0/S1：工具面、Tiptap 编辑器、资产、评论/历史、撤销、GC、备份、迁移 | 已验收（真机 8/8；浏览器视觉待人工） |
+| [s0-document-tools.md](s0-document-tools.md) | 文档模型 S0/S1：工具面、Tiptap 编辑器、资产、评论/历史、撤销、GC、备份 | 已验收（真机 8/8；浏览器视觉待人工） |
+| [document-editor-robustness.md](document-editor-robustness.md) | 即时编辑器健壮性：数据安全、并发恢复、输入保真、保存可行性与规模观测 | 基线清单，待实施（当前全部 `[ ]`） |
+| [editor-experience-p0-p6.md](editor-experience-p0-p6.md) | 编辑器体验重建：旧 HTML 编辑器体验基线、单一 AST 不变量、P0–P6 分阶段验收与最终复验规则 | 进行中（按 P0→P6 推进，完成一项标一项） |
 
 ## 维护规则
 

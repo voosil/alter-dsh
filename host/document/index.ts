@@ -9,4 +9,5 @@ export * from './projection.js';
 export * from './markdown.js';
 export * from './ops.js';
 export * from './service.js';
+export * from './notes.js';
 export * from './tools.js';

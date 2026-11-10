@@ -1,7 +1,7 @@
 ---
 type: design
 status: active
-updated: 2026-11-09
+updated: 2026-11-10
 ---
 
 # 文档内容架构：JSON AST 权威 + Markdown 投影 + Document Operations
@@ -27,14 +27,15 @@ updated: 2026-11-09
 
 被否方案（各一句话）：
 
-- **HTML 作为长期权威格式**：无类型、难校验、富对象无法表达，只是当前编辑器的实现细节；仅作过渡格式。
+- **HTML 作为长期权威格式**：无类型、难校验、富对象无法表达，不作为存储或兼容格式保留。
 - **纯 Markdown 权威**：富组件、块引用与协作上限低，编辑器最终仍要 AST 化，且 Markdown 与编辑器
   规范化之间的 round-trip 保真问题无法回避。
 - **MDX**：可执行 JSX，把「用户/AI 随时编辑的文档」变成代码执行问题，安全与构建成本不可接受。
 
-明确接受的代价：编辑器需要重写（用 Tiptap/ProseMirror 底座降低难度）、AST 快照比 HTML/Markdown 大
+明确接受的代价：编辑器需要重写（用 Tiptap/ProseMirror 底座降低难度）、AST 快照比纯文本格式大
 （对象与资产外置、规范化序列化缓解）、Agent 工具面比字符串编辑更大（靠统一投影与正交 op 集控制）。
-迁移只保语义不保像素；旧 HTML 文档与新格式双格式共存，批量迁移后续单独做。
+**正文只有单一 AST 格式**：新建文档即 AST 空文档，正文写入只经 Document Operations，不保留任何
+兼容格式路径。
 
 ## 2. 分层图景
 
@@ -64,7 +65,7 @@ Component Registry（node view / 运行时）
 
 职责边界：
 
-- **所有写入都经 Document Service**，AI 工具、浏览器 RPC、迁移脚本都不直接改存储。
+- **所有写入都经 Document Service**，AI 工具与浏览器 RPC 都不直接改存储。
 - 投影、解析、校验、事务在 Service 内完成，编辑器和 AI 走同一套 schema 校验。
 - 存储层只有两件事：AST 树与旁表引用；渲染层只消费 AST 与对象，不反向写回。
 
@@ -75,7 +76,7 @@ Component Registry（node view / 运行时）
 3. 结构修改一律走 Operations；Markdown 只用于**新内容生成**（目标明确时解析为新节点）。
 4. 所有写操作带 `baseRevision`、原子事务、可审计、可逆（inverse op）。
 5. **一个 Schema Registry** 同时生成存储 schema、编辑器 node spec、AI 工具 JSON Schema、
-   Markdown 投影/序列化器、迁移函数与 AI 能力声明，避免多套定义漂移。
+   Markdown 投影/序列化器、schemaVersion 迁移函数与 AI 能力声明，避免多套定义漂移。
 
 ## 4. 节点能力三级
 
@@ -132,7 +133,7 @@ Operations 把一次修改收敛为可校验的意图，才谈得上可审计与
 
 ## 8. 版本、对象与审计
 
-- 快照：AST 规范化 JSON；对象/资产外置只存引用，版本体积可控但仍比 HTML/Markdown 大。
+- 快照：AST 规范化 JSON；对象/资产外置只存引用，版本体积可控但仍比纯文本格式大。
   版本预算的现行值与重估方向见 [document-operations-v0.md](../specs/document-operations-v0.md) §7。
 - op 日志：每次 apply 一条，含 actor（user/agent/model）、baseRevision、op 摘要与结果，用于审计与 undo。
 - 撤销：inverse ops；AI 一次 turn 的 ops 归组为一个 transaction，可整体撤销。
@@ -149,16 +150,16 @@ Operations 把一次修改收敛为可校验的意图，才谈得上可审计与
 
 ## 10. 本仓库映射
 
-- `SpaceNode.content` 从 HTML 改为 AST JSON 字符串（`contentFormat: 'alter-doc/1'`）；旧 HTML 文档
-  按格式标记共存，Host 路由读写/搜索/渲染。
+- `SpaceNode.content` 只存 `alter-doc/1` AST JSON 字符串，没有格式标记字段；`space.saveNode` 只改
+  标题等元数据，正文写入只经 Document Operations（含新建文档的 AST 空文档）。
 - 新增旁表 `doc_objects` / `doc_assets` / `doc_ops`（代码组件的 `component_specs` 属后续）；
   `host/store.ts` 用 `PRAGMA user_version` 升级建表；资产二进制放 `dataDir/assets/`，备份必须覆盖该目录。
 - Host：新增 Document Service（projection / validation / ops / audit）与 Schema Registry，
   仍复用 SQLite 单写者队列与事务；RPC 端点与 `src/space-client.ts` 映射同步增加。
-- 客户端：Tiptap 编辑器/渲染器放 `src/document/`，用 `build/build.mjs` 的模块覆盖替换
-  `DocumentView`/`Editor`，沿用既有覆盖模式并在 `vendor/README.md` 登记。
+- 客户端：Tiptap 编辑器/渲染器放 `src/document/`；`@alter-space/document-view` 别名（`build/build.mjs`
+  与 tsconfig paths）把 `DocumentView` 解析到该结构化视图，登记在 `vendor/README.md`。
 - Agent 工具面收敛为 `space_doc_outline` / `space_doc_read` / `space_doc_search` /
-  `space_doc_ops` / `space_doc_generate` 与对象工具（资产工具 v0.1 规划中）；旧 HTML 精确替换设计不再有效，
+  `space_doc_ops` / `space_doc_generate` 与对象/资产工具；正文写入只有结构化修改与新内容生成两种入口，
   详见 [agent-doc-tools.md](agent-doc-tools.md)。
 - **所有实现闭合在本仓库**：协议、Host、客户端、编辑器都在 Alter-dsh；`vendor/` 是项目自有源码，
   可改但每次登记。存储映射与单仓库策略的实施基准见
@@ -173,7 +174,6 @@ Operations 把一次修改收敛为可校验的意图，才谈得上可审计与
 | structured payload 内联阈值 | v0 一律占位 + 工具；后续按大小阈值（如 ≤4 KB 内联）再定 |
 | op log 是否作为版本历史主存储 | 建议快照 + op log 并存，各司其职 |
 | 组件运行时首发范围 | 声明式组件优先；代码组件走沙箱 + 审核通道，后续再评估 |
-| 迁移批次与旧 HTML 版本保留 | 双格式共存、旧版本保留 HTML 渲染；批量转换单独排期 |
 | 版本预算与资产备份实施方案 | 按篇累计字节上限 + 备份覆盖 assets 目录，具体数值实测后定 |
 
 ## 相关文档

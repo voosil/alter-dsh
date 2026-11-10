@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { Bold, FilePlus2, Italic, List, Mic } from 'lucide-react';
 import { Button, IconButton } from '@alter/ui-system';
-import { placeCaretAtEnd } from './editor/editor-utils';
+import { placeCaretAtEnd } from '../utils/caret';
 import styles from './ThoughtComposer.module.css';
 
 interface SpeechResultAlternative {

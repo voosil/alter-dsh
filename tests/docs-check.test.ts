@@ -97,6 +97,17 @@ describe('docs-check governance rules', () => {
     expect(result.status, result.output).toBe(0);
   });
 
+  it('allows project agent skill markdown outside the knowledge base', () => {
+    const result = withFixture((dir) => {
+      mkdirSync(join(dir, '.agents', 'skills', 'demo'), { recursive: true });
+      writeFileSync(
+        join(dir, '.agents', 'skills', 'demo', 'SKILL.md'),
+        '---\nname: demo\ndescription: demo skill\n---\n\n# Demo\n',
+      );
+    });
+    expect(result.status, result.output).toBe(0);
+  });
+
   it.each([
     ['source fence with odd info string', '``` ts\nconst x = 1;\n```\n'],
     ['source fence with attributes', '```ts title=demo\nconst x = 1;\n```\n'],
@@ -120,7 +131,7 @@ describe('docs-check governance rules', () => {
   it('rejects frontmatter, naming and scope violations', () => {
     expect(
       withFixture((dir) =>
-        replace(dir, 'docs/specs/document-model-v0.md', 'updated: 2026-11-09', 'updated: 2026-02-30'),
+        replace(dir, 'docs/specs/document-model-v0.md', 'updated: 2026-11-10', 'updated: 2026-02-30'),
       ).status,
     ).toBe(1);
     expect(
@@ -130,7 +141,7 @@ describe('docs-check governance rules', () => {
     ).toBe(1);
     expect(
       withFixture((dir) =>
-        replace(dir, 'docs/specs/document-model-v0.md', 'updated: 2026-11-09', 'updated: 2026-11-09\nstatus: draft'),
+        replace(dir, 'docs/specs/document-model-v0.md', 'updated: 2026-11-10', 'updated: 2026-11-10\nstatus: draft'),
       ).status,
     ).toBe(1);
     expect(

@@ -28,7 +28,8 @@
       ],
       "@alter/ui-system": ["vendor/ui-system/src/index.ts"],
       "@alter/ui-system/tokens.css": ["vendor/ui-system/src/styles/tokens.css"],
-      "@alter/ui-workbench": ["vendor/ui-workbench/src/index.ts"]
+      "@alter/ui-workbench": ["vendor/ui-workbench/src/index.ts"],
+      "@alter-space/document-view": ["src/document/AlterDocumentView.tsx"]
     }
   },
   "include": [

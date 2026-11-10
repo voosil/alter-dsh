@@ -11,7 +11,7 @@
 import { rm } from 'node:fs/promises';
 import type { SpaceStoreData, SpaceStoreHandle } from '../store.js';
 import { assetFilePath } from './assets.js';
-import { parseAlterDoc, type BlockNode } from './types.js';
+import { tryParseAlterDoc, type BlockNode } from './types.js';
 
 export interface DocumentArtifactRefs {
   objectIds: Set<string>;
@@ -41,9 +41,9 @@ export function collectDocumentArtifactRefs(
     assetIds: new Set(),
   };
   const visitContent = (content: string): void => {
-    const stored = parseAlterDoc(content);
-    if (stored.kind !== 'alter-doc') return;
-    for (const block of stored.doc.blocks) collectBlockRefs(block, refs);
+    const doc = tryParseAlterDoc(content);
+    if (doc === undefined) return;
+    for (const block of doc.blocks) collectBlockRefs(block, refs);
   };
   for (const node of data.nodes) visitContent(node.content);
   for (const version of data.versions) visitContent(version.content);

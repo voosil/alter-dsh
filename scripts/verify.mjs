@@ -280,8 +280,8 @@ check(
   escaped.includes('doc.get') &&
     escaped.includes('doc.undo') &&
     escaped.includes('doc.applyOps') &&
-    escaped.includes('doc.migrate'),
-  'client bundle must map the document model endpoints',
+    !escaped.includes('doc.migrate'),
+  'client bundle must map the document model endpoints and must not carry the removed migration endpoint',
 );
 check(
   escaped.includes('/api/alter-space/asset'),
@@ -332,16 +332,11 @@ check(
     escaped.includes('directory-picker-unavailable'),
   'client bundle must route working-directory picking through the native picker override',
 );
-// The legacy HTML editor keeps silent autosave; the structured editor saves
-// explicitly and may show its own save status, so only the failure affordance
-// is asserted here.
+// The structured editor saves explicitly and carries its own failure
+// affordance; only that user-visible retry path is asserted here.
 check(
   escaped.includes('保存失败'),
-  'the hosted editor must still surface a save-failure affordance',
-);
-check(
-  escaped.includes('保存失败'),
-  'the hosted editor must still surface a save-failure affordance',
+  'the structured document editor must surface a save-failure affordance',
 );
 check(
   !escaped.includes('createSpaceService'),
