@@ -16,7 +16,7 @@
  * @module @alter-dsh/space/document/legacy
  */
 import { computeOperations } from '../editor/operations';
-import type { AlterDoc, BlockNode, InlineNode } from '../types';
+import type { AlterDoc } from '../types';
 
 export {
   alterDocToEditorHtml,
@@ -73,82 +73,28 @@ export {
   type LegacyDocumentSnapshot,
 } from './snapshot';
 export type { LegacyDocumentClient } from './client-types';
-
-/** Comment anchor shape stored on one top-level block. */
-export interface LegacyCommentAnchor {
-  blockId: string;
-  offset: number;
-  length: number;
-}
-
-/** Plain text of one top-level block, using the comment-anchor convention. */
-export function blockPlainText(block: BlockNode): string {
-  const parts: string[] = [];
-  const collectInline = (content: InlineNode[] | undefined): void => {
-    for (const node of content ?? []) {
-      parts.push(node.type === 'text' ? node.text : '\n');
-    }
-  };
-  collectInline(block.content);
-  for (const child of block.children ?? []) {
-    if (parts.length > 0) parts.push('\n');
-    parts.push(blockPlainText(child));
-  }
-  return parts.join('');
-}
-
-/** Quote offsets inside one plain text (exact, then whitespace-insensitive). */
-function findQuoteOffsets(
-  text: string,
-  quote: string,
-): { start: number; end: number } | null {
-  const normalized = quote.trim();
-  if (normalized === '') return null;
-  const index = text.indexOf(normalized);
-  if (index >= 0) return { start: index, end: index + normalized.length };
-  const compact = normalized.replace(/\s+/g, '');
-  if (compact === '') return null;
-  let stripped = '';
-  const offsets: number[] = [];
-  for (let position = 0; position < text.length; position += 1) {
-    const character = text[position] ?? '';
-    if (/\s/.test(character)) continue;
-    stripped += character;
-    offsets.push(position);
-  }
-  const compactIndex = stripped.indexOf(compact);
-  if (compactIndex < 0) return null;
-  const start = offsets[compactIndex];
-  const end = offsets[compactIndex + compact.length - 1];
-  if (start === undefined || end === undefined) return null;
-  return { start, end: end + 1 };
-}
-
-/**
- * Map one comment quote to a top-level block anchor.
- *
- * The quote must match exactly one top-level block (the pre-rebuild comment
- * model anchors comments to a block range); ambiguous or missing matches
- * return null so the comment is stored without an anchor.
- */
-export function anchorForQuote(
-  blocks: readonly BlockNode[],
-  quote: string | null | undefined,
-): LegacyCommentAnchor | null {
-  const normalized = (quote ?? '').trim();
-  if (normalized === '') return null;
-  const matches: LegacyCommentAnchor[] = [];
-  for (const block of blocks) {
-    const offsets = findQuoteOffsets(blockPlainText(block), normalized);
-    if (offsets === null) continue;
-    matches.push({
-      blockId: block.id,
-      offset: offsets.start,
-      length: offsets.end - offsets.start,
-    });
-  }
-  return matches.length === 1 ? matches[0]! : null;
-}
+export {
+  anchorForQuote,
+  blockPlainText,
+  detectAnchorDrift,
+  planCommentAnchorRepairs,
+  planReanchor,
+  quoteMatchesAnchorText,
+  validateCommentAnchor,
+  type LegacyAnchorComment,
+  type LegacyAnchorDrift,
+  type LegacyAnchorRepair,
+  type LegacyAnchorRepairPlan,
+  type LegacyCommentAnchor,
+  type LegacyCommentAnchorStatus,
+} from './anchors';
+export {
+  LEGACY_ERROR_LOG_PREFIX,
+  reportLegacyDocumentError,
+  type LegacyDocumentErrorContext,
+  type LegacyDocumentErrorReport,
+  type LegacyDocumentErrorScope,
+} from './errors';
 
 /** Block-level Document-Operations diff used for one legacy save. */
 export function computeAstOperations(

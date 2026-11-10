@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -29,8 +30,10 @@ import {
   legacyDraftMatchesSnapshot,
   parseDocumentContent,
   parseLegacyHtml,
+  planCommentAnchorRepairs,
   readDocumentSnapshot,
   readLegacyDraft,
+  reportLegacyDocumentError,
   serializeDocument,
   type AlterDoc,
   type LegacyDocumentDraft,
@@ -45,6 +48,7 @@ import { formatRelativeTime } from '../utils/date';
 import { downloadMarkdown } from '../utils/markdown';
 import { Editor } from '../components/editor/Editor';
 import { CommentRail } from '../components/CommentRail';
+import { DocumentErrorBoundary } from '../components/DocumentErrorBoundary';
 import { DocumentComments } from '../components/DocumentComments';
 import { HistoryPanel } from '../components/HistoryPanel';
 import { HistoryCommentsModal } from '../components/HistoryCommentsModal';
@@ -74,7 +78,7 @@ function hasBodyContent(html: string) {
   );
 }
 
-/** Empty AST document used when stored content cannot be parsed. */
+/** Empty AST document used when there is no stored content yet. */
 const EMPTY_AST: AlterDoc = {
   format: 'alter-doc/1',
   schemaVersion: 1,
@@ -82,9 +86,65 @@ const EMPTY_AST: AlterDoc = {
   blocks: [],
 };
 
-/** Parse stored `node.content` (always `alter-doc/1`) defensively. */
-function astOf(content: string): AlterDoc {
-  return parseDocumentContent(content) ?? EMPTY_AST;
+/** Visible failure state of the document page (E1: never a silent blank doc). */
+interface DocumentLoadFailure {
+  title: string;
+  message: string;
+  /** Original error, kept for structured diagnostics. */
+  error: Error;
+}
+
+/**
+ * Parse the stored `alter-doc/1` content for the initial mount.
+ *
+ * Corrupted/failed content becomes an explicit load failure (E1) instead of a
+ * silent empty document, so the page can offer retry/back-to-directory.
+ */
+function readMountDocument(
+  content: string,
+  docPathOf: (docId: string) => string,
+): { doc: AlterDoc; html: string; failure: DocumentLoadFailure | null } {
+  const raw = typeof content === 'string' ? content : '';
+  if (raw.trim() === '') {
+    return {
+      doc: EMPTY_AST,
+      html: alterDocToEditorHtml(EMPTY_AST, { docPath: docPathOf }),
+      failure: null,
+    };
+  }
+  const parsed = parseDocumentContent(raw);
+  if (parsed === undefined) {
+    return {
+      doc: EMPTY_AST,
+      html: '',
+      failure: {
+        title: '无法显示文档',
+        message:
+          '文档内容不是合法的结构化文档，已停止加载以避免覆盖现有数据。可重试或返回空间目录。',
+        error: new Error(
+          'doc/schema-invalid: stored content is not a valid alter-doc/1 document',
+        ),
+      },
+    };
+  }
+  try {
+    return {
+      doc: parsed,
+      html: alterDocToEditorHtml(parsed, { docPath: docPathOf }),
+      failure: null,
+    };
+  } catch (cause) {
+    return {
+      doc: EMPTY_AST,
+      html: '',
+      failure: {
+        title: '无法显示文档',
+        message:
+          '文档内容无法渲染，已停止加载以避免覆盖现有数据。可重试或返回空间目录。',
+        error: cause instanceof Error ? cause : new Error(String(cause)),
+      },
+    };
+  }
 }
 
 export function DocumentView({
@@ -108,16 +168,22 @@ export function DocumentView({
     openWeb,
   } = useSpaceContext();
   // The document body is an `alter-doc/1` AST; the restored editor still works
-  // on HTML, so the adapter projects it once per mounted document.
-  const mountDocRef = useRef<AlterDoc | null>(null);
-  if (mountDocRef.current === null) mountDocRef.current = astOf(node.content);
-  const mountDoc = mountDocRef.current;
-  const mountHtml = useMemo(
-    () =>
-      alterDocToEditorHtml(mountDoc, {
-        docPath: (docId) => docPath(spaceId, docId),
-      }),
-    [mountDoc, spaceId],
+  // on HTML, so the adapter projects it once per mounted document. Corrupt
+  // content surfaces an explicit failure state instead of an empty document.
+  const docPathOf = useCallback(
+    (docId: string) => docPath(spaceId, docId),
+    [spaceId],
+  );
+  const mountRef = useRef<ReturnType<typeof readMountDocument> | null>(null);
+  if (mountRef.current === null) {
+    mountRef.current = readMountDocument(node.content, docPathOf);
+  }
+  const mountDoc = mountRef.current.doc;
+  const mountHtml = mountRef.current.html;
+  const mountDocRef = useRef<AlterDoc>(mountDoc);
+  const initialFailureRef = useRef(mountRef.current.failure);
+  const [loadFailure, setLoadFailure] = useState<DocumentLoadFailure | null>(
+    mountRef.current.failure,
   );
   const [title, setTitle] = useState(node.title);
   const [editorHtml, setEditorHtml] = useState(mountHtml);
@@ -140,6 +206,10 @@ export function DocumentView({
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>(
     'saved',
   );
+  /** Distinguishes ordinary save failures from conflicts for error actions. */
+  const [saveFailureKind, setSaveFailureKind] = useState<
+    'failed' | 'conflict' | null
+  >(null);
   const [conflictPrompt, setConflictPrompt] = useState<{
     message: string;
     serverRevision?: number;
@@ -161,6 +231,18 @@ export function DocumentView({
   const aliveRef = useRef(true);
   const controllerRef = useRef<LegacySaveController | null>(null);
   const draftCheckedRef = useRef(false);
+  const commentsRef = useRef<Comment[]>([]);
+  const anchorSweepRef = useRef(false);
+  const anchorWarnedRef = useRef(false);
+  commentsRef.current = comments;
+
+  // Report the initial load failure once (structured, content-free).
+  useEffect(() => {
+    const failure = initialFailureRef.current;
+    if (failure === null) return;
+    reportLegacyDocumentError('load', failure.error, { docId: node.id });
+  }, [node.id]);
+
   /** Project one AST snapshot into the legacy editor HTML. */
   function editorHtmlOf(doc: AlterDoc): string {
     return alterDocToEditorHtml(doc, {
@@ -207,14 +289,31 @@ export function DocumentView({
               ? 'saving'
               : 'saved',
         );
+        if (status.kind === 'failed') {
+          setSaveFailureKind('failed');
+          reportLegacyDocumentError('save', new Error(status.message), {
+            docId: node.id,
+            revision: baseRevisionRef.current,
+          });
+          return;
+        }
         if (status.kind === 'conflict') {
+          setSaveFailureKind('conflict');
           setConflictPrompt({
             message: status.message,
             ...(status.serverRevision === undefined
               ? {}
               : { serverRevision: status.serverRevision }),
           });
+          reportLegacyDocumentError('conflict', new Error(status.message), {
+            docId: node.id,
+            ...(status.serverRevision === undefined
+              ? {}
+              : { serverRevision: status.serverRevision }),
+          });
+          return;
         }
+        setSaveFailureKind(null);
       },
       onBaseChanged: (snapshot) => {
         lastSavedDocRef.current = snapshot.doc;
@@ -231,6 +330,8 @@ export function DocumentView({
         setEditorHtml(editorHtmlOf(snapshot.doc));
         setBodyHasContent(hasBodyContent(draftRef.current.content));
         refresh();
+        // E4: re-check open comment anchors once new content is authoritative.
+        void repairCommentAnchors(commentsRef.current, snapshot.doc);
       },
       onExternalSnapshot: applyExternalSnapshot,
       notify: (message) => {
@@ -284,9 +385,18 @@ export function DocumentView({
 
   useEffect(() => {
     let alive = true;
-    void service.listComments(node.id).then((items) => {
-      if (alive) setComments(items);
-    });
+    void service
+      .listComments(node.id)
+      .then((items) => {
+        if (!alive) return;
+        setComments(items);
+        // E4: repair drifted anchors of open comments once after loading.
+        void repairCommentAnchors(items, lastSavedDocRef.current);
+      })
+      .catch((error: unknown) => {
+        reportLegacyDocumentError('comments', error, { docId: node.id });
+        if (alive) toast('评论加载失败，请稍后重试');
+      });
     return () => {
       alive = false;
     };
@@ -294,9 +404,17 @@ export function DocumentView({
 
   useEffect(() => {
     let alive = true;
-    void service.recordOpen(node.id).then(() => {
-      if (alive) refresh();
-    });
+    void service
+      .recordOpen(node.id)
+      .then(() => {
+        if (alive) refresh();
+      })
+      .catch((error: unknown) => {
+        reportLegacyDocumentError('load', error, {
+          docId: node.id,
+          operation: 'recordOpen',
+        });
+      });
     return () => {
       alive = false;
     };
@@ -323,18 +441,33 @@ export function DocumentView({
     if (current === null || current.hasPending()) return;
     if (node.content === loadedContentRef.current) return;
     loadedContentRef.current = node.content;
-    const doc = astOf(node.content);
+    const parsedContent = parseDocumentContent(node.content);
+    if (parsedContent === undefined) {
+      reportLegacyDocumentError(
+        'load',
+        new Error('doc/schema-invalid: external content is not valid'),
+        { docId: node.id },
+      );
+      setLoadFailure({
+        title: '无法显示文档',
+        message:
+          '服务端返回的文档内容无法解析，已停止加载以避免覆盖现有数据。可重试或返回空间目录。',
+        error: new Error('doc/schema-invalid: external content is not valid'),
+      });
+      return;
+    }
     const snapshot: LegacySaveSnapshot = {
-      doc,
-      revision: doc.revision,
+      doc: parsedContent,
+      revision: parsedContent.revision,
       title: node.title,
     };
-    const ownEcho = doc.revision === current.getBase().revision;
+    const ownEcho = parsedContent.revision === current.getBase().revision;
     current.adopt(snapshot);
+    setLoadFailure(null);
     if (ownEcho) {
       // Own-save echo at the revision we already adopted (the Host may
       // canonicalize attrs). Keep the editor DOM and cursor untouched.
-      setEditorHtml(editorHtmlOf(doc));
+      setEditorHtml(editorHtmlOf(parsedContent));
       return;
     }
     // External revision (version restore, another writer): reload the editor.
@@ -423,7 +556,13 @@ export function DocumentView({
         window.clearTimeout(pending.timer);
         void service
           .updateComment(id, { quote: pending.quote })
-          .catch(() => undefined);
+          .catch((error: unknown) => {
+            reportLegacyDocumentError('comments', error, {
+              docId: node.id,
+              commentId: id,
+              operation: 'flushQuote',
+            });
+          });
       }
       saves.clear();
     };
@@ -473,6 +612,116 @@ export function DocumentView({
     window.setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 
+  /**
+   * E4: repair drifted comment anchors against one authoritative document.
+   *
+   * Only semantically unique quotes are rewritten (via `service.updateComment`);
+   * failures keep the stored anchor silently (reported to diagnostics only).
+   * Unrepairable anchors surface exactly one transient toast per mount — no
+   * permanent UI is added.
+   */
+  async function repairCommentAnchors(
+    items: readonly Comment[],
+    doc: AlterDoc,
+  ): Promise<void> {
+    if (anchorSweepRef.current) return;
+    const plan = planCommentAnchorRepairs(items, doc);
+    if (plan.repairs.length === 0 && plan.unresolvedIds.length === 0) return;
+    anchorSweepRef.current = true;
+    try {
+      for (const repair of plan.repairs) {
+        try {
+          await service.updateComment(repair.commentId, {
+            anchor: repair.anchor,
+          });
+          if (!aliveRef.current) continue;
+          setComments((current) =>
+            current.map((comment) =>
+              comment.id === repair.commentId
+                ? { ...comment, anchor: repair.anchor }
+                : comment,
+            ),
+          );
+        } catch (error) {
+          reportLegacyDocumentError('anchor', error, {
+            docId: node.id,
+            commentId: repair.commentId,
+          });
+        }
+      }
+      if (
+        plan.unresolvedIds.length > 0 &&
+        !anchorWarnedRef.current &&
+        aliveRef.current
+      ) {
+        anchorWarnedRef.current = true;
+        toast('部分评论锚点已失效');
+      }
+    } finally {
+      anchorSweepRef.current = false;
+    }
+  }
+
+  /**
+   * E1: recover from the explicit load-failure state. Prefers a fresh Host
+   * snapshot, then falls back to re-parsing the stored content.
+   */
+  async function retryLoadDocument(): Promise<void> {
+    const client = documentModelOf(service);
+    let snapshot: LegacySaveSnapshot | null = null;
+    if (client !== undefined) {
+      try {
+        const raw = readDocumentSnapshot(await client.get(node.id));
+        if (raw !== undefined) {
+          snapshot = {
+            doc: raw.doc,
+            revision: raw.revision,
+            title: raw.title ?? node.title,
+          };
+        }
+      } catch (error) {
+        reportLegacyDocumentError('load', error, { docId: node.id });
+      }
+    }
+    if (snapshot === null) {
+      const parsed = readMountDocument(node.content, docPathOf);
+      if (parsed.failure !== null) {
+        reportLegacyDocumentError('load', parsed.failure.error, {
+          docId: node.id,
+        });
+        setLoadFailure(parsed.failure);
+        return;
+      }
+      snapshot = {
+        doc: parsed.doc,
+        revision: parsed.doc.revision,
+        title: node.title,
+      };
+    }
+    try {
+      mountDocRef.current = snapshot.doc;
+      lastSavedDocRef.current = snapshot.doc;
+      baseRevisionRef.current = snapshot.revision;
+      loadedContentRef.current = serializeDocument(snapshot.doc);
+      draftRef.current = {
+        title: snapshot.title,
+        content: editorHtmlOf(snapshot.doc),
+      };
+      controllerRef.current?.adopt(snapshot);
+      applyExternalSnapshot(snapshot);
+      setLoadFailure(null);
+    } catch (cause) {
+      const failure: DocumentLoadFailure = {
+        title: '无法显示文档',
+        message:
+          '文档内容无法渲染，已停止加载以避免覆盖现有数据。可重试或返回空间目录。',
+        error: cause instanceof Error ? cause : new Error(String(cause)),
+      };
+      reportLegacyDocumentError('load', failure.error, { docId: node.id });
+      setLoadFailure(failure);
+    }
+  }
+
   function handleTitleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === 'Enter') event.preventDefault();
   }
@@ -482,7 +731,13 @@ export function DocumentView({
     if (previous) window.clearTimeout(previous.timer);
     const timer = window.setTimeout(() => {
       quoteSavesRef.current.delete(id);
-      void service.updateComment(id, { quote }).catch(() => undefined);
+      void service.updateComment(id, { quote }).catch((error: unknown) => {
+        reportLegacyDocumentError('comments', error, {
+          docId: node.id,
+          commentId: id,
+          operation: 'quote',
+        });
+      });
     }, 450);
     quoteSavesRef.current.set(id, { timer, quote });
   }
@@ -515,57 +770,111 @@ export function DocumentView({
   }
 
   async function addComment(body: string, quote: string | null) {
-    // Comments anchor to a top-level block; derive it from the current draft
-    // when the quote matches exactly one block, otherwise store no anchor.
-    const parsed = parseLegacyHtml(draftRef.current.content);
-    const anchor = anchorForQuote(parsed.blocks, quote);
-    const comment = await service.addComment({
-      docId: node.id,
-      body,
-      quote,
-      anchor,
-    });
-    setComments((items) => [...items, comment]);
-    setPendingQuote(null);
-    setPendingDraftHasContent(false);
+    try {
+      // Comments anchor to a top-level block; derive it from the current draft
+      // when the quote matches exactly one block, otherwise store no anchor.
+      const parsed = parseLegacyHtml(draftRef.current.content);
+      const anchor = anchorForQuote(parsed.blocks, quote);
+      const comment = await service.addComment({
+        docId: node.id,
+        body,
+        quote,
+        anchor,
+      });
+      setComments((items) => [...items, comment]);
+      setPendingQuote(null);
+      setPendingDraftHasContent(false);
+    } catch (error) {
+      reportLegacyDocumentError('comments', error, {
+        docId: node.id,
+        operation: 'addComment',
+      });
+      throw error instanceof Error
+        ? error
+        : new Error('评论发布失败，请重试');
+    }
   }
 
   async function approveComment(id: string) {
-    await flushQuoteSave(id);
-    const updated = await service.resolveComment(id);
-    setComments((items) =>
-      items.map((comment) => (comment.id === id ? updated : comment)),
-    );
-    if (hoveredCommentId === id) setHoveredCommentId(null);
-    if (caretCommentId === id) setCaretCommentId(null);
-    toast('评论已采纳');
+    try {
+      await flushQuoteSave(id);
+      const updated = await service.resolveComment(id);
+      setComments((items) =>
+        items.map((comment) => (comment.id === id ? updated : comment)),
+      );
+      if (hoveredCommentId === id) setHoveredCommentId(null);
+      if (caretCommentId === id) setCaretCommentId(null);
+      toast('评论已采纳');
+    } catch (error) {
+      reportLegacyDocumentError('comments', error, {
+        docId: node.id,
+        commentId: id,
+        operation: 'approveComment',
+      });
+      throw error instanceof Error
+        ? error
+        : new Error('评论采纳失败，请重试');
+    }
   }
 
   async function editComment(id: string, body: string) {
-    const updated = await service.updateComment(id, { body });
-    setComments((items) =>
-      items.map((comment) =>
-        comment.id === id ? { ...updated, quote: comment.quote } : comment,
-      ),
-    );
+    try {
+      const updated = await service.updateComment(id, { body });
+      setComments((items) =>
+        items.map((comment) =>
+          comment.id === id ? { ...updated, quote: comment.quote } : comment,
+        ),
+      );
+    } catch (error) {
+      reportLegacyDocumentError('comments', error, {
+        docId: node.id,
+        commentId: id,
+        operation: 'editComment',
+      });
+      throw error instanceof Error
+        ? error
+        : new Error('评论修改失败，请重试');
+    }
   }
 
   async function supplementComment(id: string, body: string) {
-    const updated = await service.addCommentSupplement(id, body);
-    setComments((items) =>
-      items.map((comment) =>
-        comment.id === id ? { ...updated, quote: comment.quote } : comment,
-      ),
-    );
+    try {
+      const updated = await service.addCommentSupplement(id, body);
+      setComments((items) =>
+        items.map((comment) =>
+          comment.id === id ? { ...updated, quote: comment.quote } : comment,
+        ),
+      );
+    } catch (error) {
+      reportLegacyDocumentError('comments', error, {
+        docId: node.id,
+        commentId: id,
+        operation: 'supplementComment',
+      });
+      throw error instanceof Error
+        ? error
+        : new Error('评论补充失败，请重试');
+    }
   }
 
   async function deleteComment(id: string) {
     cancelQuoteSave(id);
-    await service.deleteComment(id);
-    setComments((items) => items.filter((comment) => comment.id !== id));
-    if (hoveredCommentId === id) setHoveredCommentId(null);
-    if (caretCommentId === id) setCaretCommentId(null);
-    toast('评论已删除');
+    try {
+      await service.deleteComment(id);
+      setComments((items) => items.filter((comment) => comment.id !== id));
+      if (hoveredCommentId === id) setHoveredCommentId(null);
+      if (caretCommentId === id) setCaretCommentId(null);
+      toast('评论已删除');
+    } catch (error) {
+      reportLegacyDocumentError('comments', error, {
+        docId: node.id,
+        commentId: id,
+        operation: 'deleteComment',
+      });
+      throw error instanceof Error
+        ? error
+        : new Error('评论删除失败，请重试');
+    }
   }
 
   function toggleComments() {
@@ -602,21 +911,29 @@ export function DocumentView({
   }
 
   async function handleRestored() {
-    const fresh = await service.getNode(node.id);
-    if (!fresh) return;
-    updateNodeInState(fresh);
-    const doc = astOf(fresh.content);
-    const snapshot: LegacySaveSnapshot = {
-      doc,
-      revision: doc.revision,
-      title: fresh.title,
-    };
-    loadedContentRef.current = fresh.content;
-    // Keep the crash draft: the user may want to restore their unsaved edits
-    // again after inspecting the historical version.
-    controllerRef.current?.adopt(snapshot);
-    applyExternalSnapshot(snapshot);
-    refresh();
+    try {
+      const fresh = await service.getNode(node.id);
+      if (!fresh) return;
+      const parsed = parseDocumentContent(fresh.content);
+      if (parsed === undefined) {
+        throw new Error('doc/schema-invalid: restored content is not valid');
+      }
+      updateNodeInState(fresh);
+      const snapshot: LegacySaveSnapshot = {
+        doc: parsed,
+        revision: parsed.revision,
+        title: fresh.title,
+      };
+      loadedContentRef.current = fresh.content;
+      // Keep the crash draft: the user may want to restore their unsaved edits
+      // again after inspecting the historical version.
+      controllerRef.current?.adopt(snapshot);
+      applyExternalSnapshot(snapshot);
+      refresh();
+    } catch (error) {
+      reportLegacyDocumentError('restore', error, { docId: node.id });
+      toast('版本恢复后刷新失败，请重试');
+    }
   }
 
   /** Draft recovery: restore the local draft (same revision). */
@@ -830,6 +1147,57 @@ export function DocumentView({
     />
   );
 
+  if (loadFailure !== null) {
+    return (
+      <section className={styles.page} aria-label={displayTitle(node.title)}>
+        <header className={styles.toolbar}>
+          {!embedded ? <DirectoryButton /> : null}
+          <nav className={styles.crumbs} aria-label="目录层级">
+            <button
+              type="button"
+              className={styles.crumb}
+              onClick={() => router.navigate(overviewPath(spaceId))}
+            >
+              {space.name}
+            </button>
+            <ChevronRight
+              size={10}
+              strokeWidth={1.8}
+              className={styles.crumbChevron}
+              aria-hidden="true"
+            />
+            <span className={styles.currentCrumb}>{title || '无标题'}</span>
+          </nav>
+          <div className={styles.actions} />
+        </header>
+        <div className={styles.scroller}>
+          <article className={styles.paper}>
+            <header className={styles.header}>
+              <h1 className={styles.title}>{loadFailure.title}</h1>
+            </header>
+            <div className={styles.body}>
+              <p>{loadFailure.message}</p>
+              <div className={styles.actions}>
+                <Button
+                  variant="secondary"
+                  onClick={() => void retryLoadDocument()}
+                >
+                  重试
+                </Button>
+                <Button
+                  variant="primary"
+                  onClick={() => router.navigate(overviewPath(spaceId))}
+                >
+                  返回空间目录
+                </Button>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section
       ref={pageRef}
@@ -880,13 +1248,24 @@ export function DocumentView({
         <div className={styles.actions}>
           {/* Auto-save stays silent: the editor shows errors only. */}
           {saveState === 'error' ? (
-            <button
-              type="button"
-              className={styles.saveError}
-              onClick={retrySave}
-            >
-              保存失败，重试
-            </button>
+            <>
+              <button
+                type="button"
+                className={styles.saveError}
+                onClick={retrySave}
+              >
+                保存失败，重试
+              </button>
+              {saveFailureKind === 'failed' ? (
+                <button
+                  type="button"
+                  className={styles.saveError}
+                  onClick={downloadDraft}
+                >
+                  导出草稿
+                </button>
+              ) : null}
+            </>
           ) : null}
           <IconButton
             label="文档菜单"
@@ -904,6 +1283,21 @@ export function DocumentView({
         </div>
       </header>
 
+      <DocumentErrorBoundary
+        docId={node.id}
+        resetKey={`${node.id}:${revision}`}
+        title="文档界面出现异常"
+        message="编辑器或侧栏渲染失败，可重试；若持续失败，请返回空间目录后重新打开。"
+        classNames={{
+          scroller: styles.scroller,
+          paper: styles.paper,
+          header: styles.header,
+          title: styles.title,
+          body: styles.body,
+          actions: styles.actions,
+        }}
+        onGoOverview={() => router.navigate(overviewPath(spaceId))}
+      >
       <div className={styles.scroller}>
         <div
           className={styles.canvas}
@@ -1247,6 +1641,7 @@ export function DocumentView({
         <p>{conflictPrompt?.message ?? ''}</p>
         <p>本地内容已写入草稿；选择覆盖会基于最新 revision 重新保存。</p>
       </Dialog>
+      </DocumentErrorBoundary>
     </section>
   );
 }

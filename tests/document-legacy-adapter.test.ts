@@ -560,3 +560,95 @@ function blockTextOf(blocks: readonly BlockNode[], id: string): string {
   }
   return parts.join('');
 }
+
+describe('legacy adapter: empty block semantics (D2)', () => {
+  /** One document where every empty block shape the old editor can produce. */
+  function emptyBlocksDoc(): AlterDoc {
+    return {
+      format: 'alter-doc/1',
+      schemaVersion: 1,
+      revision: 3,
+      blocks: [
+        block('blk_p_empty', 'paragraph'),
+        block('blk_h1_empty', 'heading', { level: 1 }),
+        block('blk_h2_empty', 'heading', { level: 2 }),
+        block('blk_h3_empty', 'heading', { level: 3 }),
+        block('blk_ul_empty', 'bulletList', {}, {
+          children: [
+            block('blk_li_empty', 'listItem'),
+            block('blk_li_text', 'listItem', {}, {
+              children: [
+                block('blk_li_p', 'paragraph', {}, {
+                  content: [{ type: 'text', text: '有内容' }],
+                }),
+              ],
+            }),
+            block('blk_li_empty2', 'listItem'),
+          ],
+        }),
+        block('blk_ol_empty', 'orderedList', {}, {
+          children: [block('blk_oli_empty', 'listItem')],
+        }),
+        block('blk_task_empty', 'taskList', {}, {
+          children: [block('blk_ti_empty', 'listItem', { checked: false })],
+        }),
+        block('blk_table_empty', 'table', { headerRows: 1 }, {
+          children: [
+            block('blk_row1', 'tableRow', {}, {
+              children: [
+                block('blk_cell_empty', 'tableCell'),
+                block('blk_cell_text', 'tableCell', {}, {
+                  content: [{ type: 'text', text: 'x' }],
+                }),
+              ],
+            }),
+          ],
+        }),
+        block('blk_quote_empty', 'blockquote'),
+        block('blk_callout_empty', 'callout', { tone: 'info' }),
+        block('blk_p_after', 'paragraph', {}, {
+          content: [{ type: 'text', text: '结尾' }],
+        }),
+      ],
+    };
+  }
+
+  it('round-trips empty paragraphs/headings/list items/task items/cells unchanged', () => {
+    const source = emptyBlocksDoc();
+    const html = alterDocToEditorHtml(source);
+    // Empty blocks keep the editable `<br>` caret carrier of the frozen DOM.
+    expect(html).toContain('<p data-block-id="blk_p_empty"><br></p>');
+    expect(html).toContain('<h1 data-block-id="blk_h1_empty"><br></h1>');
+    expect(html).toContain('<h3 data-block-id="blk_h3_empty"><br></h3>');
+    expect(html).toContain('<li data-block-id="blk_li_empty"><br></li>');
+    expect(html).toContain('<li data-block-id="blk_oli_empty"><br></li>');
+    expect(html).toContain('<th data-block-id="blk_cell_empty"><br></th>');
+    // Empty containers keep their wrapper (they do not collapse).
+    expect(html).toContain('<blockquote data-block-id="blk_quote_empty"><br></blockquote>');
+    expect(html).toContain('data-kind="callout"');
+    expect(html).toContain('data-block-id="blk_callout_empty"');
+
+    const parsed = parseLegacyHtml(html);
+    expect(parsed.warnings).toEqual([]);
+    expect(normalize(parsed.blocks)).toEqual(normalize(source.blocks));
+    // Saving this round-trip must not create or delete blocks.
+    expect(
+      computeAstOperations(source, { ...source, blocks: parsed.blocks }),
+    ).toEqual([]);
+  });
+
+  it('keeps empty blocks in place across repeated editor round-trips', () => {
+    const source = emptyBlocksDoc();
+    const first = parseLegacyHtml(alterDocToEditorHtml(source));
+    const second = parseLegacyHtml(alterDocToEditorHtml({
+      ...source,
+      blocks: first.blocks,
+    }));
+    expect(second.blocks).toEqual(first.blocks);
+    // Empty blocks still occupy their positions (no collapsing into one).
+    expect(second.blocks).toHaveLength(source.blocks.length);
+    expect(second.blocks.map((item) => item.id)).toEqual(
+      source.blocks.map((item) => item.id),
+    );
+  });
+});
