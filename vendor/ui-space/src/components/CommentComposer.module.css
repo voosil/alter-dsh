@@ -1,0 +1,118 @@
+.composer {
+  padding: 9px 10px 8px;
+  border: 1px solid var(--alter-border);
+  border-radius: var(--alter-radius-panel);
+  background: var(--alter-surface-raised);
+  transition: border-color var(--alter-duration-fast);
+}
+.composer:focus-within {
+  border-color: var(--alter-focus-ring);
+}
+.quoteRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.quote {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  flex: 1;
+  margin: 0;
+  padding-left: 8px;
+  border-left: 1px solid var(--alter-control-border);
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+}
+.cancel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  margin-top: -2px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--alter-radius-xs);
+  background: transparent;
+  color: var(--alter-text-muted);
+  cursor: pointer;
+}
+.cancel:hover {
+  background: var(--alter-surface-hover);
+  color: var(--alter-text);
+}
+.cancel:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: 1px;
+}
+.composer textarea {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  max-height: 180px;
+  padding: 0;
+  resize: none;
+  border: 0;
+  background: transparent;
+  color: var(--alter-text);
+  font: inherit;
+  font-size: var(--alter-font-body-sm);
+  line-height: var(--alter-line-body);
+}
+.composer[data-variant='full'] textarea {
+  min-height: 58px;
+}
+.composer textarea::placeholder {
+  color: var(--alter-text-muted);
+}
+.composer textarea:focus {
+  outline: none;
+}
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 5px;
+}
+.hint,
+.error {
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+}
+.hint {
+  color: var(--alter-text-muted);
+}
+.error {
+  color: var(--alter-danger);
+}
+.send {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 25px;
+  height: 24px;
+  border: 0;
+  border-radius: var(--alter-radius-control);
+  background: var(--alter-action-background);
+  color: var(--alter-action-text);
+  cursor: pointer;
+}
+.send:hover:not(:disabled) {
+  background: var(--alter-action-hover);
+}
+.send:disabled {
+  background: var(--alter-surface-selected);
+  color: var(--alter-text-muted);
+  cursor: default;
+}
+.send:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: 2px;
+}

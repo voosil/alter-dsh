@@ -803,23 +803,32 @@ describe('editor continuity', () => {
 // ---------------------------------------------------------------------------
 
 describe('document view wiring', () => {
-  it('routes every vendored document view through the structured component', () => {
+  it('keeps the restored legacy document view as the product path', () => {
     for (const file of [
       'vendor/ui-space/src/SpaceApp.tsx',
       'vendor/ui-space/src/SpaceWorkbench.tsx',
     ]) {
       const text = source(file);
-      expect(text).toContain("from '@alter-space/document-view'");
-      expect(text).not.toContain('views/DocumentView');
+      expect(text).toContain("from './views/DocumentView'");
+      expect(text).not.toContain('@alter-space/document-view');
     }
     const spaceApp = source('vendor/ui-space/src/SpaceApp.tsx');
     expect(spaceApp).toContain('<DocumentView key={node.id} node={node} />');
-    expect(source('vendor/ui-space/src/SpaceWorkbench.tsx')).not.toContain(
-      'embedded',
-    );
+    expect(
+      source('vendor/ui-space/src/SpaceWorkbench.tsx'),
+    ).toContain('embedded');
+    for (const file of [
+      'vendor/ui-space/src/views/DocumentView.tsx',
+      'vendor/ui-space/src/views/DocumentView.module.css',
+      'vendor/ui-space/src/components/editor/Editor.tsx',
+      'vendor/ui-space/src/components/editor/Editor.module.css',
+      'vendor/ui-space/src/components/CommentRail.tsx',
+      'vendor/ui-space/src/components/HistoryPanel.tsx',
+    ])
+      expect(existsSync(path.join(root, file))).toBe(true);
   });
 
-  it('has no adaptive document view and no build-time override', () => {
+  it('routes AST parsing through the plugin-owned legacy adapter', () => {
     expect(
       existsSync(path.join(root, 'src', 'document', 'adaptive-document-view.tsx')),
     ).toBe(false);
@@ -827,14 +836,17 @@ describe('document view wiring', () => {
       existsSync(path.join(root, 'build', 'document-view-override.mjs')),
     ).toBe(false);
     const build = source('build/build.mjs');
-    expect(build).toContain('@alter-space\\/document-view');
-    expect(build).not.toContain('document-view-override');
+    expect(build).toContain('@alter-space\\/legacy-adapter');
+    expect(build).not.toContain('@alter-space\\/document-view');
     const tsconfig = JSON.parse(source('tsconfig.json')) as {
       compilerOptions: { paths: Record<string, string[]> };
     };
     expect(
-      tsconfig.compilerOptions.paths['@alter-space/document-view'],
-    ).toEqual(['src/document/AlterDocumentView.tsx']);
+      tsconfig.compilerOptions.paths['@alter-space/legacy-adapter'],
+    ).toEqual(['src/document/legacy/index.ts']);
+    expect(source('vendor/ui-space/src/views/DocumentView.tsx')).toContain(
+      "from '@alter-space/legacy-adapter'",
+    );
   });
 });
 

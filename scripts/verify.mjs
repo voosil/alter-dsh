@@ -271,10 +271,10 @@ check(
   'client bundle must carry the in-panel settings route and its back control',
 );
 check(
-  escaped.includes('结构化文档') &&
-    escaped.includes('data-doc-format') &&
-    escaped.includes('重新加载'),
-  'client bundle must carry the structured document editor',
+  escaped.includes('保存失败，重试') &&
+    escaped.includes('文档菜单') &&
+    escaped.includes('目录层级'),
+  'client bundle must carry the restored document editor surface',
 );
 check(
   escaped.includes('doc.get') &&
@@ -288,10 +288,10 @@ check(
   'client bundle must render images through the authenticated asset route',
 );
 check(
-  escaped.includes('评论与历史') &&
-    escaped.includes('恢复此版本') &&
-    escaped.includes('发布评论'),
-  'client bundle must carry the AST document comments/history panel',
+  escaped.includes('版本列表') &&
+    escaped.includes('还原到此版本') &&
+    escaped.includes('写下对整篇文档的评论'),
+  'client bundle must carry the restored comments/history UI',
 );
 
 check(

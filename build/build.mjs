@@ -55,6 +55,12 @@ const alias = [
     replacement: path.join(vendorSrc('ui-system'), 'index.ts'),
   },
   {
+    // Plugin-owned adapter seam: the restored legacy document UI keeps its
+    // pre-rebuild DOM/CSS and delegates AST parsing/serialization here.
+    find: /^@alter-space\/legacy-adapter$/,
+    replacement: path.join(pluginRoot, 'src', 'document', 'legacy', 'index.ts'),
+  },
+  {
     // Kept resolvable: the panel renders its own settings page
     // (`src/settings-page.tsx`) because that page also owns the DSH-only
     // storage policy, so this source page is not mounted.
@@ -76,12 +82,6 @@ const alias = [
   {
     find: /^@alter\/client-modules$/,
     replacement: path.join(vendorSrc('client-modules'), 'index.ts'),
-  },
-  {
-    // Plugin-owned seam: the vendored Space views render every note through
-    // the structured AST document view (`src/document/AlterDocumentView.tsx`).
-    find: /^@alter-space\/document-view$/,
-    replacement: path.join(pluginRoot, 'src', 'document', 'AlterDocumentView.tsx'),
   },
 ];
 

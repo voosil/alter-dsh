@@ -1,0 +1,59 @@
+.rail {
+  position: relative;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateX(12px);
+  transition:
+    opacity 180ms ease,
+    transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    visibility 220ms;
+  flex-shrink: 0;
+  width: var(--alter-comment-rail-width);
+  margin: 60px 0 120px;
+  padding: 0 0 0 18px;
+}
+.spacer {
+  display: block;
+  width: 1px;
+  pointer-events: none;
+}
+.cardSlot,
+.pendingSlot {
+  position: absolute;
+  left: 18px;
+  right: 16px;
+}
+.pendingSlot {
+  z-index: 1;
+}
+.rail:not([data-stacked]) .cardSlot:not([data-ready]),
+.rail:not([data-stacked]) .pendingSlot:not([data-ready]) {
+  opacity: 0;
+}
+.rail[data-stacked] {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  width: auto;
+  margin: 0;
+  padding: 0;
+  pointer-events: none;
+}
+.rail[data-stacked] .cardSlot,
+.rail[data-stacked] .pendingSlot {
+  left: 12px;
+  right: 0;
+  pointer-events: auto;
+}
+
+.rail[data-open] {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .rail {
+    transition: none;
+  }
+}

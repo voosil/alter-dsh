@@ -45,10 +45,9 @@ export default defineConfig({
         replacement: path.join(vendorSrc('client-modules'), 'index.ts'),
       },
       {
-        // Same seam as the build and tsconfig: the vendored views render
-        // every note through the structured AST document view.
-        find: /^@alter-space\/document-view$/,
-        replacement: path.join(root, 'src/document/AlterDocumentView.tsx'),
+        // Legacy document adapter seam (restored pre-rebuild UI keeps DOM/CSS).
+        find: /^@alter-space\/legacy-adapter$/,
+        replacement: path.join(root, 'src/document/legacy/index.ts'),
       },
     ],
   },
