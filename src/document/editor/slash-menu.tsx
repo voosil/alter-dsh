@@ -28,6 +28,8 @@ export interface SlashCommandContext {
   pickFile: () => void;
   /** Insert a mindmap block through a Document-Operations batch. */
   insertMindmap: () => void;
+  /** Open the built-in component picker to insert a declarative component. */
+  insertComponent: () => void;
   /** Ask the user for a URL and insert a bookmark card. */
   promptBookmark: () => void;
   /** Show a readable notice in the editor status area. */
@@ -212,6 +214,26 @@ export const slashCommands: readonly SlashCommand[] = [
     run: (context) => {
       replaceQuery(context).run();
       context.insertMindmap();
+    },
+  },
+  {
+    id: 'component',
+    label: '组件',
+    keywords: [
+      'component',
+      'widget',
+      'progress',
+      'checklist',
+      'stat',
+      '组件',
+      '进度',
+      '清单',
+      '指标',
+    ],
+    icon: '◫',
+    run: (context) => {
+      replaceQuery(context).run();
+      context.insertComponent();
     },
   },
 ];

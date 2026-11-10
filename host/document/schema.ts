@@ -27,6 +27,7 @@ import {
   type OperationName,
   type TextEdit,
 } from './types.js';
+import { validateComponentPayload } from '../../vendor/protocol/src/components.js';
 
 /** Node capability tier (spec §11.3). */
 export type NodeKind = 'content' | 'structured' | 'application';
@@ -703,14 +704,11 @@ export function validateObjectPayload(
     return;
   }
   if (type === 'component') {
-    if (!isPlainObject(payload)) fail('object/invalid', 'component payload 必须是对象');
-    if (payload.kind !== 'declarative')
-      fail('object/invalid', 'v0 只支持声明式组件（kind="declarative"）');
-    if (typeof payload.renderer !== 'string' || payload.renderer.trim() === '')
-      fail('object/invalid', 'component 缺少 renderer');
-    if (!isPlainObject(payload.props)) fail('object/invalid', 'component.props 必须是对象');
-    if (payload.bindings !== undefined && !Array.isArray(payload.bindings))
-      fail('object/invalid', 'component.bindings 必须是数组');
+    // Components are declarative instances of the built-in catalog: the
+    // catalog owns the prop schema and unknown components/props fail closed.
+    const errors = validateComponentPayload(payload);
+    if (errors.length > 0)
+      fail('object/invalid', `component payload 无效：${errors.join('；')}`);
     return;
   }
   fail('object/invalid', `不支持的对象类型：${type}`);

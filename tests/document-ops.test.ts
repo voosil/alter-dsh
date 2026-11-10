@@ -1179,7 +1179,12 @@ describe('update_object', () => {
         {
           op: 'update_object',
           target: 'blk_comp',
-          payload: { kind: 'declarative', renderer: 'chart', props: {} },
+          payload: {
+            format: 'alter-component/1',
+            componentId: 'builtin/stat',
+            componentVersion: 1,
+            props: { label: '指标', value: '42' },
+          },
         },
       ],
       probe.ctx,

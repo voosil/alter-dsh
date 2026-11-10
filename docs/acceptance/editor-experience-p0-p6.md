@@ -92,10 +92,10 @@ updated: 2026-11-10
 
 ## 6. P4 可交互组件 v1（声明式）
 
-- [ ] P4-1 组件 spec registry（内容寻址）与实例 props/bindings 模型。
-- [ ] P4-2 安全渲染：声明式组件不执行任意代码；未知组件可降级。
-- [ ] P4-3 编辑器插入/编辑入口与预览；组件块 objectId 更新走 Operations。
-- [ ] P4-4 AI 能力声明与 `update_object` 写入；能力校验 fail-closed。
+- [~] P4-1 组件目录 registry 与实例 props 模型已完成（静态编译目录、fail-closed 校验）；内容寻址 specHash 与 bindings 留后续版本。
+- [x] P4-2 安全渲染：声明式组件不执行任意代码；未知组件可降级。
+- [x] P4-3 编辑器插入/编辑入口与预览；组件块 objectId 更新走 Operations。
+- [x] P4-4 AI 能力声明与 `update_object` 写入；能力校验 fail-closed。
 - 自动化：spec/实例校验、渲染、AI 写入；人工：插入组件、改 props、刷新。
 
 ## 7. P5 AI patch 体验

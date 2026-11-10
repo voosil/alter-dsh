@@ -1,0 +1,349 @@
+/**
+ * Declarative component views: preview renderers, picker and props editor.
+ * Token-driven, matching the document shell dialogs.
+ */
+
+/* ------------------------------------------------------------------------- */
+/* Preview renderers                                                         */
+/* ------------------------------------------------------------------------- */
+
+.progress {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 2px;
+}
+
+.progressHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.progressLabel {
+  font-size: var(--alter-font-body-sm);
+  font-weight: 600;
+}
+
+.progressValue {
+  color: var(--alter-text-muted);
+  font-family: var(--alter-font-mono);
+  font-size: var(--alter-font-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+.progressTrack {
+  height: 10px;
+  overflow: hidden;
+  border-radius: var(--alter-radius-pill);
+  background: var(--alter-surface-hover);
+}
+
+.progressBar {
+  height: 100%;
+  border-radius: var(--alter-radius-pill);
+  background: var(--alter-accent);
+  transition: width 120ms ease-out;
+}
+
+.checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 2px;
+}
+
+.checklistTitle {
+  font-size: var(--alter-font-body-sm);
+  font-weight: 600;
+}
+
+.checklistItems {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.checklistItem {
+  margin: 0;
+}
+
+.checklistLabel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: var(--alter-font-body-sm);
+}
+
+.checklistTextDone {
+  color: var(--alter-text-muted);
+  text-decoration: line-through;
+}
+
+.checklistHint {
+  color: var(--alter-text-faint);
+  font-size: var(--alter-font-micro);
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 2px;
+}
+
+.statLabel {
+  color: var(--alter-text-secondary);
+  font-size: var(--alter-font-caption);
+}
+
+.statValue {
+  font-family: var(--alter-font-mono);
+  font-size: calc(var(--alter-font-body) * 1.6);
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.statHint {
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+}
+
+/* ------------------------------------------------------------------------- */
+/* Preview host inside the editor card                                       */
+/* ------------------------------------------------------------------------- */
+
+.preview {
+  margin-top: 8px;
+}
+
+.previewMuted {
+  padding: 8px 2px;
+  color: var(--alter-text-faint);
+  font-size: var(--alter-font-caption);
+}
+
+/* ------------------------------------------------------------------------- */
+/* Degradation card                                                          */
+/* ------------------------------------------------------------------------- */
+
+.fallback {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px dashed var(--alter-control-border);
+  border-radius: var(--alter-radius-xs);
+  background: var(--alter-surface-rail);
+}
+
+.fallbackTitle {
+  color: var(--alter-text-secondary);
+  font-size: var(--alter-font-caption);
+  font-weight: 600;
+}
+
+.fallbackMessage {
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+}
+
+.fallbackMeta {
+  color: var(--alter-text-faint);
+  font-family: var(--alter-font-mono);
+  font-size: var(--alter-font-micro);
+}
+
+/* ------------------------------------------------------------------------- */
+/* Picker / props editor dialogs                                             */
+/* ------------------------------------------------------------------------- */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--alter-scrim);
+}
+
+.dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 100%);
+  max-height: min(720px, 100%);
+  overflow: hidden;
+  border: 1px solid var(--alter-border);
+  border-radius: var(--alter-radius-panel);
+  background: var(--alter-surface);
+  box-shadow: var(--alter-shadow-popover);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--alter-space-2);
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--alter-border);
+}
+
+.title {
+  font-size: var(--alter-font-body);
+  font-weight: 600;
+}
+
+.counter {
+  color: var(--alter-text-muted);
+  font-family: var(--alter-font-mono);
+  font-size: var(--alter-font-micro);
+}
+
+.body {
+  flex: 1;
+  min-height: 120px;
+  overflow: auto;
+  padding: 12px 18px;
+}
+
+.hint {
+  margin: 0 0 10px;
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+}
+
+.catalog {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.catalogItem {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--alter-control-border);
+  border-radius: var(--alter-radius-control);
+  background: var(--alter-surface-raised);
+  color: var(--alter-text);
+  font-family: var(--alter-font-family);
+  text-align: left;
+  cursor: pointer;
+}
+
+.catalogItem:hover:not(:disabled) {
+  border-color: var(--alter-accent);
+}
+
+.catalogName {
+  font-size: var(--alter-font-body-sm);
+  font-weight: 600;
+}
+
+.catalogId {
+  color: var(--alter-text-muted);
+  font-family: var(--alter-font-mono);
+  font-size: var(--alter-font-micro);
+}
+
+.catalogDesc {
+  color: var(--alter-text-secondary);
+  font-size: var(--alter-font-caption);
+}
+
+.fields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fieldLabel {
+  color: var(--alter-text-secondary);
+  font-size: var(--alter-font-caption);
+}
+
+.input,
+.textarea {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--alter-control-border);
+  border-radius: var(--alter-radius-xs);
+  background: var(--alter-surface);
+  color: var(--alter-text);
+  font-family: var(--alter-font-family);
+  font-size: var(--alter-font-body-sm);
+}
+
+.textarea {
+  resize: vertical;
+}
+
+.input:focus-visible,
+.textarea:focus-visible {
+  outline: var(--alter-focus-width, 2px) solid
+    var(--alter-focus-ring, var(--alter-accent));
+  outline-offset: 1px;
+}
+
+.error {
+  margin-top: 10px;
+  color: var(--alter-danger);
+  font-size: var(--alter-font-caption);
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--alter-border);
+}
+
+.button,
+.primary {
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--alter-control-border);
+  border-radius: var(--alter-radius-xs);
+  background: transparent;
+  color: var(--alter-text-secondary);
+  font-family: var(--alter-font-family);
+  font-size: var(--alter-font-caption);
+  cursor: pointer;
+}
+
+.button:hover:not(:disabled) {
+  background: var(--alter-surface-hover);
+}
+
+.primary {
+  border-color: var(--alter-accent);
+  background: var(--alter-accent);
+  color: var(--alter-accent-contrast, #fff);
+}
+
+.primary:hover:not(:disabled) {
+  filter: brightness(0.95);
+}
+
+.button:disabled,
+.primary:disabled,
+.catalogItem:disabled {
+  cursor: default;
+  opacity: 0.6;
+}

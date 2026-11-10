@@ -231,6 +231,7 @@ describe('host plugin apply', () => {
     await apply(harness.ctx, { dataDir: dir });
     expect([...fake.definitions.keys()].sort()).toEqual([
       'space_asset_import',
+      'space_component_catalog',
       'space_doc_generate',
       'space_doc_ops',
       'space_doc_outline',

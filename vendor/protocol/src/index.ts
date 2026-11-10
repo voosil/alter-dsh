@@ -29,6 +29,7 @@ export function parseRuntimeStatus(value: unknown): RuntimeStatus {
   return value as RuntimeStatus;
 }
 
+export * from './components.js';
 export type {
   TerminalOpen,
   TerminalSession,

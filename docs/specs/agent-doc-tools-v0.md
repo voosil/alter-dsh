@@ -120,12 +120,19 @@ updated: 2026-11-10
 
 | 工具 | 输入 | 输出 |
 | --- | --- | --- |
+| `space_component_catalog` | `{}` | `{ components: [{ id, name, description, version, props, defaults, ai_writable }] }` |
 | `space_object_get` | `{ object_id }` | `{ type, schema_version, payload, provenance? }` |
 | `space_object_update` | `{ doc_id, block_id, base_revision, payload }` | `{ revision, object_id, changed_block_ids }` |
 
+- `space_component_catalog` 是只读发现工具：返回内置声明式组件目录（稳定 id、props schema、
+  默认值与 AI 可写 props）；`props` 字段用 snake_case（`max_length` / `max_items` /
+  `item_max_length`）。组件只保存实例，不携带可执行代码。
+- 组件实例 payload 固定为 `{ format: "alter-component/1", componentId, componentVersion, props }`；
+  `space_object_update` 写入前按目录 schema 校验，未知组件、未知 props、类型/必填/长度/范围/
+  列表项越界一律 fail-closed（`object/invalid`）。
 - `space_object_update` 内部走 `update_object` op（同一事务创建新对象 + 替换引用）。
-- 只有 registry 声明 `ai.writable` 的对象类型可用；application 组件只允许改 registry 暴露的
-  props 子集。
+- 只有 registry 声明 `ai.writable` 的对象类型可用；application 组件只允许改目录 `ai_writable`
+  声明且 schema 合法的 props。
 
 ### 2.9 `space_asset_import`
 
@@ -140,7 +147,7 @@ updated: 2026-11-10
 
 ## 3. 预算与裁剪
 
-- 10 个核心工具 schema 约 +2.0–2.4k tokens；读投影单次 ≤ 12k tokens / ≤ 40k 字符。
+- 11 个核心工具 schema 约 +2.2–2.6k tokens；读投影单次 ≤ 12k tokens / ≤ 40k 字符。
 - 每个工具的输出 schema 只列模型真正需要消费的字段，不回传整篇文档或未变更内容。
 - 读工具超限必须截断并在 `next` 给出续读锚点；写工具不因预算裁剪而改变语义。
 - 结构摘要与检索结果有独立上限：outline ≤ 2k tokens，search 默认 20 条且 preview ≤ 60 字。
@@ -171,7 +178,7 @@ Spike 不做：组件沙箱、实时协作。
 4. table 合并单元格、评论锚点、代码组件沙箱的 v1 方案。
 5. `doc_ops` 是否作为版本历史主存储（当前：快照 + op log 并存）。
 6. 版本预算（当前 10 版 / 64 KiB → 可配置累计字节）与备份资产目录的实施方案。
-7. 列表/发现工具与评论工具是否纳入 v0.1（当前 10 个工具不含列表与评论能力）。
+7. 列表/发现工具与评论工具是否纳入 v0.1（当前 11 个工具含组件目录发现，不含文档列表与评论能力）。
 
 ## 相关文档
 

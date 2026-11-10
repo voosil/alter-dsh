@@ -163,6 +163,7 @@ describe('document Agent tools', () => {
     const { definitions, dispose } = setup();
     expect([...definitions.keys()].sort()).toEqual([
       'space_asset_import',
+      'space_component_catalog',
       'space_doc_generate',
       'space_doc_ops',
       'space_doc_outline',
@@ -332,6 +333,37 @@ describe('document Agent tools', () => {
       object_id: 'obj_new',
       changed_block_ids: ['blk_9'],
     });
+  });
+
+  it('exposes the declarative component catalog for AI discovery', async () => {
+    const { definitions } = setup();
+    const definition = definitions.get('space_component_catalog')!;
+    expect(definition.isConcurrencySafe?.({})).toBe(true);
+    const value = (await definition.execute(
+      {},
+      exec('space_component_catalog'),
+    )) as {
+      components: Array<{
+        id: string;
+        ai_writable: string[];
+        defaults: Record<string, unknown>;
+      }>;
+    };
+    expect(value.components.map((component) => component.id)).toEqual([
+      'builtin/progress',
+      'builtin/checklist',
+      'builtin/stat',
+    ]);
+    expect(value.components[0]?.ai_writable).toEqual(['label', 'value']);
+    expect(value.components[0]?.defaults).toEqual({
+      label: '任务进度',
+      value: 60,
+    });
+    const rendered = definition.output.render({}, value)[0]?.text ?? '';
+    expect(rendered).toContain('builtin/progress');
+    expect(definitions.get('space_object_update')?.description).toContain(
+      'space_component_catalog',
+    );
   });
 
   it('maps undo results', async () => {

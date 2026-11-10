@@ -13,6 +13,7 @@ import type {
   ApplyOperationsInput,
   DocumentService,
 } from './service.js';
+import { COMPONENT_CATALOG } from '../../vendor/protocol/src/components.js';
 
 /** Minimal text content block returned to the model. */
 export interface ToolTextBlock {
@@ -291,6 +292,47 @@ const objectOutputSchema: JsonSchemaLike = {
     provenance: { type: 'object', additionalProperties: true, properties: {} },
   },
 };
+
+/** Public catalog entry returned by `space_component_catalog`. */
+interface ComponentCatalogEntry {
+  id: string;
+  name: string;
+  description: string;
+  version: number;
+  props: Record<string, JsonValue>;
+  defaults: Record<string, JsonValue>;
+  ai_writable: string[];
+}
+
+/** Project one built-in component definition into the snake_case tool contract. */
+function componentCatalogEntry(
+  definition: (typeof COMPONENT_CATALOG)[number],
+): ComponentCatalogEntry {
+  const props: Record<string, JsonValue> = {};
+  for (const [key, spec] of Object.entries(definition.props)) {
+    props[key] = {
+      type: spec.type,
+      label: spec.label,
+      ...(spec.required === undefined ? {} : { required: spec.required }),
+      ...(spec.maxLength === undefined ? {} : { max_length: spec.maxLength }),
+      ...(spec.min === undefined ? {} : { min: spec.min }),
+      ...(spec.max === undefined ? {} : { max: spec.max }),
+      ...(spec.maxItems === undefined ? {} : { max_items: spec.maxItems }),
+      ...(spec.itemMaxLength === undefined
+        ? {}
+        : { item_max_length: spec.itemMaxLength }),
+    };
+  }
+  return {
+    id: definition.id,
+    name: definition.name,
+    description: definition.description,
+    version: definition.version,
+    props,
+    defaults: definition.defaults,
+    ai_writable: [...definition.aiWritable],
+  };
+}
 
 /** Read one stored object through the document service. */
 async function readObject(
@@ -1018,9 +1060,62 @@ export function registerDocumentTools(
 
   disposers.push(
     tools.register({
+      name: 'space_component_catalog',
+      description:
+        'List the built-in declarative component catalog: component ids, prop schemas, defaults and AI-writable props. Call this before inserting or updating a component; unknown components and props outside the catalog are rejected.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {},
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['components'],
+          properties: {
+            components: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: true,
+                properties: {},
+              },
+            },
+          },
+        },
+        render: (_args, value) => {
+          const components = (
+            value as { components: ComponentCatalogEntry[] }
+          ).components;
+          return [
+            text(
+              components
+                .map(
+                  (component) =>
+                    `${component.id}（${component.name}，v${component.version}）：AI 可写 ${component.ai_writable.join('/') || '无'}`,
+                )
+                .join('\n'),
+            ),
+          ];
+        },
+      },
+      isConcurrencySafe: () => true,
+      async execute() {
+        return {
+          components: COMPONENT_CATALOG.map(componentCatalogEntry),
+        };
+      },
+      presentCall: () =>
+        view({ card: 'generic', title: 'Component catalog', kind: 'read' }),
+    }),
+  );
+
+  disposers.push(
+    tools.register({
       name: 'space_object_get',
       description:
-        'Read the structured payload of a mindmap/component object referenced by a document block. Use it before updating the object.',
+        'Read the structured payload of a mindmap/component object referenced by a document block. Use it before updating the object; component payloads follow the catalog schema from space_component_catalog.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -1054,7 +1149,7 @@ export function registerDocumentTools(
     tools.register({
       name: 'space_object_update',
       description:
-        'Replace the payload of one mindmap/component object. The document revision must be current; the object is immutable and the block reference is updated atomically.',
+        'Replace the payload of one mindmap/component object. The document revision must be current; the object is immutable and the block reference is updated atomically. For component objects the payload must match the catalog schema from space_component_catalog (`{ format:"alter-component/1", componentId, componentVersion, props }`); unknown components, unknown props, wrong types and out-of-range values fail closed.',
       parameters: {
         type: 'object',
         additionalProperties: false,

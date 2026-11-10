@@ -337,18 +337,28 @@ describe('document schema', () => {
     );
     expect(() =>
       validateObjectPayload('component', {
-        kind: 'declarative',
-        renderer: 'chart',
-        props: { type: 'bar' },
+        format: 'alter-component/1',
+        componentId: 'builtin/progress',
+        componentVersion: 1,
+        props: { label: '进度', value: 50 },
       }),
     ).not.toThrow();
     expect(() =>
       validateObjectPayload('component', {
-        kind: 'sandbox',
-        renderer: 'chart',
+        format: 'alter-component/1',
+        componentId: 'builtin/progress',
+        componentVersion: 1,
+        props: { label: '进度', value: 150 },
+      }),
+    ).toThrow(/不能大于 100/);
+    expect(() =>
+      validateObjectPayload('component', {
+        format: 'alter-component/1',
+        componentId: 'builtin/unknown',
+        componentVersion: 1,
         props: {},
       }),
-    ).toThrow(/声明式/);
+    ).toThrow(/未知组件/);
 
     expect(operationAllowedOn('paragraph', 'update_text')).toBe(true);
     expect(operationAllowedOn('mindmap', 'update_object')).toBe(true);

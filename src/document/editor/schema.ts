@@ -314,7 +314,7 @@ const AlterMindmap = Node.create({
   },
 });
 
-/** `alterComponent`: atom placeholder for a declarative component object. */
+/** `alterComponent`: atom card for one declarative component instance. */
 const AlterComponent = Node.create({
   name: 'alterComponent',
   group: 'block',

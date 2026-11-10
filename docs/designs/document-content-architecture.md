@@ -142,11 +142,11 @@ Operations 把一次修改收敛为可校验的意图，才谈得上可审计与
 
 ## 9. 组件运行时边界与安全
 
-- application 节点有独立 schema/loader/sandbox，不进文档正文、不参与 Markdown 解析。
-- 文档只保存实例：`{ componentId, specHash, props, bindings, stateRef? }`；组件 spec 内容寻址、
-  版本固定，正文不内联运行时代码。
-- 安全：iframe sandbox + CSP、默认无网络、capability 声明、provenance、审核状态。
-- AI 只能通过 registry 的能力声明操作 props/data；代码组件必须走审核通道，不能由模型直接写进正文。
+- application 节点有独立 schema/loader，不进文档正文、不参与 Markdown 解析。
+- v1 文档只保存实例：`{ format:'alter-component/1', componentId, componentVersion, props }`；
+  组件目录静态编译进协议包（内置进度条/清单/指标卡），渲染器为客户端静态 registry，不执行任意代码。
+- 安全：未知组件/props/越界 fail-closed；`aiWritable` 能力声明；不含 eval/iframe/远程代码。
+- 未做：内容寻址 specHash、bindings、持久化实例状态；代码组件（iframe sandbox + CSP + 审核通道）留后续。
 
 ## 10. 本仓库映射
 

@@ -4,8 +4,9 @@
  * - `alterCallout` keeps its child blocks editable (`NodeViewContent`).
  * - `alterImage` is an atom with an inline attribute editor (alt / caption /
  *   CSS width); `alterFile` is a downloadable attachment card; `alterMindmap`
- *   opens the tree editor through a window event, `alterComponent` stays a
- *   placeholder. Object payloads never enter the editor document.
+ *   opens the tree editor through a window event; `alterComponent` previews a
+ *   validated built-in declarative component and asks the editor surface to
+ *   edit its props. Object payloads never enter the editor document.
  * - `alterBookmark` / `alterDocLink` are atom link cards: a web card opens its
  *   URL in a new tab, an internal card navigates through the Space router. The
  *   Space context is optional so the views degrade to read-only previews
@@ -22,12 +23,21 @@ import {
   NodeViewWrapper,
   type ReactNodeViewProps,
 } from '@tiptap/react';
+import { getComponentDefinition, type ComponentPayload } from '@alter/protocol';
 import styles from './AlterTiptapEditor.module.css';
 import { documentAssetUrl } from '../asset-url';
 import {
   MINDMAP_EDIT_EVENT,
   type MindmapEditRequest,
 } from '../objects/mindmap';
+import {
+  COMPONENT_EDIT_EVENT,
+  ComponentFallbackCard,
+  ComponentRenderer,
+  useComponentObjectState,
+  type ComponentEditRequest,
+} from '../components';
+import componentStyles from '../components/components.module.css';
 import { SpaceContext } from '../../../vendor/ui-space/src/runtime';
 import { docPath } from '../../../vendor/ui-space/src/space-route';
 
@@ -412,16 +422,107 @@ export function AlterMindmapNodeView(props: ReactNodeViewProps) {
   );
 }
 
-/** Placeholder card for a declarative component block. */
-export function AlterComponentNodeView(props: ReactNodeViewProps) {
+/** Edit entry of a component card: asks the editor surface to open its form. */
+function ComponentEditButton({
+  view,
+  objectId,
+  payload,
+}: {
+  view: ReactNodeViewProps;
+  objectId: string | undefined;
+  payload: ComponentPayload | undefined;
+}) {
+  if (objectId === undefined || !view.editor.isEditable) return null;
+  const blockId = attrText(view, 'blockId');
   return (
-    <ObjectCard
-      view={props}
-      kind="component"
-      label="交互组件"
-      title={attrText(props, 'title')}
-      description={attrText(props, 'description')}
-    />
+    <button
+      type="button"
+      className={styles.objectEdit}
+      aria-label="编辑组件"
+      title="编辑组件"
+      onClick={() => {
+        if (typeof window === 'undefined') return;
+        const detail: ComponentEditRequest = {
+          objectId,
+          ...(blockId === undefined ? {} : { blockId }),
+          ...(payload === undefined ? {} : { payload }),
+        };
+        window.dispatchEvent(
+          new CustomEvent<ComponentEditRequest>(COMPONENT_EDIT_EVENT, {
+            detail,
+          }),
+        );
+      }}
+    >
+      编辑组件
+    </button>
+  );
+}
+
+/**
+ * Declarative component card: safe built-in preview plus a props editor entry.
+ * The payload is loaded by the editor surface through `object.get` and shared
+ * through the component object cache; an unknown/broken payload degrades to a
+ * readable card instead of crashing the editor.
+ */
+export function AlterComponentNodeView(props: ReactNodeViewProps) {
+  const objectId = attrText(props, 'objectId');
+  const objectState = useComponentObjectState(objectId);
+  const payload =
+    objectState?.status === 'ready' ? objectState.payload : undefined;
+  const definition =
+    payload === undefined ? undefined : getComponentDefinition(payload.componentId);
+  const title = attrText(props, 'title') ?? definition?.name;
+  const description = attrText(props, 'description');
+  return (
+    <NodeViewWrapper
+      as="div"
+      className={styles.objectCard}
+      data-kind="component"
+      data-selected={props.selected ? 'true' : undefined}
+    >
+      <div className={styles.objectHead} contentEditable={false}>
+        <span className={styles.objectKind}>交互组件</span>
+        <span className={styles.objectTitle}>{title ?? objectId ?? '组件块'}</span>
+        <ComponentEditButton
+          view={props}
+          objectId={objectId}
+          payload={payload}
+        />
+        <RemoveButton
+          label="删除交互组件块"
+          onRemove={props.deleteNode}
+        />
+      </div>
+      <div className={styles.objectMeta} contentEditable={false}>
+        {payload === undefined
+          ? objectId ?? '（缺少对象 id）'
+          : `${payload.componentId} · v${payload.componentVersion}`}
+      </div>
+      {description === undefined ? null : (
+        <div className={styles.objectHint} contentEditable={false}>
+          {description}
+        </div>
+      )}
+      <div
+        className={componentStyles.preview}
+        data-component-preview="true"
+        contentEditable={false}
+      >
+        {objectId === undefined ? (
+          <div className={componentStyles.previewMuted}>（缺少对象 id）</div>
+        ) : objectState === undefined || objectState.status === 'loading' ? (
+          <div className={componentStyles.previewMuted}>正在加载组件…</div>
+        ) : objectState.status === 'error' ? (
+          <ComponentFallbackCard message={objectState.message} />
+        ) : (
+          <ComponentRenderer
+            payload={objectState.payload}
+            readOnly={!props.editor.isEditable}
+          />
+        )}
+      </div>
+    </NodeViewWrapper>
   );
 }
 

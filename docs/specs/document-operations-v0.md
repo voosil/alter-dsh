@@ -129,20 +129,23 @@ v0 限制：
 
 约束：节点数 ≤ 500；单节点文本 ≤ 500 字；不允许环。
 
-### 6.3 组件 payload v0（声明式）
+### 6.3 组件 payload v1（声明式目录）
 
 ```jsonc
 {
-  "kind": "declarative",
-  "renderer": "chart",           // 由组件 registry 注册的渲染器 id
-  "props": { "type": "bar", "data": [/* … */] },
-  "bindings": [{ "source": "doc", "query": "…" }],
-  "state": null                  // 可选，实例状态；不进文档备份时可省略
+  "format": "alter-component/1",
+  "componentId": "builtin/progress",   // 内置目录 id（编译进协议包）
+  "componentVersion": 1,
+  "props": { "label": "任务进度", "value": 60 }
 }
 ```
 
-- v0 **只允许声明式组件**；代码组件（sandbox iframe）在 v0.1+ 通过审核通道引入，存 `component_specs`。
-- 文档只保存 `{ objectId, title? }`，不保存渲染器实现。
+- 组件目录（`vendor/protocol/src/components.ts`）声明 id、props schema、默认值与 `aiWritable`；
+  Host 按目录校验 `componentId/version/props`，未知组件或 props、类型/必填/长度/范围越界一律
+  `object/invalid`（fail-closed）。AI 先查 `space_component_catalog`，写入走 `update_object`。
+- 文档只保存 `{ objectId, title? }`，不保存渲染器实现；渲染由客户端静态 registry 按目录 id 选择，
+  **不执行任意代码**。v1 未实现内容寻址 specHash、bindings 与持久化实例状态（checklist 勾选仅本地）；
+  代码组件（sandbox + 审核通道）留后续版本。
 
 ### 6.4 资产（`doc_assets`）
 

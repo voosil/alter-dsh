@@ -98,6 +98,7 @@ import {
 import {
   MindmapEditor,
   MINDMAP_EDIT_EVENT,
+  PENDING_OBJECT_ID,
   buildDeleteBlockOperation,
   buildPendingObjectInsertOperation,
   buildUpdateObjectOperation,
@@ -106,6 +107,18 @@ import {
   type MindmapEditRequest,
   type MindmapPayload,
 } from '../objects';
+import {
+  COMPONENT_EDIT_EVENT,
+  ComponentPicker,
+  PropsEditor,
+  componentPayloadErrors,
+  componentPayloadOf,
+  createDefaultComponentPayload,
+  getComponentObjectState,
+  setComponentObjectState,
+  type ComponentEditRequest,
+} from '../components';
+import type { ComponentPayload } from '@alter/protocol';
 import {
   SlashMenu,
   filterSlashCommands,
@@ -413,6 +426,23 @@ function readObjectPayload(value: unknown): unknown {
   return (value as Record<string, unknown>)['payload'];
 }
 
+/** Find the component block that references `objectId`. */
+function findComponentBlockId(
+  editor: Editor,
+  objectId: string,
+): string | undefined {
+  let found: string | undefined;
+  editor.state.doc.descendants((node) => {
+    if (found !== undefined) return false;
+    if (node.type.name !== 'alterComponent') return true;
+    if (node.attrs['objectId'] !== objectId) return true;
+    const blockId = node.attrs['blockId'];
+    if (typeof blockId === 'string' && blockId !== '') found = blockId;
+    return false;
+  });
+  return found;
+}
+
 /** Stable empty marker list so effects do not re-run on every render. */
 const EMPTY_COMMENT_MARKERS: readonly CommentMarker[] = [];
 
@@ -467,6 +497,23 @@ interface MindmapEditorState {
   saving: boolean;
   error: string | null;
   conflict: boolean;
+}
+
+/** Dialog state of the component props editor. */
+interface ComponentEditorState {
+  blockId: string;
+  objectId: string;
+  payload: ComponentPayload | null;
+  loading: boolean;
+  saving: boolean;
+  error: string | null;
+  conflict: boolean;
+}
+
+/** Dialog state of the component picker (insert flow). */
+interface ComponentPickerState {
+  inserting: boolean;
+  error: string | null;
 }
 
 interface LinkBarState {
@@ -616,6 +663,10 @@ export function AlterTiptapEditor({
   const [mindmapEditor, setMindmapEditor] = useState<MindmapEditorState | null>(
     null,
   );
+  const [componentPicker, setComponentPicker] =
+    useState<ComponentPickerState | null>(null);
+  const [componentEditor, setComponentEditor] =
+    useState<ComponentEditorState | null>(null);
 
   const loadingRef = useRef(false);
   const disposedRef = useRef(false);
@@ -662,6 +713,9 @@ export function AlterTiptapEditor({
   const filteredCommandsRef = useRef<readonly SlashCommand[]>([]);
   const executeSlashRef = useRef<(command: SlashCommand) => void>(() => {});
   const insertMindmapRef = useRef<() => void>(() => {});
+  const insertComponentRef = useRef<() => void>(() => {});
+  /** Object ids whose `object.get` request is already in flight. */
+  const componentLoadsRef = useRef<Set<string>>(new Set());
 
   const externalToken = `${docId}#${baseRevision}#${initialDoc.revision}`;
   const lastExternalTokenRef = useRef(externalToken);
@@ -733,6 +787,69 @@ export function AlterTiptapEditor({
       setNotice({ kind, message });
     },
     [],
+  );
+
+  /**
+   * Fetch and validate one component object payload. Throws a readable error
+   * when the object is missing, unreadable or violates the catalog schema.
+   */
+  const fetchComponentPayload = useCallback(
+    async (objectId: string): Promise<ComponentPayload> => {
+      const record = await clientRef.current.getObject(objectId);
+      const payload = componentPayloadOf(record);
+      if (payload === undefined)
+        throw new Error('组件对象不存在或格式不受支持');
+      const errors = componentPayloadErrors(payload);
+      if (errors.length > 0) throw new Error(errors[0] ?? '组件数据无效');
+      return payload;
+    },
+    [],
+  );
+
+  /**
+   * Load every component object referenced by the editor document into the
+   * preview cache. Node views subscribe to the cache, so late fetches update
+   * the preview without recreating the Tiptap node; unknown/broken payloads
+   * are cached as readable errors instead of being retried on every render.
+   */
+  const syncComponentObjects = useCallback(
+    (instance: Editor): void => {
+      const objectIds = new Set<string>();
+      instance.state.doc.descendants((node) => {
+        if (node.type.name !== 'alterComponent') return true;
+        const objectId = node.attrs['objectId'];
+        if (
+          typeof objectId === 'string' &&
+          objectId !== '' &&
+          objectId !== PENDING_OBJECT_ID
+        )
+          objectIds.add(objectId);
+        return true;
+      });
+      for (const objectId of objectIds) {
+        if (
+          getComponentObjectState(objectId) !== undefined ||
+          componentLoadsRef.current.has(objectId)
+        )
+          continue;
+        componentLoadsRef.current.add(objectId);
+        setComponentObjectState(objectId, { status: 'loading' });
+        void (async () => {
+          try {
+            const payload = await fetchComponentPayload(objectId);
+            setComponentObjectState(objectId, { status: 'ready', payload });
+          } catch (error) {
+            setComponentObjectState(objectId, {
+              status: 'error',
+              message: describeOperationError(error),
+            });
+          } finally {
+            componentLoadsRef.current.delete(objectId);
+          }
+        })();
+      }
+    },
+    [fetchComponentPayload],
   );
 
   /**
@@ -955,6 +1072,7 @@ export function AlterTiptapEditor({
         pickImage: () => imageInputRef.current?.click(),
         pickFile: () => fileInputRef.current?.click(),
         insertMindmap: () => insertMindmapRef.current(),
+        insertComponent: () => insertComponentRef.current(),
         promptBookmark: () => openLinkBar('bookmark'),
         notify: (message) => showNotice(message),
       };
@@ -1203,6 +1321,7 @@ export function AlterTiptapEditor({
     loadingRef.current = true;
     editor.commands.setContent(projectedContent, { emitUpdate: false });
     loadingRef.current = false;
+    syncComponentObjects(editor);
   }, [
     externalToken,
     editor,
@@ -1212,7 +1331,14 @@ export function AlterTiptapEditor({
     initialDoc,
     saver,
     controller,
+    syncComponentObjects,
   ]);
+
+  // Load the object payloads of component blocks once the editor exists (and
+  // after every wholesale content replacement above/below).
+  useEffect(() => {
+    syncComponentObjects(editor);
+  }, [editor, syncComponentObjects]);
 
   // Title edits go through the same debounced save cycle as the body.
   useEffect(() => {
@@ -1235,7 +1361,8 @@ export function AlterTiptapEditor({
     loadingRef.current = false;
     latestEditorJsonRef.current = restore.editor;
     controller.notifyChange();
-  }, [restore, editor, controller]);
+    syncComponentObjects(editor);
+  }, [restore, editor, controller, syncComponentObjects]);
 
   useEffect(() => {
     editor.setEditable(!readOnly);
@@ -1368,13 +1495,14 @@ export function AlterTiptapEditor({
       loadingRef.current = true;
       editor.commands.setContent(nextContent, { emitUpdate: false });
       loadingRef.current = false;
+      syncComponentObjects(editor);
       controller.reset();
       if (!disposedRef.current) {
         onSavedRef.current(snapshot.revision, snapshot.doc, nextTitle);
         onAdoptTitleRef.current?.(nextTitle);
       }
     },
-    [controller, docId, editor, saver],
+    [controller, docId, editor, saver, syncComponentObjects],
   );
 
   /** Load the current Host snapshot and adopt it without recreating the editor. */
@@ -1646,6 +1774,278 @@ export function AlterTiptapEditor({
       window.removeEventListener(MINDMAP_EDIT_EVENT, onEditRequest);
     };
   }, [openMindmapEditor]);
+
+  /** Open the component picker from the slash menu's 「插入组件」 command. */
+  insertComponentRef.current = () => {
+    setComponentPicker({ inserting: false, error: null });
+  };
+
+  /**
+   * Insert a component block in two Document-Operations batches: batch 1
+   * inserts the placeholder block, batch 2 creates the real object and
+   * rewrites the reference. A failed batch 2 deletes the placeholder again.
+   */
+  const insertComponentBlock = useCallback(
+    async (componentId: string): Promise<void> => {
+      const current = editorRef.current;
+      if (current === null || !current.isEditable) return;
+      const payload = createDefaultComponentPayload(componentId);
+      if (payload === undefined) {
+        setComponentPicker((state) =>
+          state === null ? state : { ...state, error: '未知组件' },
+        );
+        return;
+      }
+      const blockId = newBlockId();
+      let baseRevision: number;
+      try {
+        baseRevision = await prepareOperationBase();
+      } catch (error) {
+        setComponentPicker((state) =>
+          state === null
+            ? state
+            : {
+                ...state,
+                inserting: false,
+                error: `插入组件失败：${describeOperationError(error)}`,
+              },
+        );
+        return;
+      }
+      const after = topLevelBlockIdAt(current);
+      const wasEditable = current.isEditable;
+      current.setEditable(false);
+      setComponentPicker((state) =>
+        state === null ? state : { ...state, inserting: true, error: null },
+      );
+      try {
+        let insertedRevision: number;
+        try {
+          const insertResult = await clientRef.current.applyOperations({
+            docId,
+            baseRevision,
+            ops: [
+              buildPendingObjectInsertOperation({
+                blockId,
+                kind: 'component',
+                ...(after === undefined ? {} : { after }),
+              }),
+            ],
+          });
+          insertedRevision = readRevision(insertResult) ?? baseRevision + 1;
+        } catch (error) {
+          setComponentPicker((state) =>
+            state === null
+              ? state
+              : {
+                  ...state,
+                  inserting: false,
+                  error: `插入组件失败：${describeOperationError(error)}`,
+                },
+          );
+          return;
+        }
+        try {
+          await clientRef.current.applyOperations({
+            docId,
+            baseRevision: insertedRevision,
+            ops: [
+              buildUpdateObjectOperation(
+                blockId,
+                payload as unknown as JsonValue,
+              ),
+            ],
+          });
+        } catch (error) {
+          let cleanupHint = '';
+          try {
+            await clientRef.current.applyOperations({
+              docId,
+              baseRevision: insertedRevision,
+              ops: [buildDeleteBlockOperation(blockId)],
+            });
+            cleanupHint = '（占位块已清理）';
+          } catch {
+            cleanupHint = '（占位块清理失败，请刷新后手动删除）';
+          }
+          setComponentPicker((state) =>
+            state === null
+              ? state
+              : {
+                  ...state,
+                  inserting: false,
+                  error: `插入组件失败：${describeOperationError(error)}${cleanupHint}`,
+                },
+          );
+          return;
+        }
+        try {
+          await reloadDocumentSnapshot();
+          setComponentPicker(null);
+          showNotice('已插入组件');
+        } catch (error) {
+          setComponentPicker((state) =>
+            state === null
+              ? state
+              : {
+                  ...state,
+                  inserting: false,
+                  error: `组件已插入，但刷新文档失败：${describeOperationError(error)}`,
+                },
+          );
+        }
+      } finally {
+        if (!current.isDestroyed) current.setEditable(wasEditable);
+      }
+    },
+    [docId, prepareOperationBase, reloadDocumentSnapshot, showNotice],
+  );
+
+  const closeComponentPicker = useCallback((): void => {
+    setComponentPicker(null);
+  }, []);
+
+  /** Load one component payload and open the props editor. */
+  const openComponentEditor = useCallback(
+    async (request: ComponentEditRequest): Promise<void> => {
+      const current = editorRef.current;
+      if (current === null || !current.isEditable) return;
+      const blockId =
+        request.blockId ?? findComponentBlockId(current, request.objectId);
+      if (blockId === undefined) {
+        showNotice('无法定位组件块，请刷新后重试', 'error');
+        return;
+      }
+      setComponentEditor({
+        blockId,
+        objectId: request.objectId,
+        payload: request.payload ?? null,
+        loading: request.payload === undefined,
+        saving: false,
+        error: null,
+        conflict: false,
+      });
+      if (request.payload !== undefined) return;
+      const cached = getComponentObjectState(request.objectId);
+      if (cached?.status === 'ready') {
+        setComponentEditor((state) =>
+          state === null
+            ? state
+            : { ...state, payload: cached.payload, loading: false },
+        );
+        return;
+      }
+      try {
+        const payload = await fetchComponentPayload(request.objectId);
+        setComponentEditor((state) =>
+          state === null ? state : { ...state, loading: false, payload },
+        );
+      } catch (error) {
+        setComponentEditor((state) =>
+          state === null
+            ? state
+            : { ...state, loading: false, error: describeOperationError(error) },
+        );
+      }
+    },
+    [fetchComponentPayload, showNotice],
+  );
+
+  /** Save edited props through `update_object`, then reload the document. */
+  const saveComponentEditor = useCallback(
+    async (payload: ComponentPayload): Promise<void> => {
+      const state = componentEditor;
+      if (state === null || state.saving) return;
+      setComponentEditor({
+        ...state,
+        saving: true,
+        error: null,
+        conflict: false,
+      });
+      try {
+        const baseRevision = await prepareOperationBase();
+        await clientRef.current.applyOperations({
+          docId,
+          baseRevision,
+          ops: [
+            {
+              op: 'update_object',
+              target: state.blockId,
+              payload: payload as unknown as JsonValue,
+            },
+          ],
+        });
+        await reloadDocumentSnapshot();
+        setComponentEditor(null);
+        showNotice('组件已保存');
+      } catch (error) {
+        const conflict =
+          error instanceof SpaceRemoteError && error.code === 'doc/conflict';
+        setComponentEditor((current) =>
+          current === null
+            ? current
+            : {
+                ...current,
+                saving: false,
+                conflict,
+                error: conflict
+                  ? '文档已被其他修改更新，请重新加载后再保存'
+                  : describeOperationError(error),
+              },
+        );
+      }
+    },
+    [
+      componentEditor,
+      docId,
+      prepareOperationBase,
+      reloadDocumentSnapshot,
+      showNotice,
+    ],
+  );
+
+  /** Conflict recovery: reload the document revision, then close the dialog. */
+  const reloadComponentDocument = useCallback(async (): Promise<void> => {
+    setComponentEditor((current) =>
+      current === null
+        ? current
+        : { ...current, loading: true, error: null, conflict: false },
+    );
+    try {
+      await reloadDocumentSnapshot();
+      setComponentEditor(null);
+      showNotice('文档已重新加载，请重新打开组件编辑');
+    } catch (error) {
+      setComponentEditor((current) =>
+        current === null
+          ? current
+          : { ...current, loading: false, error: describeOperationError(error) },
+      );
+    }
+  }, [reloadDocumentSnapshot, showNotice]);
+
+  const closeComponentEditor = useCallback((): void => {
+    setComponentEditor(null);
+  }, []);
+
+  // The component node view asks the surface to open its props editor.
+  useEffect(() => {
+    const onEditRequest = (event: Event): void => {
+      const detail = (event as CustomEvent<ComponentEditRequest>).detail;
+      if (
+        detail === undefined ||
+        typeof detail.objectId !== 'string' ||
+        detail.objectId === ''
+      ) {
+        return;
+      }
+      void openComponentEditor(detail);
+    };
+    window.addEventListener(COMPONENT_EDIT_EVENT, onEditRequest);
+    return () => {
+      window.removeEventListener(COMPONENT_EDIT_EVENT, onEditRequest);
+    };
+  }, [openComponentEditor]);
 
   const handleRetry = useCallback(() => {
     void controller.retry();
@@ -2151,6 +2551,32 @@ export function AlterTiptapEditor({
         onClose={closeMindmapEditor}
         onReload={() => {
           void reloadMindmapDocument();
+        }}
+      />
+
+      <ComponentPicker
+        open={componentPicker !== null}
+        busy={componentPicker?.inserting ?? false}
+        error={componentPicker?.error ?? null}
+        onSelect={(componentId) => {
+          void insertComponentBlock(componentId);
+        }}
+        onClose={closeComponentPicker}
+      />
+
+      <PropsEditor
+        open={componentEditor !== null}
+        initial={componentEditor?.payload ?? null}
+        loading={componentEditor?.loading ?? false}
+        saving={componentEditor?.saving ?? false}
+        error={componentEditor?.error ?? null}
+        conflict={componentEditor?.conflict ?? false}
+        onSave={(payload) => {
+          void saveComponentEditor(payload);
+        }}
+        onClose={closeComponentEditor}
+        onReload={() => {
+          void reloadComponentDocument();
         }}
       />
     </section>

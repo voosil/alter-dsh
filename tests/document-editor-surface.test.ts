@@ -43,6 +43,10 @@ import {
   type SpaceDocumentClient,
 } from '../src/space-client';
 import type { MindmapPayload } from '../src/document/objects';
+import {
+  clearComponentObjectStates,
+  createDefaultComponentPayload,
+} from '../src/document/components';
 import type { AlterDoc } from '../src/document/types';
 
 // jsdom has no layout engine; ProseMirror calls these on elements and ranges.
@@ -81,6 +85,7 @@ if (typeof document.elementFromPoint !== 'function') {
 afterEach(() => {
   cleanup();
   localStorage.clear();
+  clearComponentObjectStates();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -153,6 +158,19 @@ const mindmapDoc: AlterDoc = {
       id: 'blk_mm',
       type: 'mindmap',
       attrs: { objectId: 'obj_1', caption: '流程' },
+    },
+  ],
+};
+
+const componentDoc: AlterDoc = {
+  format: 'alter-doc/1',
+  schemaVersion: 1,
+  revision: 1,
+  blocks: [
+    {
+      id: 'blk_cmp',
+      type: 'component',
+      attrs: { objectId: 'obj_1', title: '进度' },
     },
   ],
 };
@@ -1385,6 +1403,168 @@ describe('mindmap editing', () => {
         '缺少节点 id',
       ),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Declarative components (P4)
+// ---------------------------------------------------------------------------
+
+describe('declarative components', () => {
+  it('inserts a built-in component through the picker in two batches', async () => {
+    const updatedDoc: AlterDoc = {
+      format: 'alter-doc/1',
+      schemaVersion: 1,
+      revision: 3,
+      blocks: [
+        {
+          id: 'blk_new_cmp',
+          type: 'component',
+          attrs: { objectId: 'obj_new', title: '进度' },
+        },
+      ],
+    };
+    const get = vi.fn(async () => ({
+      docId: 'doc-surface',
+      revision: 3,
+      title: '测试文档',
+      doc: updatedDoc,
+    }));
+    const getObject = vi.fn(async () => ({
+      id: 'obj_new',
+      type: 'component',
+      payload: createDefaultComponentPayload('builtin/progress'),
+    }));
+    const applyOperations = vi
+      .fn()
+      .mockResolvedValueOnce({
+        docId: 'doc-surface',
+        revision: 2,
+        changedBlockIds: [],
+        diff: {},
+        warnings: [],
+      })
+      .mockResolvedValueOnce({
+        docId: 'doc-surface',
+        revision: 3,
+        changedBlockIds: [],
+        diff: {},
+        warnings: [],
+      });
+    const harness = mount({ get, getObject, applyOperations });
+    paste({ text: '/' });
+    await screen.findByRole('listbox', { name: '插入内容' });
+    paste({ text: '组件' });
+    const listbox = screen.getByRole('listbox', { name: '插入内容' });
+    expect(
+      within(listbox)
+        .getAllByRole('option')
+        .map((option) => option.getAttribute('aria-label')),
+    ).toEqual(['组件']);
+    press('Enter');
+    const picker = await screen.findByRole('dialog', { name: '插入组件' });
+    fireEvent.click(within(picker).getByRole('button', { name: /进度/ }));
+    await waitFor(() => expect(applyOperations).toHaveBeenCalledTimes(2));
+
+    // Batch 1: placeholder block against the current revision.
+    const first = applyOperations.mock.calls[0]![0] as {
+      baseRevision: number;
+      ops: Array<Record<string, unknown>>;
+    };
+    expect(first.baseRevision).toBe(1);
+    expect(first.ops[0]).toMatchObject({
+      op: 'insert_blocks',
+      blocks: [{ type: 'component', attrs: { objectId: 'obj_pending' } }],
+    });
+    const blockId = (
+      first.ops[0] as { blocks: Array<{ id: string }> }
+    ).blocks[0]!.id;
+
+    // Batch 2: create the catalog object against the new revision.
+    const second = applyOperations.mock.calls[1]![0] as {
+      baseRevision: number;
+      ops: Array<Record<string, unknown>>;
+    };
+    expect(second.baseRevision).toBe(2);
+    expect(second.ops[0]).toMatchObject({
+      op: 'update_object',
+      target: blockId,
+    });
+    expect(JSON.stringify(second.ops[0])).toContain('builtin/progress');
+
+    await waitFor(() =>
+      expect(jsonOf(harness)).toContain('"type":"alterComponent"'),
+    );
+    expect(await screen.findByText('已插入组件')).toBeTruthy();
+    expect(await screen.findByText('任务进度')).toBeTruthy();
+  });
+
+  it('edits component props through update_object and reloads', async () => {
+    const getObject = vi.fn(async () => ({
+      id: 'obj_1',
+      type: 'component',
+      payload: createDefaultComponentPayload('builtin/progress'),
+    }));
+    const get = vi.fn(async () => ({
+      docId: 'doc-surface',
+      revision: 2,
+      title: '测试文档',
+      doc: { ...componentDoc, revision: 2 },
+    }));
+    const applyOperations = vi.fn(async () => ({
+      docId: 'doc-surface',
+      revision: 2,
+      changedBlockIds: ['blk_cmp'],
+      diff: {},
+      warnings: [],
+    }));
+    mount({ initialDoc: componentDoc, getObject, get, applyOperations });
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '编辑组件' })).toBeTruthy(),
+    );
+    expect(await screen.findByText('任务进度')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: '编辑组件' }));
+    const dialog = await screen.findByRole('dialog', { name: '编辑组件' });
+    const label = within(dialog).getByLabelText('标题') as HTMLInputElement;
+    expect(label.value).toBe('任务进度');
+    fireEvent.change(label, { target: { value: '新进度' } });
+    fireEvent.change(within(dialog).getByLabelText('进度'), {
+      target: { value: '80' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存' }));
+    await waitFor(() => expect(applyOperations).toHaveBeenCalledTimes(1));
+    const input = applyOperations.mock.calls[0]![0] as {
+      baseRevision: number;
+      ops: Array<Record<string, unknown>>;
+    };
+    expect(input.baseRevision).toBe(1);
+    expect(input.ops[0]).toMatchObject({
+      op: 'update_object',
+      target: 'blk_cmp',
+    });
+    expect(JSON.stringify(input.ops[0]!.payload)).toContain('新进度');
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: '编辑组件' })).toBeNull(),
+    );
+    expect(await screen.findByText('组件已保存')).toBeTruthy();
+  });
+
+  it('degrades an unknown component payload to a readable card', async () => {
+    const getObject = vi.fn(async () => ({
+      id: 'obj_1',
+      type: 'component',
+      payload: {
+        format: 'alter-component/1',
+        componentId: 'builtin/missing',
+        componentVersion: 1,
+        props: {},
+      },
+    }));
+    mount({ initialDoc: componentDoc, getObject });
+    expect(
+      await screen.findByText(/未知组件：builtin\/missing/),
+    ).toBeTruthy();
   });
 });
 
