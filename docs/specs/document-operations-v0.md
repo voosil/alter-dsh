@@ -36,6 +36,8 @@ updated: 2026-11-10
 
 - 批量**全有或全无**：任一 op 校验或执行失败 → 整个事务回滚，返回逐 op 错误数组
   `[{ index, code, message }]`。
+- **单批上限 8192 个 operation**：覆盖单文档最大顶层块数的全量替换、清空与版本恢复（一次保存
+  可能等于「删除全部顶层块 + 插入全部新块」）；超限返回 `op/invalid`。
 - 所有 op 的 target 必须是当前文档内存在的 block id（或明确的父/锚点），不做模糊文本定位。
 - 服务端执行顺序：resolve → validate（schema/权限/大小）→ 计算 diff → 事务写入 AST →
   追加 op log → revision+1 → 返回。

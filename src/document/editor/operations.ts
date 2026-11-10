@@ -42,8 +42,14 @@ import {
   inlineKey,
 } from './canonical';
 
-/** Host limit for one operation batch (`validateOperationsShape`). */
-export const MAX_DIFF_OPERATIONS = 64;
+/**
+ * Host limit for one operation batch (`validateOperationsShape`).
+ *
+ * A full-document save emits one delete per removed top-level block plus one
+ * insert, so the batch cap covers the maximum document block count; raising it
+ * removes the old "changes too large" dead end for select-all replacements.
+ */
+export const MAX_DIFF_OPERATIONS = 8_192;
 
 /** Raised when one edit would need more operations than the Host accepts. */
 export class DocumentDiffError extends Error {
@@ -65,7 +71,7 @@ type BlockAction = 'keep' | 'replace' | 'update_attrs' | 'reinsert';
  *
  * @param oldDoc - document currently stored on the Host (base revision).
  * @param newDoc - document produced from the editor.
- * @param limit - maximum batch length (defaults to the Host's 64).
+ * @param limit - maximum batch length (defaults to the Host's batch cap).
  */
 export function computeOperations(
   oldDoc: AlterDoc,
@@ -75,7 +81,7 @@ export function computeOperations(
   const ops = diffBlocks(oldDoc.blocks, newDoc.blocks);
   if (ops.length > limit) {
     throw new DocumentDiffError(
-      `变更过大：需要 ${ops.length} 个操作，超过单次上限 ${limit}。请分批保存后再试。`,
+      `变更过大：需要 ${ops.length} 个操作，超过单次上限 ${limit}。请缩小本次改动后再保存。`,
     );
   }
   return ops;

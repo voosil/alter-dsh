@@ -317,3 +317,64 @@
   font-family: var(--alter-font-mono);
   font-size: var(--alter-font-caption);
 }
+
+/* ------------------------------------------------------------------------- */
+/* Crash-draft recovery banner                                                */
+/* ------------------------------------------------------------------------- */
+
+.draftBanner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  max-width: 760px;
+  margin: 0 auto 20px;
+  padding: 10px 14px;
+  border: 1px solid var(--alter-control-line);
+  border-left: 3px solid var(--alter-accent, #d1512a);
+  border-radius: var(--alter-radius-control);
+  background: var(--alter-surface-raised);
+  color: var(--alter-text);
+  font-size: var(--alter-font-body-sm);
+}
+
+.draftBanner[data-kind='conflict'] {
+  border-left-color: var(--alter-danger);
+}
+
+.draftText {
+  flex: 1;
+  min-width: 220px;
+}
+
+.draftActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.draftAction {
+  padding: 4px 10px;
+  border: 1px solid var(--alter-control-line);
+  border-radius: var(--alter-radius-xs);
+  background: transparent;
+  color: var(--alter-text);
+  font-family: var(--alter-font-family);
+  font-size: var(--alter-font-caption);
+  cursor: pointer;
+}
+
+.draftAction:hover {
+  background: var(--alter-surface-hover);
+}
+
+.draftAction:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: 1px;
+}
+
+.draftError {
+  flex-basis: 100%;
+  color: var(--alter-danger);
+  font-size: var(--alter-font-caption);
+}

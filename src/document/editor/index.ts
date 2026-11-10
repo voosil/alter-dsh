@@ -9,6 +9,7 @@
 export {
   AlterTiptapEditor,
   type AlterTiptapEditorProps,
+  type EditorRestoreRequest,
 } from './AlterTiptapEditor';
 export {
   astToTiptap,

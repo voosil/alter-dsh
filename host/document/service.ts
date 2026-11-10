@@ -27,6 +27,7 @@ import {
   ALTER_DOC_FORMAT,
   ALTER_DOC_SCHEMA_VERSION,
   DocumentError,
+  MAX_OPERATION_BATCH,
   parseAlterDoc,
   serializeAlterDoc,
   tryParseAlterDoc,
@@ -707,8 +708,11 @@ export function createDocumentService(
           });
         }
         if (ops.length === 0) throw new DocumentError('op/invalid', '没有可恢复的内容');
-        if (ops.length > 64)
-          throw new DocumentError('op/invalid', '文档顶层块过多，请分批恢复');
+        if (ops.length > MAX_OPERATION_BATCH)
+          throw new DocumentError(
+            'op/invalid',
+            `历史版本恢复需要 ${ops.length} 个 operation，超过单批上限 ${MAX_OPERATION_BATCH}`,
+          );
         const result = applyDocumentOperations(doc, ops, input.docId, at, {
           sidecar,
           actor,

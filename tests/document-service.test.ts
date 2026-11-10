@@ -265,6 +265,56 @@ describe('document service', () => {
     await store.close();
   });
 
+  it('restores a version that needs more than 64 operations', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'alter-space-restore-large-'));
+    dirs.push(dir);
+    const store = await openSpaceStore({ directory: dir, now: fixedNow });
+    let clock = new Date('2026-11-09T00:00:00.000Z');
+    const service = createDocumentService({ store, now: () => clock });
+    const lines = Array.from({ length: 80 }, (_, index) => `第 ${index} 行`).join(
+      '\n\n',
+    );
+    const created = await service.generate({
+      spaceId: DEFAULT_SPACE_ID,
+      markdown: `${lines}\n`,
+    });
+    expect((await service.get(created.docId)).doc.blocks).toHaveLength(80);
+    const initialVersion = store
+      .read()
+      .versions.filter((version) => version.docId === created.docId)[0];
+    expect(initialVersion).toBeDefined();
+
+    clock = new Date('2026-11-09T00:10:00.000Z');
+    const firstBlock = (await service.get(created.docId)).doc.blocks[0]!;
+    await service.applyOperations({
+      docId: created.docId,
+      baseRevision: 1,
+      ops: [
+        {
+          op: 'update_text',
+          target: firstBlock.id,
+          edits: [{ oldText: '第 0 行', newText: '改过的第一行' }],
+        },
+      ],
+    });
+    expect((await service.read(created.docId)).markdown).toContain('改过的第一行');
+
+    clock = new Date('2026-11-09T00:20:00.000Z');
+    const restored = await service.restoreVersion({
+      docId: created.docId,
+      versionId: initialVersion!.id,
+      baseRevision: 2,
+    });
+    expect(restored.revision).toBe(3);
+    const doc = await service.get(created.docId);
+    expect(doc.doc.blocks).toHaveLength(80);
+    expect((await service.read(created.docId)).markdown).toContain('第 0 行');
+    expect((await service.read(created.docId)).markdown).not.toContain(
+      '改过的第一行',
+    );
+    await store.close();
+  });
+
   it('searches AST text and skips non-AST content', async () => {
     const { store } = await tempStore();
     const service = createDocumentService({ store, now: fixedNow });

@@ -567,20 +567,29 @@ describe('computeOperations (verified with the Host engine)', () => {
     expect(expectAppliesTo(oldDoc, next, ops)).toEqual(next.blocks);
   });
 
-  it('rejects edits that need more operations than the limit', () => {
-    const oldBlocks = Array.from({ length: MAX_DIFF_OPERATIONS + 6 }, (_, i) =>
+  it('accepts batches above the former 64-operation cap', () => {
+    const oldBlocks = Array.from({ length: 200 }, (_, i) =>
       paragraph(`blk_p${i}`, `旧 ${i}`),
     );
-    const newBlocks = oldBlocks.map((item, i) =>
-      paragraph(`blk_p${i}`, `新 ${i}`),
+    const newBlocks = oldBlocks.map((item, i) => paragraph(`blk_p${i}`, `新 ${i}`));
+    const ops = computeOperations(makeDoc(oldBlocks), makeDoc(newBlocks));
+    expect(ops.length).toBeGreaterThan(64);
+    expect(ops.length).toBeLessThanOrEqual(MAX_DIFF_OPERATIONS);
+    expect(expectAppliesTo(makeDoc(oldBlocks), makeDoc(newBlocks), ops)).toEqual(
+      newBlocks,
     );
-    expect(() => computeOperations(makeDoc(oldBlocks), makeDoc(newBlocks))).toThrow(
-      DocumentDiffError,
+  });
+
+  it('rejects edits that exceed the configured batch limit', () => {
+    const oldBlocks = Array.from({ length: 8 }, (_, i) =>
+      paragraph(`blk_p${i}`, `旧 ${i}`),
     );
-    expect(() => computeOperations(makeDoc(oldBlocks), makeDoc(newBlocks))).toThrow(
-      /变更过大/,
-    );
-    // A custom limit is honoured too.
+    const newBlocks = oldBlocks.map((item, i) => paragraph(`blk_p${i}`, `新 ${i}`));
+    // A custom limit is honoured (the Host cap itself now exceeds the largest
+    // possible document, so only an explicitly smaller limit can trigger this).
+    expect(() =>
+      computeOperations(makeDoc(oldBlocks), makeDoc(newBlocks), 3),
+    ).toThrow(DocumentDiffError);
     expect(() =>
       computeOperations(makeDoc(oldBlocks), makeDoc(newBlocks), 3),
     ).toThrow(/变更过大/);

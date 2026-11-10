@@ -84,7 +84,6 @@
 }
 
 .toolButton:focus-visible,
-.saveButton:focus-visible,
 .statusAction:focus-visible {
   outline: var(--alter-focus-width, 2px) solid var(--alter-focus-ring, var(--alter-accent));
   outline-offset: 1px;
@@ -94,39 +93,10 @@
   flex: 1;
 }
 
-.dirtyState {
-  color: var(--alter-text-muted);
+.savingHint {
+  color: var(--alter-text-faint);
   font-size: var(--alter-font-caption);
   white-space: nowrap;
-}
-
-.dirtyState[data-dirty='true'] {
-  color: var(--alter-accent-strong);
-  font-weight: 600;
-}
-
-.saveButton {
-  height: 30px;
-  padding: 0 16px;
-  border: 1px solid transparent;
-  border-radius: var(--alter-radius-control);
-  background: var(--alter-action-background);
-  color: var(--alter-action-text);
-  font-family: var(--alter-font-family);
-  font-size: var(--alter-font-body-sm);
-  cursor: pointer;
-  transition:
-    background-color 120ms ease,
-    opacity 120ms ease;
-}
-
-.saveButton:hover:not(:disabled) {
-  background: var(--alter-action-hover);
-}
-
-.saveButton:disabled {
-  cursor: default;
-  opacity: 0.55;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -155,6 +125,11 @@
 .status[data-kind='error'] {
   background: var(--alter-danger-soft);
   color: var(--alter-danger);
+}
+
+.status[data-kind='conflict'] {
+  background: var(--alter-surface-rail);
+  color: var(--alter-text-secondary);
 }
 
 .statusText {
@@ -561,26 +536,6 @@
   color: var(--alter-danger);
 }
 
-/* ------------------------------------------------------------------------- */
-/* Footer                                                                     */
-/* ------------------------------------------------------------------------- */
-
-.footer {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-  padding: 8px var(--alter-content-inset, 48px);
-  border-top: 1px solid var(--alter-border);
-  background: var(--alter-surface);
-  color: var(--alter-text-faint);
-  font-size: var(--alter-font-micro);
-}
-
-.footerDivider {
-  margin: 0 2px;
-}
-
 @media (max-width: 900px) {
   .toolbar {
     gap: var(--alter-space-1);
@@ -591,8 +546,7 @@
     padding: 20px 16px 64px;
   }
 
-  .status,
-  .footer {
+  .status {
     padding-left: 16px;
     padding-right: 16px;
   }

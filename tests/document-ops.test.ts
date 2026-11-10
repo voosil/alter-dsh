@@ -4,7 +4,9 @@ import {
   ALTER_DOC_FORMAT,
   ALTER_DOC_SCHEMA_VERSION,
   DocumentError,
+  MAX_BLOCK_COUNT,
   MAX_BLOCK_DEPTH,
+  MAX_OPERATION_BATCH,
   type AlterDoc,
   type BlockNode,
   type InlineNode,
@@ -18,6 +20,7 @@ import {
   createBlockNode,
   plainTextOfBlock,
   validateAlterDoc,
+  validateOperationsShape,
 } from '../host/document/schema.js';
 
 // ---------------------------------------------------------------------------
@@ -1354,5 +1357,53 @@ describe('batch semantics', () => {
         ),
       ).code,
     ).toBe('node/schema-invalid');
+  });
+});
+
+describe('operation batch limits', () => {
+  const deleteOps = (count: number): Operation[] =>
+    Array.from({ length: count }, (_, index) => ({
+      op: 'delete_block' as const,
+      target: `blk_limit_${index}`,
+    }));
+
+  it('keeps the batch cap above the maximum document block count', () => {
+    expect(MAX_OPERATION_BATCH).toBeGreaterThanOrEqual(MAX_BLOCK_COUNT ?? 0);
+    expect(() => validateOperationsShape(deleteOps(65))).not.toThrow();
+    expect(() =>
+      validateOperationsShape(deleteOps(MAX_OPERATION_BATCH)),
+    ).not.toThrow();
+    expect(() =>
+      validateOperationsShape(deleteOps(MAX_OPERATION_BATCH + 1)),
+    ).toThrow(/operation/);
+  });
+
+  it('applies a batch that rewrites more than 64 top-level blocks at once', () => {
+    const count = 100;
+    const blocks = Array.from({ length: count }, (_, index) =>
+      paragraph(`blk_batch_${index}`, `旧 ${index}`),
+    );
+    const replacements = Array.from({ length: count }, (_, index) =>
+      paragraph(`blk_batch_${index}`, `新 ${index}`),
+    );
+    const ops: Operation[] = [
+      ...blocks.map((block) => ({
+        op: 'delete_block' as const,
+        target: block.id,
+      })),
+      {
+        op: 'insert_blocks' as const,
+        parent: null,
+        index: 0,
+        blocks: replacements,
+      },
+    ];
+    expect(ops.length).toBeGreaterThan(64);
+    const result = applyOperations(makeDoc(blocks), ops, makeContext().ctx);
+    expect(result.doc.blocks).toHaveLength(count);
+    expect(plainTextOfBlock(result.doc.blocks[0]!)).toBe('新 0');
+    expect(plainTextOfBlock(result.doc.blocks[count - 1]!)).toBe(
+      `新 ${count - 1}`,
+    );
   });
 });

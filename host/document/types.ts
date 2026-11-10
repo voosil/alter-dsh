@@ -19,6 +19,13 @@ export const MAX_DOCUMENT_BYTES = 512 * 1024;
 export const MAX_BLOCK_DEPTH = 50;
 /** Upper bound for the number of blocks in one document. */
 export const MAX_BLOCK_COUNT = 5_000;
+/**
+ * Upper bound for one operation batch.
+ *
+ * One browser save may rewrite every top-level block (a delete per removed
+ * block plus one insert), so the batch cap must cover the document block cap.
+ */
+export const MAX_OPERATION_BATCH = 8_192;
 
 /** JSON value allowed in attributes and object payloads. */
 export type JsonValue =

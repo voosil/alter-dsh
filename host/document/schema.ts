@@ -14,6 +14,7 @@ import {
   MAX_BLOCK_COUNT,
   MAX_BLOCK_DEPTH,
   MAX_DOCUMENT_BYTES,
+  MAX_OPERATION_BATCH,
   isPlainObject,
   serializeAlterDoc,
   type AlterDoc,
@@ -590,7 +591,8 @@ export function validateAlterDoc(doc: AlterDoc): void {
 export function validateOperationsShape(ops: unknown): asserts ops is import('./types.js').Operation[] {
   if (!Array.isArray(ops) || ops.length === 0)
     fail('op/invalid', 'ops 必须是非空数组');
-  if (ops.length > 64) fail('op/invalid', '单次最多 64 个 operation');
+  if (ops.length > MAX_OPERATION_BATCH)
+    fail('op/invalid', `单次最多 ${MAX_OPERATION_BATCH} 个 operation`);
   for (const [index, op] of ops.entries()) {
     if (!isPlainObject(op) || typeof op.op !== 'string')
       fail('op/invalid', `第 ${index} 个 operation 缺少 op`);

@@ -1,21 +1,22 @@
 /**
  * Editable Tiptap surface for AST-backed Space documents.
  *
- * The component owns the interaction only: it projects the Host `AlterDoc`
- * into Tiptap (see `mapping.ts`), lets the user edit, and on save converts the
- * editor JSON back into blocks and turns the difference into Host Document
- * Operations (`operations.ts`). The Host stays the single source of truth;
- * `onSaved` hands the new revision and canonical document to the caller.
+ * The component owns the editing interaction and the P0 save lifecycle: it
+ * projects the Host `AlterDoc` into Tiptap (see `mapping.ts`), lets the user
+ * edit, and autosaves through the schedule/pipeline in `autosave.ts`:
  *
- * Failure behaviour:
- * - `doc/conflict` (someone else wrote the document) and any other Host error
- *   are shown as readable Chinese messages, with a "重新加载" action that
- *   re-fetches the current document;
- * - oversized diffs throw `DocumentDiffError` from the client before any RPC;
- * - a no-op save reports "没有需要保存的变更" instead of calling the Host with
- *   an empty operation batch (the Host rejects empty batches).
+ * - edits (body or title) are debounced ~700ms and saved silently;
+ * - only one save request is in flight; edits made meanwhile queue the next
+ *   cycle and the receipt never overwrites them;
+ * - a failed save keeps the local content, persists a draft and shows a
+ *   「保存失败，重试」action; a `doc/conflict` is reconciled against the Host
+ *   snapshot first and otherwise kept as a draft with actionable next steps;
+ * - switching documents / hiding the page flushes, and a crash draft is
+ *   recovered by `AlterDocumentView`.
  *
- * The dirty flag is reported through `onDirtyChange`; Cmd/Ctrl+S saves.
+ * External snapshots (parent refresh, version restore, draft recovery) are
+ * adopted without recreating the editor, so cursor, selection and undo history
+ * survive a save.
  *
  * @module @alter-dsh/space/document/editor/AlterTiptapEditor
  */
@@ -30,16 +31,33 @@ import {
   type ReactNode,
 } from 'react';
 import type { SpaceDocumentClient } from '../../space-client';
-import { SpaceRemoteError } from '../../space-client';
 import type { AlterDoc } from '../types';
-import { astToTiptap, tiptapToBlocks } from './mapping';
 import {
-  DocumentDiffError,
-  MAX_DIFF_OPERATIONS,
-  computeOperations,
-} from './operations';
+  createAutosaveController,
+  createDocumentSaver,
+  describeSaveError,
+  readSnapshot,
+  type AutosaveController,
+  type AutosaveStatus,
+  type DocumentSaver,
+  type DocumentSnapshotLike,
+} from './autosave';
+import {
+  DRAFT_FORMAT,
+  clearDocumentDraft,
+  writeDocumentDraft,
+} from './draft';
+import { astToTiptap } from './mapping';
 import { editorExtensions } from './schema';
 import styles from './AlterTiptapEditor.module.css';
+
+/** A draft injected into the editor by the surrounding view. */
+export interface EditorRestoreRequest {
+  /** Exact Tiptap JSON of the draft to restore. */
+  editor: JSONContent;
+  /** Revision the restored content must be saved against. */
+  revision: number;
+}
 
 /** Props of the editable document surface. */
 export interface AlterTiptapEditorProps {
@@ -49,96 +67,22 @@ export interface AlterTiptapEditorProps {
   initialDoc: AlterDoc;
   /** Revision the snapshot was loaded at; used as the CAS base. */
   baseRevision: number;
+  /** Server title of the loaded snapshot (title-diff baseline). */
+  initialTitle: string;
+  /** Controlled title; changes are autosaved together with the body. */
+  title: string;
   /** Document RPC client (see `SpaceDocumentClient`). */
   client: SpaceDocumentClient;
-  /** Called after a successful save with the new revision and document. */
-  onSaved: (revision: number, doc: AlterDoc) => void;
-  /** Optional dirty-state report for the surrounding view. */
-  onDirtyChange?: (dirty: boolean) => void;
-}
-
-type EditorStatus =
-  | { kind: 'idle' }
-  | { kind: 'info' | 'success'; message: string }
-  | { kind: 'error'; message: string; reloadable?: boolean };
-
-interface SnapshotLike {
-  doc: AlterDoc;
-  revision: number;
-}
-
-/** Turn any thrown value into a readable Chinese save error. */
-function describeSaveError(error: unknown): string {
-  if (error instanceof DocumentDiffError) return error.message;
-  if (error instanceof SpaceRemoteError) {
-    switch (error.code) {
-      case 'doc/conflict':
-        return '文档已被其他修改（revision 冲突）。请点「重新加载」获取最新内容后再编辑保存。';
-      case 'doc/not-found':
-        return '文档不存在或已被删除，请刷新页面后重试。';
-      case 'doc/too-large':
-        return '文档超过服务端体量上限，无法保存。请精简内容后重试。';
-      case 'doc/schema-invalid':
-      case 'node/schema-invalid':
-        return `文档结构未通过服务端校验：${error.message}`;
-      case 'node/not-found':
-        return '编辑期间部分块已被其他操作删除，请重新加载后再保存。';
-      case 'node/not-writable':
-        return `当前节点类型不允许该修改：${error.message}`;
-      case 'node/unsupported-transform':
-        return `不支持该节点类型转换：${error.message}`;
-      case 'op/invalid':
-        return `保存操作未被服务端接受：${error.message}`;
-      case 'idempotency/conflict':
-        return '保存请求与之前的重复请求不一致，请重新加载后再保存。';
-      default:
-        return `保存失败：${error.message}`;
-    }
-  }
-  if (error instanceof Error) {
-    if (error.message.includes('变更过大')) return error.message;
-    return `保存失败：${error.message}`;
-  }
-  return '保存失败：未知错误';
-}
-
-function describeEditError(error: unknown): string {
-  if (error instanceof DocumentDiffError) return error.message;
-  if (error instanceof Error) return `无法生成保存操作：${error.message}`;
-  return '无法生成保存操作：未知错误';
-}
-
-function readRevision(value: unknown): number | undefined {
-  if (typeof value !== 'object' || value === null) return undefined;
-  const revision = (value as Record<string, unknown>)['revision'];
-  return typeof revision === 'number' &&
-    Number.isInteger(revision) &&
-    revision >= 0
-    ? revision
-    : undefined;
-}
-
-function readSnapshot(value: unknown): SnapshotLike | undefined {
-  if (typeof value !== 'object' || value === null) return undefined;
-  const record = value as Record<string, unknown>;
-  const doc = record['doc'];
-  if (typeof doc !== 'object' || doc === null) return undefined;
-  const docRecord = doc as Record<string, unknown>;
-  if (docRecord['format'] !== 'alter-doc/1') return undefined;
-  if (!Array.isArray(docRecord['blocks'])) return undefined;
-  const revision =
-    readRevision(record) ?? readRevision(docRecord);
-  if (revision === undefined) return undefined;
-  return { doc: doc as AlterDoc, revision };
-}
-
-function createIdempotencyKey(): string | undefined {
-  const cryptoApi = (
-    globalThis as { crypto?: { randomUUID?: () => string } }
-  ).crypto;
-  return typeof cryptoApi?.randomUUID === 'function'
-    ? `editor-${cryptoApi.randomUUID()}`
-    : undefined;
+  /** Persist the title through `space.saveNode` (metadata only). */
+  saveTitle?: (title: string) => Promise<unknown>;
+  /** Called after a confirmed save with the new revision and document. */
+  onSaved: (revision: number, doc: AlterDoc, title: string) => void;
+  /** Ask the view to adopt a server-side title (reload/discard actions). */
+  onAdoptTitle?: (title: string) => void;
+  /** Draft content to inject (view recovery banner). */
+  restore?: EditorRestoreRequest | null;
+  /** Read-only while the view resolves a draft banner. */
+  readOnly?: boolean;
 }
 
 function ToolButton(props: {
@@ -173,62 +117,112 @@ export function AlterTiptapEditor({
   docId,
   initialDoc,
   baseRevision,
+  initialTitle,
+  title,
   client,
+  saveTitle,
   onSaved,
-  onDirtyChange,
+  onAdoptTitle,
+  restore,
+  readOnly = false,
 }: AlterTiptapEditorProps) {
+  const [status, setStatus] = useState<AutosaveStatus>({ kind: 'idle' });
   const [dirty, setDirty] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [savedRevision, setSavedRevision] = useState(baseRevision);
-  const [status, setStatus] = useState<EditorStatus>({ kind: 'idle' });
 
-  const dirtyRef = useRef(false);
-  const savingRef = useRef(false);
   const loadingRef = useRef(false);
-  const oldDocRef = useRef<AlterDoc>(initialDoc);
-  const baseRevisionRef = useRef(baseRevision);
+  const disposedRef = useRef(false);
+  const latestEditorJsonRef = useRef<JSONContent | undefined>(undefined);
+  const currentTitleRef = useRef(title);
+  currentTitleRef.current = title;
+  const lastSeenTitleRef = useRef(initialTitle);
   const onSavedRef = useRef(onSaved);
   onSavedRef.current = onSaved;
-  const onDirtyChangeRef = useRef(onDirtyChange);
-  onDirtyChangeRef.current = onDirtyChange;
-  const saveRef = useRef<() => Promise<void>>(async () => undefined);
+  const onAdoptTitleRef = useRef(onAdoptTitle);
+  onAdoptTitleRef.current = onAdoptTitle;
+  const saveTitleRef = useRef(saveTitle);
+  saveTitleRef.current = saveTitle;
+  const clientRef = useRef(client);
+  clientRef.current = client;
+
   const externalToken = `${docId}#${baseRevision}#${initialDoc.revision}`;
   const lastExternalTokenRef = useRef(externalToken);
-
-  const markDirty = useCallback((next: boolean) => {
-    if (dirtyRef.current === next) return;
-    dirtyRef.current = next;
-    setDirty(next);
-  }, []);
 
   // Project the snapshot once per loaded document; re-renders caused by
   // toolbar state must not re-run the AST projection for large documents.
   const projectedContent = useMemo(() => astToTiptap(initialDoc), [initialDoc]);
+  if (latestEditorJsonRef.current === undefined) {
+    latestEditorJsonRef.current = projectedContent;
+  }
+
+  // Save pipeline + scheduler are created once per mounted document. Their
+  // callbacks read refs, so they always see the latest editor/title state.
+  const saverRef = useRef<DocumentSaver | null>(null);
+  if (saverRef.current === null) {
+    saverRef.current = createDocumentSaver({
+      docId,
+      client,
+      initialDoc,
+      baseRevision,
+      initialTitle,
+      getEditorJson: () => latestEditorJsonRef.current,
+      getTitle: () => currentTitleRef.current,
+      saveTitle: (next) =>
+        saveTitleRef.current === undefined
+          ? Promise.resolve()
+          : saveTitleRef.current(next),
+      onSaved: (revision, doc, savedTitle) => {
+        // Our own save echo must not be treated as an external snapshot.
+        lastExternalTokenRef.current = `${docId}#${revision}#${revision}`;
+        if (disposedRef.current) return;
+        onSavedRef.current(revision, doc, savedTitle);
+      },
+    });
+  }
+  const saver = saverRef.current;
+
+  const controllerRef = useRef<AutosaveController | null>(null);
+  if (controllerRef.current === null) {
+    controllerRef.current = createAutosaveController({
+      captureDraft: () => {
+        const editorJson = latestEditorJsonRef.current;
+        if (editorJson === undefined) return undefined;
+        const { baseRevision: base, savedRevision } = saverRef.current!.context();
+        return {
+          format: DRAFT_FORMAT,
+          docId,
+          title: currentTitleRef.current,
+          editor: editorJson,
+          baseRevision: base,
+          savedRevision,
+        };
+      },
+      writeDraft: (draft) => writeDocumentDraft(draft),
+      clearDraft: () => clearDocumentDraft(docId),
+      save: () => saverRef.current!.save(),
+      onStatus: (next) => {
+        if (disposedRef.current) return;
+        setStatus(next);
+        setDirty(next.kind !== 'idle');
+      },
+    });
+  }
+  const controller = controllerRef.current;
 
   const editor = useEditor({
     extensions: editorExtensions,
     content: projectedContent,
+    editable: !readOnly,
     editorProps: {
       attributes: {
         class: styles.tiptap,
         'data-doc-format': 'alter-doc/1',
         'aria-label': '结构化文档正文',
       },
-      handleKeyDown: (_view, event) => {
-        if (
-          (event.metaKey || event.ctrlKey) &&
-          event.key.toLowerCase() === 's'
-        ) {
-          event.preventDefault();
-          void saveRef.current();
-          return true;
-        }
-        return false;
-      },
     },
     onUpdate: () => {
       if (loadingRef.current) return;
-      markDirty(true);
+      latestEditorJsonRef.current = editor.getJSON() as JSONContent;
+      controller.notifyChange();
     },
   });
 
@@ -237,125 +231,162 @@ export function AlterTiptapEditor({
   useEffect(() => {
     if (lastExternalTokenRef.current === externalToken) return;
     lastExternalTokenRef.current = externalToken;
-    oldDocRef.current = initialDoc;
-    baseRevisionRef.current = baseRevision;
-    setSavedRevision(baseRevision);
-    markDirty(false);
-    setStatus({ kind: 'idle' });
+    saver.adopt(initialDoc, baseRevision, initialTitle);
+    lastSeenTitleRef.current = initialTitle;
+    latestEditorJsonRef.current = projectedContent;
+    controller.reset();
     loadingRef.current = true;
     editor.commands.setContent(projectedContent, { emitUpdate: false });
     loadingRef.current = false;
-  }, [externalToken, editor, projectedContent, baseRevision, markDirty]);
+  }, [
+    externalToken,
+    editor,
+    projectedContent,
+    baseRevision,
+    initialTitle,
+    initialDoc,
+    saver,
+    controller,
+  ]);
+
+  // Title edits go through the same debounced save cycle as the body.
+  useEffect(() => {
+    if (title === lastSeenTitleRef.current) return;
+    lastSeenTitleRef.current = title;
+    controller.notifyChange();
+  }, [title, controller]);
+
+  // A draft chosen in the view's recovery banner is injected here.
+  const appliedRestoreRef = useRef<EditorRestoreRequest | null>(null);
+  useEffect(() => {
+    if (restore === null || restore === undefined) {
+      appliedRestoreRef.current = null;
+      return;
+    }
+    if (appliedRestoreRef.current === restore) return;
+    appliedRestoreRef.current = restore;
+    loadingRef.current = true;
+    editor.commands.setContent(restore.editor, { emitUpdate: false });
+    loadingRef.current = false;
+    latestEditorJsonRef.current = restore.editor;
+    controller.notifyChange();
+  }, [restore, editor, controller]);
 
   useEffect(() => {
-    onDirtyChangeRef.current?.(dirty);
-  }, [dirty]);
+    editor.setEditable(!readOnly);
+  }, [editor, readOnly]);
 
+  // Cmd/Ctrl+S flushes immediately; leaving/hiding the page saves or drafts.
   useEffect(() => {
-    if (!dirty) return;
-    const warn = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      event.returnValue = '';
+    const flush = (): void => {
+      void controller.flush();
     };
-    window.addEventListener('beforeunload', warn);
-    return () => window.removeEventListener('beforeunload', warn);
-  }, [dirty]);
+    const onVisibilityChange = (): void => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+    const onPageHide = (): void => flush();
+    const onBeforeUnload = (event: Event): void => {
+      if (!controller.hasPending()) return;
+      controller.persistDraftNow();
+      event.preventDefault();
+      (event as unknown as { returnValue?: string }).returnValue = '';
+    };
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault();
+        flush();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('pagehide', onPageHide);
+    window.addEventListener('beforeunload', onBeforeUnload);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener('beforeunload', onBeforeUnload);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [controller]);
 
-  const handleSave = useCallback(async () => {
-    if (savingRef.current) return;
-    if (!dirtyRef.current) {
-      setStatus({ kind: 'info', message: '没有需要保存的变更。' });
-      return;
-    }
-    const base = baseRevisionRef.current;
-    const currentDoc = oldDocRef.current;
-    let newDoc: AlterDoc;
-    let ops: ReturnType<typeof computeOperations>;
-    let savedEditorJson: JSONContent;
-    try {
-      savedEditorJson = editor.getJSON() as JSONContent;
-      newDoc = {
-        format: 'alter-doc/1',
-        schemaVersion: currentDoc.schemaVersion,
-        revision: base,
-        blocks: tiptapToBlocks(savedEditorJson),
-      };
-      ops = computeOperations(currentDoc, newDoc);
-    } catch (error) {
-      setStatus({ kind: 'error', message: describeEditError(error) });
-      return;
-    }
-    if (ops.length === 0) {
-      markDirty(false);
-      setStatus({ kind: 'info', message: '没有需要保存的变更。' });
-      return;
-    }
-    savingRef.current = true;
-    setSaving(true);
-    setStatus({ kind: 'info', message: '正在保存…' });
-    try {
-      const result = await client.applyOperations({
-        docId,
-        baseRevision: base,
-        ops,
-        idempotencyKey: createIdempotencyKey(),
-      });
-      const revision = readRevision(result) ?? base + 1;
-      const savedDoc: AlterDoc = { ...newDoc, revision };
-      oldDocRef.current = savedDoc;
-      baseRevisionRef.current = revision;
-      setSavedRevision(revision);
-      // The parent will re-render with this revision; do not reset the editor
-      // (and its undo history) for our own save echo.
-      lastExternalTokenRef.current = `${docId}#${revision}#${revision}`;
-      // Keep the surface dirty when the user typed while the request was in
-      // flight: those edits are not part of `savedDoc`.
-      const stillSame =
-        JSON.stringify(editor.getJSON()) === JSON.stringify(savedEditorJson);
-      markDirty(!stillSame);
-      onSavedRef.current(revision, savedDoc);
-      setStatus({
-        kind: 'success',
-        message: `已保存（revision ${revision}）。`,
-      });
-    } catch (error) {
-      setStatus({
-        kind: 'error',
-        message: describeSaveError(error),
-        reloadable: true,
-      });
-    } finally {
-      savingRef.current = false;
-      setSaving(false);
-    }
-  }, [client, docId, editor, markDirty]);
+  // Switching documents / unmounting: persist the draft and try one last save.
+  useEffect(() => {
+    return () => {
+      disposedRef.current = true;
+      controller.dispose();
+    };
+  }, [controller]);
 
-  saveRef.current = handleSave;
+  /** Replace the editor content with a freshly loaded Host snapshot. */
+  const applyServerSnapshot = useCallback(
+    (snapshot: DocumentSnapshotLike): void => {
+      const nextTitle = snapshot.title ?? lastSeenTitleRef.current;
+      saver.adopt(snapshot.doc, snapshot.revision, nextTitle);
+      lastSeenTitleRef.current = nextTitle;
+      lastExternalTokenRef.current = `${docId}#${snapshot.revision}#${snapshot.revision}`;
+      const nextContent = astToTiptap(snapshot.doc);
+      latestEditorJsonRef.current = nextContent;
+      loadingRef.current = true;
+      editor.commands.setContent(nextContent, { emitUpdate: false });
+      loadingRef.current = false;
+      controller.reset();
+      if (!disposedRef.current) {
+        onSavedRef.current(snapshot.revision, snapshot.doc, nextTitle);
+        onAdoptTitleRef.current?.(nextTitle);
+      }
+    },
+    [controller, docId, editor, saver],
+  );
+
+  const handleRetry = useCallback(() => {
+    void controller.retry();
+  }, [controller]);
 
   const handleReload = useCallback(async () => {
-    setStatus({ kind: 'info', message: '正在重新加载…' });
     try {
-      const snapshot = readSnapshot(await client.get(docId));
+      const snapshot = readSnapshot(await clientRef.current.get(docId));
       if (snapshot === undefined) {
         throw new Error('服务端返回的文档结构无法识别');
       }
-      oldDocRef.current = snapshot.doc;
-      baseRevisionRef.current = snapshot.revision;
-      setSavedRevision(snapshot.revision);
-      loadingRef.current = true;
-      editor.commands.setContent(astToTiptap(snapshot.doc), {
-        emitUpdate: false,
-      });
-      loadingRef.current = false;
-      markDirty(false);
-      setStatus({
-        kind: 'success',
-        message: `已重新加载（revision ${snapshot.revision}）。`,
-      });
+      applyServerSnapshot(snapshot);
     } catch (error) {
-      setStatus({ kind: 'error', message: describeSaveError(error) });
+      controller.fail(describeSaveError(error));
     }
-  }, [client, docId, editor, markDirty]);
+  }, [applyServerSnapshot, controller, docId]);
+
+  // Conflict: keep the local content, adopt the latest Host revision as the
+  // new CAS base and save the local content over it (explicit user choice).
+  const handleKeepLocal = useCallback(async () => {
+    try {
+      const snapshot = readSnapshot(await clientRef.current.get(docId));
+      if (snapshot === undefined) {
+        throw new Error('服务端返回的文档结构无法识别');
+      }
+      const nextTitle = snapshot.title ?? lastSeenTitleRef.current;
+      saver.adopt(snapshot.doc, snapshot.revision, nextTitle);
+      lastExternalTokenRef.current = `${docId}#${snapshot.revision}#${snapshot.revision}`;
+      if (!disposedRef.current) {
+        onSavedRef.current(snapshot.revision, snapshot.doc, nextTitle);
+      }
+      await controller.retry();
+    } catch (error) {
+      controller.fail(describeSaveError(error));
+    }
+  }, [controller, docId, saver]);
+
+  // Conflict: drop the local content and load the current Host document.
+  const handleDiscardLocal = useCallback(async () => {
+    try {
+      const snapshot = readSnapshot(await clientRef.current.get(docId));
+      if (snapshot === undefined) {
+        throw new Error('服务端返回的文档结构无法识别');
+      }
+      clearDocumentDraft(docId);
+      applyServerSnapshot(snapshot);
+    } catch (error) {
+      controller.fail(describeSaveError(error));
+    }
+  }, [applyServerSnapshot, docId]);
 
   const active = useEditorState({
     editor,
@@ -391,7 +422,7 @@ export function AlterTiptapEditor({
   };
 
   return (
-    <section className={styles.editor} data-doc-editor="tiptap">
+    <section className={styles.editor} data-doc-editor="tiptap" data-dirty={dirty ? 'true' : 'false'}>
       <div className={styles.toolbar} role="toolbar" aria-label="文档编辑工具栏">
         <ToolGroup>
           <ToolButton
@@ -506,53 +537,52 @@ export function AlterTiptapEditor({
           />
         </ToolGroup>
         <div className={styles.toolbarSpacer} />
-        <span
-          className={styles.dirtyState}
-          data-dirty={dirty ? 'true' : 'false'}
-          aria-live="polite"
-        >
-          {saving ? '保存中…' : dirty ? '未保存' : '已同步'}
-        </span>
-        <button
-          type="button"
-          className={styles.saveButton}
-          disabled={saving}
-          onClick={() => void handleSave()}
-        >
-          {saving ? '保存中…' : '保存'}
-        </button>
+        {status.kind === 'saving' ? (
+          <span className={styles.savingHint}>保存中…</span>
+        ) : null}
       </div>
 
-      {status.kind === 'idle' ? null : (
-        <div
-          className={styles.status}
-          data-kind={status.kind}
-          role={status.kind === 'error' ? 'alert' : 'status'}
-        >
+      {status.kind === 'failed' ? (
+        <div className={styles.status} data-kind="error" role="alert">
           <span className={styles.statusText}>{status.message}</span>
-          {status.kind === 'error' && status.reloadable === true ? (
-            <button
-              type="button"
-              className={styles.statusAction}
-              onClick={() => void handleReload()}
-            >
-              重新加载
-            </button>
-          ) : null}
+          <button
+            type="button"
+            className={styles.statusAction}
+            onClick={handleRetry}
+          >
+            保存失败，重试
+          </button>
+          <button
+            type="button"
+            className={styles.statusAction}
+            onClick={() => void handleReload()}
+          >
+            重新加载
+          </button>
         </div>
-      )}
+      ) : status.kind === 'conflict' ? (
+        <div className={styles.status} data-kind="conflict" role="alert">
+          <span className={styles.statusText}>{status.message}</span>
+          <button
+            type="button"
+            className={styles.statusAction}
+            onClick={() => void handleKeepLocal()}
+          >
+            保留本地草稿并重新加载
+          </button>
+          <button
+            type="button"
+            className={styles.statusAction}
+            onClick={() => void handleDiscardLocal()}
+          >
+            丢弃草稿
+          </button>
+        </div>
+      ) : null}
 
       <div className={styles.surface}>
         <EditorContent editor={editor} className={styles.content} />
       </div>
-
-      <footer className={styles.footer}>
-        <span>revision {savedRevision}</span>
-        <span className={styles.footerDivider}>·</span>
-        <span>保存会转换为 Document Operations（单次最多 {MAX_DIFF_OPERATIONS} 个）</span>
-        <span className={styles.footerDivider}>·</span>
-        <span>⌘/Ctrl + S 保存</span>
-      </footer>
     </section>
   );
 }
