@@ -24,8 +24,8 @@ updated: 2026-11-10
 - 所有 Space note 正文只有 `alter-doc/1` 一种格式；工具不感知也不接受其他正文格式，非法存储内容
   以 `doc/schema-invalid` 报错。
 - 未知/不可写节点在结果中以占位出现，并附 `unsupported` 说明。
-- 工具错误使用 [document-operations-v0.md](document-operations-v0.md) §5 的错误码；写工具能力受
-  registry `ai.ops` 与全局写策略约束。
+- 工具错误使用 [document-operations-v0.md](document-operations-v0.md) §5 的错误码；对象读取的
+  `object/not-found` 是工具层补充码。写工具能力受 registry `ai.ops` 与全局写策略约束。
 
 ## 2. 工具契约
 
@@ -71,7 +71,7 @@ updated: 2026-11-10
 
 - 与 [document-operations-v0.md](document-operations-v0.md) §1–§3 一一对应；批量 op 整批全有或全无，
   任一 op 校验失败时工具报错（错误码见 §5），不返回部分变更。
-- 同一 `idempotency_key` 重放返回原结果（契约保留窗口 24h；当前实现未做过期裁剪）。
+- 同一 `idempotency_key` 重放返回原结果（当前实现不做过期裁剪）。
 - `update_text` 的 `oldText` 使用 textblock 的**纯文本**（不含 `**`、`==` 等 Markdown marks），
   从 `space_doc_read` 的投影正文去掉行内标记即可得到。
 - `dry_run` 用于预览：返回 diff，不落盘。
@@ -110,9 +110,9 @@ updated: 2026-11-10
 输出：{ doc_id, revision, changed_block_ids, title }
 ```
 
-- 仅生成**新内容**：创建文档或向明确位置插入；内部使用 `insert_markdown` / `replace_block`，
-  不触碰其他块。
-- 不传 `doc_id` 时新建 revision 1 的 AST 空文档，再写入本次生成内容。
+- 仅生成**新内容**：创建文档或向明确位置插入；内部只使用 `insert_markdown`（新文档在同一事务写入
+  初始块），不触碰已有块。
+- 不传 `doc_id` 时新建 revision 1 的 AST 文档，并在同一事务写入本次生成内容（无内容时为空文档）。
 - `markdown` 必须走投影解析（见 [document-model-v0.md](document-model-v0.md) §7.3）；未知语法报错，
   不静默降级。
 
@@ -131,8 +131,8 @@ updated: 2026-11-10
   `space_object_update` 写入前按目录 schema 校验，未知组件、未知 props、类型/必填/长度/范围/
   列表项越界一律 fail-closed（`object/invalid`）。
 - `space_object_update` 内部走 `update_object` op（同一事务创建新对象 + 替换引用）。
-- 只有 registry 声明 `ai.writable` 的对象类型可用；application 组件只允许改目录 `ai_writable`
-  声明且 schema 合法的 props。
+- 写入能力受 registry `ai.writable` / `ai.ops` 约束；组件实例 props 必须通过组件目录 schema 校验
+  （fail-closed），目录同时以 `ai_writable` 标注推荐给 Agent 的 props 范围。
 
 ### 2.9 `space_asset_import`
 
@@ -144,6 +144,7 @@ updated: 2026-11-10
 - 仅图片（`image/png|jpeg|webp|gif`），解码后 ≤ 4 MiB；内容寻址去重，重复导入返回同一 `asset_id`。
 - 生成/编辑图片块时把返回的 `asset_id` 写入 `image.attrs.assetId`；渲染 URL 由客户端拼
   `GET /api/alter-space/asset?id=…`。
+- 浏览器上传走同源 RPC `doc.importAsset` / `doc.importFile`，与本工具共用同一内容寻址资产存储。
 
 ## 3. 预算与裁剪
 
@@ -172,13 +173,12 @@ Spike 不做：组件沙箱、实时协作。
 
 ## 5. 开放决策项
 
-1. 投影锚点形式：HTML 注释（当前默认）vs 指令 attrs vs 仅返回侧索引。
-2. `update_text` 的 mark 继承规则是否够用，还是 v0 就引入 range/mark op。
-3. mindmap/component payload 的内联阈值（当前 v0：一律占位 + 工具读写）。
-4. table 合并单元格、评论锚点、代码组件沙箱的 v1 方案。
-5. `doc_ops` 是否作为版本历史主存储（当前：快照 + op log 并存）。
-6. 版本预算（当前 10 版 / 64 KiB → 可配置累计字节）与备份资产目录的实施方案。
-7. 列表/发现工具与评论工具是否纳入 v0.1（当前 11 个工具含组件目录发现，不含文档列表与评论能力）。
+1. `update_text` 的 mark 继承规则是否够用，还是 v0 就引入 range/mark op。
+2. mindmap/component payload 的内联阈值（当前 v0：一律占位 + 工具读写）。
+3. table 合并单元格与代码组件沙箱的后续方案。
+4. `doc_ops` 是否作为版本历史主存储（当前：快照 + op log 并存）。
+5. 版本预算（当前 10 版 / 64 KiB → 可配置累计字节）与备份资产目录的实施方案。
+6. 列表/发现工具与评论工具是否纳入 v0.1（当前 11 个工具含组件目录发现，不含文档列表与评论能力）。
 
 ## 相关文档
 

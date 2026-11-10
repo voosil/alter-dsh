@@ -22,6 +22,8 @@ Host 半侧（`host/` → `lib/`）是 Cordis 插件，持有 SQLite 与业务�
   绑定只落 `workspace_links` 侧表，**不要写进 Space 实体**。
 - **文档正文单一格式**：所有 Space note 正文只有 `alter-doc/1` AST 一种格式；正文写入必须经
   Document Operations，`space.saveNode` 只更新元数据、不接受正文。
+- **文档编辑面归属**：文档编辑器、评论/历史与组件渲染在 `src/document/`，`vendor/ui-space` 只保留
+  文档入口与外壳；声明式组件目录在 `vendor/protocol`，文档只存实例引用、不执行任意代码。
 - **文档有预算**：单文档、单目录数量、关键文档体量都有硬上限（见 docs/README.md），
   由 `pnpm docs:check` 强制；关键文档只放导航、规则与约束，不写实现细节、源码说明、变更历史。
 - **版本历史与快照**是恢复底线：改动写入路径时必须保留归属（`me` / `alter`）、事务与裁剪语义。

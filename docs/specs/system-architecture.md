@@ -42,6 +42,10 @@ updated: 2026-11-10
   缺一视为未完成。
 - 参数与结果校验在 Host 侧执行；错误以稳定 `code` 返回，不在信封层抛裸异常。
 - 浏览器不得把业务数据持久化到 localStorage、IndexedDB 等本地存储。
+- **文档资产通道**：上传走同一 RPC 通道的 `doc.importAsset` / `doc.importFile`；读取由 Host 另注册
+  `GET /api/alter-space/asset?id=…`（Connection 鉴权），图片按内容类型 inline 返回供渲染，其他文件按
+  `attachment` 下载。白名单、大小上限与错误码以
+  [document-operations-v0.md](document-operations-v0.md) §6.4 为准。
 
 ## 3. SQLite 持久化
 
@@ -55,6 +59,9 @@ updated: 2026-11-10
   低版本库启动时原地加表升级、业务数据不动；schema 版本高于插件支持时拒绝启动。
 - **文档内容**：`SpaceNode.content` 只保存 `alter-doc/1` AST JSON，没有其他正文格式或格式标记；
   新表/新字段只加插件自有侧表并通过 `user_version` 升级，不改 `vendor/` 实体结构。
+- **文档组件目录**：声明式组件目录编译在协议包（`vendor/protocol`），是 Host 校验与客户端渲染的
+  唯一事实源；文档只保存组件实例引用，不携带也不执行任意代码。Agent 工具面与预算见
+  [agent-doc-tools-v0.md](agent-doc-tools-v0.md)。
 - **写入**：所有变更进入单写者队列；每笔变更只写「新增/修改/删除的实体行 + 顺序数组 + meta」，
   在一个事务里提交，提交成功才 resolve；失败回滚内存快照并抛错。普通编辑只更新一行，不重写整库。
 - **归属与裁剪**：写入路径必须保留实体归属（用户 / AI `alter`），并在同一事务内完成内容写入、

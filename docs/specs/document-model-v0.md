@@ -21,7 +21,8 @@ Marks、Schema Registry、v0 节点类型与 Markdown 投影规则。它是所�
   但只解析为「明确目标位置的新节点」。
 - **Document as Content 与 Document as Application 分离**：交互组件有独立 schema 与运行时，
   不混进正文语义。
-- 人编辑器（Tiptap）与 AI 工具共享同一 Schema Registry，避免定义漂移。
+- 人编辑器（Tiptap）与 AI 工具共享同一节点契约（registry 为事实源，编辑器映射以往返测试校验对齐），
+  避免定义漂移。
 
 v0 非目标：
 
@@ -46,15 +47,17 @@ JSON 字符串；没有 `contentFormat` 之类的格式标记字段，也不存�
 
 约束：
 
-- 新建文档即为 revision 1 的 AST 空文档（`blocks: []`）；revision 单调递增、不回退，恢复历史版本也 +1。
+- 新建文档即为 revision 1 的 AST 文档：空文档 `blocks: []`，`generate` 新文档在同一事务写入初始内容；
+  revision 单调递增、不回退，恢复历史版本也 +1。
 - 正文写入只经 Document Operations（`applyOps` / `generate` / `undo` / `restoreVersion`）；
   `space.saveNode` 只更新标题等元数据，不接受正文。
 - 文档级大小上限：序列化后 ≤ 512 KiB（可配置）；超限以 `doc/too-large` 拒绝写入。
 - 结构上限：单文档 block 数 ≤ 5000、树深 ≤ 50；超限以 `doc/schema-invalid` 拒绝。
-- 禁止在 `content` 中放二进制或大 payload；图片走资产、思维导图/组件走对象侧表。
-- 节点模型不兼容变更时升 `schemaVersion`，旧数据由 Schema Registry 的 `migrate` 升级。
-- 文本抽取按 AST 块树提取纯文本（text 节点、对象 alt/caption/title 与文件卡 name），搜索、概览与
-  新文档判断都不把 AST JSON 当正文。
+- 禁止在 `content` 中放二进制或大 payload；图片与文件走资产、思维导图/组件走对象侧表。
+- 节点模型不兼容变更时升 `schemaVersion`；读取只接受与当前实现一致的 `schemaVersion`，
+  不一致以 `doc/schema-invalid` 拒绝（v0 不提供自动迁移）。
+- 文本抽取按 AST 块树提取纯文本（text 节点与 attrs 中的 alt/caption/title/description/name），
+  搜索、概览与新文档判断都不把 AST JSON 当正文。
 
 ## 3. Block 节点
 
@@ -102,8 +105,8 @@ v0 行内子集与投影：
 
 ## 6. Schema Registry（唯一事实源）
 
-所有消费方——存储校验、Tiptap node spec、AI 工具 JSON Schema、Markdown 投影、schemaVersion 迁移、能力声明——
-都从同一份 registry 生成：
+同一份节点契约服务所有消费方：存储校验、Tiptap node spec、AI 工具 JSON Schema、Markdown 投影、
+schemaVersion 校验与能力声明都以 registry 为准（编辑器 node spec 为映射实现，由往返测试校验对齐）：
 
 ```ts
 interface NodeTypeDefinition {
@@ -116,6 +119,7 @@ interface NodeTypeDefinition {
     required?: boolean;
     default?: JsonValue;
     enum?: JsonValue[];
+    maxLength?: number;                // string 属性的长度上限
   }>;
   allowedMarks?: MarkType[];           // textblock 可用 marks
   allowedChildren?: string[] | 'block+';
@@ -130,15 +134,17 @@ interface NodeTypeDefinition {
     serialize(node: BlockNode, ctx: ProjectionContext): string;
     parse?(source: string, ctx: ParseContext): BlockNode | null; // 仅新内容解析
     anchors: 'comment' | 'none';
+    directive?: string;                // 指令块名（callout/mindmap/component）
   };
   render: { editor: string; readOnly: string };  // node view / 只读渲染器 id
-  migrate?(node: BlockNode, fromSchemaVersion: number): BlockNode;
+  transforms?: string[];               // transform_block 允许的目标类型
 }
 ```
 
 规则：
 
-- v0 registry 规模 ≤ 20 个节点类型；新增类型必须同时提供 schema、投影、渲染、schemaVersion 迁移与能力声明。
+- v0 registry 规模 ≤ 20 个节点类型；新增类型必须同时提供 schema、投影、渲染与能力声明；
+  不兼容变更升 `schemaVersion`，存量数据按升版处理（v0 无自动迁移）。
 - `ai.writable` 与 `ai.ops` 是 Agent 写能力的唯一声明处，工具层不得硬编码节点类型特例。
 
 ### 6.1 v0 节点类型
@@ -162,7 +168,7 @@ interface NodeTypeDefinition {
 | `docLink` | structured | none | `docId`, `title?` | 读写/属性+替换 | `[title](space-doc:<docId>)` |
 | `callout` | content | blocks | `tone: info\|warn\|success\|danger`, `title?`, `icon?`, `collapsed?` | 读写/结构+属性 | `:::callout{…}` 指令 |
 | `mindmap` | structured | none | `objectId`, `caption?` | 读占位 + `update_object` | `:::mindmap{objectId=…}` 占位 |
-| `component` | application | none | `objectId`, `title?`, `description?` | 读 `describe` + `update_object`（仅 props） | `:::component{objectId=…}` 占位 |
+| `component` | application | none | `objectId`, `title?`, `description?` | 查组件目录 + `update_object`（仅目录可写 props） | `:::component{objectId=…}` 占位 |
 
 补充约束：
 
@@ -173,6 +179,9 @@ interface NodeTypeDefinition {
   只读渲染只把 `http(s)` URL 渲染为可点击链接，其余形式降级为纯文本。
 - table 在 v0 只支持矩形、无合并单元格；合并单元格 v1 再议。
 - mindmap/component 的大 payload 永不进 Markdown，投影只给占位。
+- `component` 的实例 payload、内置声明式组件目录与 fail-closed 校验以
+  [document-operations-v0.md](document-operations-v0.md) §6.3 为准；渲染是客户端静态 registry，
+  **不执行任意代码**。
 
 ## 7. Markdown 投影规范
 
@@ -203,6 +212,8 @@ interface NodeTypeDefinition {
 | component | `:::component{objectId="obj_…" title="…" #blk_id}` 空体 `:::` |
 | 未知节点 | `:::opaque{type="…" #blk_id}` + 一行 `[unsupported node]` |
 
+表中 `file` / `bookmark` / `docLink` 的链接与附件形式只用于阅读与导出，不参与 Markdown 回写解析。
+
 ### 7.3 解析方向（仅新内容）
 
 - 只允许在 `insert_blocks` / `replace_block` / `space_doc_generate` 场景由 Markdown 生成节点。
@@ -210,6 +221,8 @@ interface NodeTypeDefinition {
   `parse/unsupported`，由调用方回退为结构化 op。
 - 指令属性白名单：`tone/title/icon/collapsed/caption/level/start/lang`；id 只接受服务端分配，
   忽略外部传入。
+- 解析方向只覆盖文本类节点、图片与 callout/mindmap/component 指令；`file` / `bookmark` / `docLink`
+  只能由结构化 `blocks` 写入，投影中的链接/附件形式不回写解析。
 - 图片的 `space-asset://` 在解析时校验存在性；不存在 → 报错，不落盘。
 
 ### 7.4 禁止事项

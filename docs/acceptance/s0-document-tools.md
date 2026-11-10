@@ -8,6 +8,9 @@ updated: 2026-11-10
 
 验收对象：`@alter-dsh/space` 的 Host 文档模型工具（`space_doc_*` / `space_object_*`）在真实
 DSH desktop profile 中的注册与读写链路。结论：**PASS（安装 / 工具注册 / 9 步端到端读写）**。
+本记录是 S0 阶段的功能验收快照；当前工具面为 11 个（新增 `space_doc_patch` /
+`space_component_catalog`），编辑器体验重建与最终验收见
+[editor-experience-p0-p6.md](editor-experience-p0-p6.md)。
 
 ## 已验证
 
@@ -67,11 +70,12 @@ S0 Host 工具面、S1 Tiptap 编辑器、评论/历史、资产、撤销、GC�
 
 - 所有 note 正文都是 AST，工具按 AST 读写；Tiptap 编辑器已支持图片资产渲染、评论/历史侧栏、资产/对象 GC 与资产备份。
 - `space_doc_outline` 的 `total_blocks` 计入嵌套块（示例 18），`outline` 只列顶层块（示例 7）。
-- 组件运行时不在本切片。
+- 组件运行时、`space_doc_patch` 与组件目录工具不在本切片。
 
 ## 相关文档
 
 - [document-model-v0](../specs/document-model-v0.md)
 - [document-operations-v0](../specs/document-operations-v0.md)
 - [agent-doc-tools-v0](../specs/agent-doc-tools-v0.md)
+- [编辑器体验重建清单](editor-experience-p0-p6.md)
 - [验收索引](README.md)

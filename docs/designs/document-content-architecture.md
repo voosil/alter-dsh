@@ -32,7 +32,7 @@ updated: 2026-11-10
   规范化之间的 round-trip 保真问题无法回避。
 - **MDX**：可执行 JSX，把「用户/AI 随时编辑的文档」变成代码执行问题，安全与构建成本不可接受。
 
-明确接受的代价：编辑器需要重写（用 Tiptap/ProseMirror 底座降低难度）、AST 快照比纯文本格式大
+明确接受的代价：编辑器已重建在 Tiptap/ProseMirror 上、AST 快照比纯文本格式大
 （对象与资产外置、规范化序列化缓解）、Agent 工具面比字符串编辑更大（靠统一投影与正交 op 集控制）。
 **正文只有单一 AST 格式**：新建文档即 AST 空文档，正文写入只经 Document Operations，不保留任何
 兼容格式路径。
@@ -54,13 +54,13 @@ Document Service（Host）
         ├──────────────────────────────┐
         ▼                              ▼
 JSON AST（权威存储）            Object / Asset Store
-blocks / inline / marks         对象、组件 spec、资产
+blocks / inline / marks         对象、组件目录、资产
 / node refs                    （内容寻址，正文只存引用）
         │                              │
         └──────────────┬───────────────┘
                        ▼
 Editor（Tiptap/ProseMirror）+ Renderer
-Component Registry（node view / 运行时）
+Component Registry（静态渲染 registry）
 ```
 
 职责边界：
@@ -75,16 +75,16 @@ Component Registry（node view / 运行时）
 2. 投影只保「语义 + AI 可读」，**不承诺无损**；富组件以占位 + id 呈现，回写不走整篇解析。
 3. 结构修改一律走 Operations；Markdown 只用于**新内容生成**（目标明确时解析为新节点）。
 4. 所有写操作带 `baseRevision`、原子事务、可审计、可逆（inverse op）。
-5. **一个 Schema Registry** 同时生成存储 schema、编辑器 node spec、AI 工具 JSON Schema、
-   Markdown 投影/序列化器、schemaVersion 迁移函数与 AI 能力声明，避免多套定义漂移。
+5. **一个 Schema Registry 作为节点契约事实源**：存储校验、编辑器 node spec、AI 工具 JSON Schema、
+   Markdown 投影、schemaVersion 校验与能力声明都以它为准（编辑器映射以往返测试兜底），避免定义漂移。
 
 ## 4. 节点能力三级
 
 | 层级 | 例子 | AI 能力 | 编辑 / 渲染 |
 | --- | --- | --- | --- |
 | **content** | paragraph、heading、list、quote、code、table | 读 Markdown、写 Markdown/ops，全文可编辑 | Tiptap 原生节点 |
-| **structured** | callout、mindmap、简单图表 | 读投影/指令；写 ops + 类型化 payload | 自定义 node view |
-| **application** | 数据面板、计算器、实时图表 | 读 `describe`（能力/输入/输出）；只改 props/绑定，不碰运行时内部 | 沙箱 iframe + 独立 spec/state |
+| **structured** | callout、mindmap、文档内链卡/网页链接卡 | 读投影/指令；写 ops（属性或对象引用） | 自定义 node view |
+| **application** | 声明式组件（进度/清单/指标卡） | 先查组件目录，再 `update_object` 写实例 props | 客户端静态 registry 渲染，不执行任意代码 |
 
 每个 node type 在 registry 中声明 `ai: { readable, writable, preview, ops }`，工具按能力裁剪：
 AI 看不到、也改不了它不该碰的部分。这一条把「Document as Application」从口号变成可执行的边界，
@@ -92,12 +92,14 @@ AI 看不到、也改不了它不该碰的部分。这一条把「Document as Ap
 
 ## 5. Markdown 投影契约
 
-- 投影是**只读视图**，可带锚点（HTML 注释或指令 attrs），导出时剥离。
-- 文本块用 Markdown 原生语法；行内 marks 映射到 Markdown，无法映射的（颜色、评论锚）以注释或
+- 投影是**只读视图**，可带块锚点（HTML 注释），导出时剥离。
+- 文本块用 Markdown 原生语法；行内 marks 映射到 Markdown，无法映射的样式以注释或
   `capabilities` 说明呈现。
-- structured 节点一律以占位 + id 呈现（`:::mindmap{objectId=…}` / `:::component{objectId=…}`），
-  细节通过对象工具读写；是否允许小 payload 内联到投影属待定项（见 §11），v0 不内联。
-- application 节点：只给占位 + `describe` 摘要；改配置用 ops，不展开 payload。
+- structured 节点按类型投影：mindmap/component 以占位 + id 呈现（`:::mindmap{objectId=…}` /
+  `:::component{objectId=…}`），细节通过对象工具读写；bookmark/docLink 投影为链接，不内联网页内容。
+  是否允许小 payload 内联到投影属待定项（见 §11），v0 不内联。
+- application 节点（声明式组件）：正文只放占位与对象引用；写入先查组件目录再 `update_object`，
+  不把 props/payload 展开到正文。
 - **不承诺 Markdown→AST 全量无损**：只在「目标明确的新内容 / 整块替换」时解析 Markdown；
   不允许 AI 整篇重写后再解析回 AST。原因是一旦允许整篇 round-trip，任何转换损失都会变成用户格式
   被静默改写，且与并发编辑的冲突面不可控。
@@ -136,16 +138,17 @@ Operations 把一次修改收敛为可校验的意图，才谈得上可审计与
 - 快照：AST 规范化 JSON；对象/资产外置只存引用，版本体积可控但仍比纯文本格式大。
   版本预算的现行值与重估方向见 [document-operations-v0.md](../specs/document-operations-v0.md) §7。
 - op 日志：每次 apply 一条，含 actor（user/agent/model）、baseRevision、op 摘要与结果，用于审计与 undo。
-- 撤销：inverse ops；AI 一次 turn 的 ops 归组为一个 transaction，可整体撤销。
+- 撤销：inverse ops，按 apply 批次；多次 apply 分别撤销。
 - 对象不可变；版本引用保活；GC 按「无版本引用 + 保留期」。
 - 冲突：`baseRevision` 不匹配 → 重新读取/重试；未来引入 CRDT 时，ops 映射为 transactions 即可演进。
 
 ## 9. 组件运行时边界与安全
 
-- application 节点有独立 schema/loader，不进文档正文、不参与 Markdown 解析。
+- application 节点有独立 schema 与静态渲染 registry，不进文档正文、不参与 Markdown 解析。
 - v1 文档只保存实例：`{ format:'alter-component/1', componentId, componentVersion, props }`；
   组件目录静态编译进协议包（内置进度条/清单/指标卡），渲染器为客户端静态 registry，不执行任意代码。
-- 安全：未知组件/props/越界 fail-closed；`aiWritable` 能力声明；不含 eval/iframe/远程代码。
+- 安全：未知组件/props/越界 fail-closed；目录声明 `ai_writable` 供 Agent 发现可写 props；
+  不含 eval/iframe/远程代码。
 - 未做：内容寻址 specHash、bindings、持久化实例状态；代码组件（iframe sandbox + CSP + 审核通道）留后续。
 
 ## 10. 本仓库映射
@@ -158,9 +161,14 @@ Operations 把一次修改收敛为可校验的意图，才谈得上可审计与
   仍复用 SQLite 单写者队列与事务；RPC 端点与 `src/space-client.ts` 映射同步增加。
 - 客户端：Tiptap 编辑器/渲染器放 `src/document/`；`@alter-space/document-view` 别名（`build/build.mjs`
   与 tsconfig paths）把 `DocumentView` 解析到该结构化视图，登记在 `vendor/README.md`。
-- Agent 工具面收敛为 `space_doc_outline` / `space_doc_read` / `space_doc_search` /
-  `space_doc_ops` / `space_doc_generate` 与对象/资产工具；正文写入只有结构化修改与新内容生成两种入口，
-  详见 [agent-doc-tools.md](agent-doc-tools.md)。
+- Agent 工具面为 `space_doc_outline` / `space_doc_read` / `space_doc_search` / `space_doc_ops` /
+  `space_doc_patch` / `space_doc_generate` / `space_doc_undo`、对象/资产与组件目录工具；正文写入只有
+  结构化修改、单块 patch 与新内容生成三类入口，详见 [agent-doc-tools.md](agent-doc-tools.md)。
+- 文档资产：上传走 RPC `doc.importAsset` / `doc.importFile`，读取走 `GET /api/alter-space/asset`；
+  声明式组件目录在 `vendor/protocol`（Host 校验、客户端静态渲染），文档只存对象引用。
+- **已实现 / 未实现边界**：结构化编辑器、评论锚点与评论轨、版本 AST diff/恢复、文件卡/链接卡、
+  表格、图片/文件上传与 Agent 块级 patch 已落地；评论自动重锚（只标记失效）与 mindmap 只读渲染
+  （仍是占位卡）未做；组件侧边界见 §9。
 - **所有实现闭合在本仓库**：协议、Host、客户端、编辑器都在 Alter-dsh；`vendor/` 是项目自有源码，
   可改但每次登记。存储映射与单仓库策略的实施基准见
   [specs/document-model-v0.md](../specs/document-model-v0.md) 与
@@ -170,10 +178,9 @@ Operations 把一次修改收敛为可校验的意图，才谈得上可审计与
 
 | 议题 | 当前建议 / 现状 |
 | --- | --- |
-| 投影锚点形式 | HTML 注释、指令 attrs 或仅返回侧索引；建议「返回侧索引 + 可选注释」 |
 | structured payload 内联阈值 | v0 一律占位 + 工具；后续按大小阈值（如 ≤4 KB 内联）再定 |
 | op log 是否作为版本历史主存储 | 建议快照 + op log 并存，各司其职 |
-| 组件运行时首发范围 | 声明式组件优先；代码组件走沙箱 + 审核通道，后续再评估 |
+| 代码组件引入 | v1 只做声明式组件；代码组件需沙箱 + 审核通道，后续再评估 |
 | 版本预算与资产备份实施方案 | 按篇累计字节上限 + 备份覆盖 assets 目录，具体数值实测后定 |
 
 ## 相关文档

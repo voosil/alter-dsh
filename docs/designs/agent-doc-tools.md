@@ -17,11 +17,11 @@ updated: 2026-11-10
 
 - Agent 能发现并读取空间文档：通过搜索定位文档，按 outline + 范围读 Markdown 投影与元数据。
 - Agent 能创建、编辑文档，写入与浏览器走同一权威链路（Host SQLite 单写者队列），刷新后 UI 一致。
-  （列表/发现工具与评论工具在后续阶段；首期工具面见 spec。）
+  （列表/发现工具与评论工具未做；当前工具面见 spec。）
 - 写入可归属（`alter`）、可审计（revision/op log）、可恢复（版本与快照）；冲突不静默覆盖。
 - 保持插件自包含：Host 不新增网络链路与 `@deepseek-ai/*` 运行时依赖，第三方库打进客户端 bundle。
 
-**非目标（首期）**
+**非目标**
 
 - 只做文档；随想、事项、旅程、观察留到后续。
 - 不做硬删除与跨空间批量操作。
@@ -42,9 +42,10 @@ updated: 2026-11-10
 版本记录和事务**。所有写入安全设计（归属、CAS、强制版本）都建立在这一条上：如果工具走 HTTP 回环，
 这些保证要么退化成「先查后写」的竞态，要么需要在协议层重新实现一遍事务。
 
-工具面按 spec v0 收敛为 `space_doc_outline` / `space_doc_read` / `space_doc_search` /
-`space_doc_ops` / `space_doc_generate` 与对象/资产工具；正文只有 AST 一种格式，正文写入只经 Operations。
-完整契约见 [specs/agent-doc-tools-v0.md](../specs/agent-doc-tools-v0.md)。
+工具面收敛为 `space_doc_outline` / `space_doc_read` / `space_doc_search` / `space_doc_ops` /
+`space_doc_patch` / `space_doc_generate` / `space_doc_undo`、对象/资产工具与 `space_component_catalog`；
+正文只有 AST 一种格式，正文写入只经 Operations。完整契约见
+[specs/agent-doc-tools-v0.md](../specs/agent-doc-tools-v0.md)。
 
 工具划分的设计取舍：
 
@@ -54,11 +55,14 @@ updated: 2026-11-10
 | `space_doc_read` | 按 block/范围投影 Markdown，带锚点与续读位置；不做「读整篇再让模型自己找」 |
 | `space_doc_search` | 返回块级命中，让长文档不必全文读取；跨文档查找也走它 |
 | `space_doc_ops` | 唯一的结构修改入口；带 baseRevision、幂等键、dry-run 与逐 op 错误 |
+| `space_doc_patch` | 单块纯文本精确替换（单次 `update_text` 封装），Agent 的默认编辑路径 |
+| `space_doc_undo` | 撤销最近或指定批次（inverseOps），生成新 revision |
 | `space_doc_generate` | 只生成新内容（新文档或明确位置插入），Markdown 解析失败即报错 |
-| 对象/资产工具 | 富对象 payload 与二进制不进正文；按 registry 能力声明决定可否读写 |
+| 对象/资产/组件目录工具 | 富对象 payload 与二进制不进正文；组件先查目录再写实例；按能力声明决定可否读写 |
 
-这样划分的目标是**正交且少**：读路径按需扩展，写路径只有「结构化修改」与「新内容生成」两种意图，
-避免出现「整篇替换」「按字符串精确替换」这类无法校验、冲突面大的入口。
+这样划分的目标是**正交且少**：读路径按需扩展；写路径只有「单块文本 patch」「结构化修改」与
+「新内容生成」三类意图，都带 block id、baseRevision 与 schema 校验，避免「整篇替换」这类无法给出
+稳定 diff、冲突面大的入口。
 
 ## 3. 写入安全三件套
 
@@ -119,7 +123,7 @@ updated: 2026-11-10
 
 - `AgentPermission` 与 `spaces.collaboratorIds` 目前只有存储、没有执行点；DSH Agent 与 Space 协作者
   之间也没有映射。它们是产品数据，不驱动运行时。
-- 首期用插件配置门禁（`agentTools.enabled` + `writeApproval` + 只读开关）并只暴露安全操作：
+- 当前用插件配置门禁（`agentTools.enabled` + `writeApproval` + 只读开关）并只暴露安全操作：
   不做硬删除、不做跨空间批量。这是单用户桌面产品的合理信任边界。
 - 无论是否启用权限映射，工具参数中的 `space_id`/`doc_id` 都要做存在性与一致性校验，不信任模型输入；
   由 `doc_id` 反查空间，而不是相信模型传的 `space_id`。
@@ -128,54 +132,46 @@ updated: 2026-11-10
 
 ## 8. 幂等与重试
 
-- 写工具不做自动重试；`space_doc_ops` 带 `idempotency_key`，重复请求返回原结果，天然适合模型超时重放。
+- 写工具不做自动重试；`space_doc_ops` / `space_doc_patch` 带 `idempotency_key`，重复请求返回原结果，天然适合模型超时重放。
 - CAS 让重放变为冲突而不是重复写入；`dry_run` 不落盘，可安全预览。
-- 创建文档首期没有幂等键：超时或模型重试可能重复建文档，接受这个风险（返回明确 id，模型重试前先
+- 创建文档没有幂等键：超时或模型重试可能重复建文档，接受这个风险（返回明确 id，模型重试前先
   list/search）；后续可加 `client_request_id` 去重表或「同空间同标题 + 短时间窗 + creator=alter」启发式。
 - 写后回读：返回值基于本次计算与回读，避免 vendor 内部 clone 出来的旧作者字段泄漏到工具结果。
 
-## 9. 浏览器同步：首期不做
+## 9. 浏览器同步：不做实时推送
 
 **决策**：Agent 写入后不主动推送或刷新已打开的浏览器面板；产品目前不是协作产品，不需要「Agent 写完
 面板立刻变」。
 
 - **何时能看到**：重新进入文档、切换空间、切走面板再回来，或刷新页面时 `SpaceApp` 会重新拉取数据，
   不需要改客户端代码。
-- **仍保留 Agent 侧 CAS**：Agent 不会覆盖用户两秒前刚保存的内容；过期 base 直接失败并让模型重读。
-- **接受的取舍**：用户旧草稿保存时可能覆盖 Agent 写入，不做拦截，靠强制版本 + 每日快照恢复。
-- **后续可选（需要时再设计）**：浏览器保存 CAS + 冲突横幅、revision 轮询 + 软刷新。DSH 原生
-  Host→Client 推送对第三方插件不可用（构建期 allowlist），自建 SSE 成本高，均不占首期工期。
+- **浏览器与 Agent 都做 CAS**：保存带 `baseRevision`；过期 base 直接失败，冲突时保留本地草稿并给出
+  重试/重载，不静默覆盖。
+- **后续可选（需要时再设计）**：revision 轮询 + 软刷新、跨窗口同步。DSH 原生 Host→Client 推送对
+  第三方插件不可用（构建期 allowlist），自建 SSE 成本高，均不占当前工期。
 - **为什么现在不做**：实时同步要连带解决保存冲突 UI、客户端依赖数组失效与多窗口语义，收益是「协作感」
-  而非数据安全；数据安全已由 CAS、强制版本与快照覆盖。后续需要时再加，不影响首期架构。
+  而非数据安全；数据安全已由 CAS、强制版本与快照覆盖。
 
-## 10. 分阶段与工作量
+## 10. 实施阶段与工具面现状
 
-当前优先级是先用最小垂直切片验证架构，再实现工具面：
-
-| 阶段 | 内容 | 交付/验收 | 预估 |
-| --- | --- | --- | --- |
-| **v0 垂直切片** | Host Document Service + 旁表；最小 Tiptap 读写；outline/read/ops/generate 四个工具 | 按 [spike 验收标准](../specs/agent-doc-tools-v0.md#4-spike-验收标准) 的 10 篇文档 × 6 类任务验收（成功率 ≥90%、≤4 次调用、读投影 ≤12k tokens） | 3–5 人日 |
-| **P0 只读工具** | 搜索/outline/read + 截断投影 + 测试 | 只读工具可上线验证工具面，无写入风险 | 1–1.5 人日 |
-| **P1 基础写入** | 写作用域（归属/CAS/强制版本）+ ops/generate + 配置 + 测试 | 写入归属、冲突不落盘、可恢复；浏览器保存仍为原语义 | 2–2.5 人日 |
-| **P2 同步与防覆盖（可选）** | 浏览器保存 CAS + 冲突横幅；revision 轮询 + 软刷新 | 旧草稿被拦截；面板接近实时 | 1.5–2 人日 |
-| **P3 扩展（可选）** | 列表/评论工具、组织/历史管理、协作者权限映射、按 preset 可见性 | 权限 fail-closed；更多文档管理能力 | 1.5–2.5 人日 |
-
-当前只承诺 v0 垂直切片：先用它验证「AST 权威 + Markdown 投影 + Operations」能否支撑真实 AI 编辑
-任务（通过标准见 [spike 验收标准](../specs/agent-doc-tools-v0.md#4-spike-验收标准)），通过后再实现 P0/P1 工具面（合计约
-3–4 人日），最后按需排 P2/P3。工具 schema 首 token 成本约 +1.2–1.6k tokens，靠精简 description、
-不增加每轮 system prompt 段来控制。
+- 已实现 11 个工具：`space_doc_outline` / `space_doc_read` / `space_doc_search` / `space_doc_ops` /
+  `space_doc_patch` / `space_doc_generate` / `space_doc_undo`、`space_asset_import`、
+  `space_component_catalog`、`space_object_get` / `space_object_update`；契约与预算以
+  [spec](../specs/agent-doc-tools-v0.md) 为准。
+- 浏览器实时同步（§9）仍不做；文档列表/评论工具与协作者权限映射未做，按需再排。
+- 工具 schema 成本约 +2.2–2.6k tokens（11 个），靠精简 description 控制，不增加每轮 system prompt 段。
 
 ## 11. Top 风险与缓解
 
 | 风险 | 影响 | 缓解 |
 | --- | --- | --- |
-| 用户旧草稿覆盖 Agent 写入 | Agent 内容被覆盖（非实时，刷新才可见） | 强制版本 + 每日快照可恢复；首期不做浏览器拦截（已接受） |
+| 用户旧草稿覆盖 Agent 写入 | 保存被 CAS 拒绝，用户需重试或重载 | 浏览器保存带 CAS + 冲突草稿保留；强制版本 + 快照兜底 |
 | Agent 覆盖用户正在编辑的内容 | 用户草稿丢失 | Agent 侧 CAS：过期 base 拒绝，不自动 merge |
-| 注入/恶意内容进入正文 | 面板渲染异常、脚本执行 | schema 校验 + 编辑器粘贴清洗 + 组件沙箱 |
+| 注入/恶意内容进入正文 | 面板渲染异常、脚本执行 | schema 校验 + 编辑器粘贴过滤 + 组件目录 fail-closed（无任意代码） |
 | 工具对所有 Agent（含子 Agent）可见 | 任意 Agent 都能写空间 | 配置门禁；后续按 preset 或插件作用域收窄 |
 | `vendor` 同步后行为漂移 | 依赖字段/行为变化导致归属/CAS 失效 | 升级 vendor 后跑工具与写作用域测试；依赖面尽量收敛 |
 | 版本历史被裁剪 | 久远内容无法从历史恢复 | 调高版本上限（建议 20–30）；长期恢复依赖每日快照 |
-| 首期无实时刷新，用户看到旧内容 | 误以为 Agent 没写 | 工具返回明确结果；重新进入/刷新即更新 |
+| 无实时刷新，用户看到旧内容 | 误以为 Agent 没写 | 工具返回明确结果；重新进入/刷新即更新 |
 | 多窗口/多 Host last-writer-wins | 跨进程覆盖 | 文档化已知边界；CAS 只在进程内有效 |
 
 ## 12. 验收口径
@@ -190,7 +186,7 @@ updated: 2026-11-10
 | A6 | 非法写入被拒 | 未知节点类型、非法 props、越界大小被拒绝且不落盘 |
 | A7 | 读不改活动 | 连续读不改变 `activity`/`lastOpenCreditAt` |
 | A8 | 写入可见性（非实时） | Agent 改文档后重新进入/切空间/刷新页面即可看到最新内容，数据不丢 |
-| A9 | 上下文预算 | 工具 schema 首轮约 +1.2–1.6k tokens；单次读投影 ≤12k tokens / ≤40k 字符 |
+| A9 | 上下文预算 | 工具 schema 首轮约 +2.2–2.6k tokens（11 个）；单次读投影 ≤12k tokens / ≤40k 字符 |
 | A10 | 原子与撤销 | 批量 ops 全有或全无；一次 apply 可撤销，op log 可还原 |
 
 完整契约与 spike 验收标准见 [specs/agent-doc-tools-v0.md](../specs/agent-doc-tools-v0.md)

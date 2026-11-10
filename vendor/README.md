@@ -12,7 +12,7 @@
 | --- | --- |
 | `client-modules/` | 客户端模块注册表类型（bundle 内仅类型） |
 | `mock-workbench/` | Workbench 数据类型（Space 视图引用；不挂载 Workbench） |
-| `protocol/` | 产品数据协议（前后端共享） |
+| `protocol/` | 产品数据协议（前后端共享；含声明式组件目录） |
 | `service/` | Space 业务服务（content + hub + store 契约） |
 | `ui-settings/` | 设置页源码（协作者、归档空间恢复、快捷键、关于） |
 | `ui-space/` | Space UI（目录、评论、随想、概览、归档、回收站） |
@@ -37,8 +37,11 @@
 
 ## 关键行为约定
 
-- **正文只有 AST**：文档正文只有 `alter-doc/1` AST 一种格式，编辑器与渲染在 `src/document/`；
-  正文写入只经 Document Operations，`space.saveNode` 只改标题等元数据。
+- **正文只有 AST**：文档正文只有 `alter-doc/1` AST 一种格式，正文写入只经 Document Operations，
+  `space.saveNode` 只改标题等元数据。
+- **文档编辑面归属**：文档编辑器、评论/历史、组件渲染等编辑面在 `src/document/`；`vendor/ui-space`
+  只保留文档入口与外壳（目录/评论列表/随想/概览/归档/回收站），不在本目录重建编辑器。
+  声明式组件目录在 `vendor/protocol`，Host 校验、客户端静态渲染，不执行任意代码。
 - **设计 token**：圆角统一走 `--alter-radius-xs/control/panel/overlay/pill` 五级 token，
   不写字面量；宿主容器内的样式必须限定作用域，不泄漏到文档根。
 - **协议与持久化分离**：`vendor/service/src/store.ts` / `index.ts` 只是 SpaceStore 契约参考；

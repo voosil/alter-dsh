@@ -14,8 +14,9 @@
 - 空间 ↔ DSH 工作区：新建空间时把**主工作目录**（`directories[0]`，其余为参考目录）映射为一个
   DSH 原生工作区，标题为 `🪐 <空间名>`；改名同步标题，删除/归档只做非破坏性处理
 - 工作目录选择接入宿主选择器（桌面=系统文件夹对话框，Web=DSH 目录浏览）；宿主无此能力时回退内置浏览器
-- Agent 文档读写工具（v0）：模型可通过 `space_doc_*` 工具 outline/read/search/ops/generate 读写空间文档；
-  契约见 [docs/specs/agent-doc-tools-v0.md](docs/specs/agent-doc-tools-v0.md)，方案见 [docs/designs/agent-doc-tools.md](docs/designs/agent-doc-tools.md)
+- Agent 文档读写工具：模型可通过 `space_doc_*` 工具（outline/read/search/ops/patch/undo/generate）、
+  对象/资产工具与组件目录读写空间文档；契约见 [docs/specs/agent-doc-tools-v0.md](docs/specs/agent-doc-tools-v0.md)，
+  方案见 [docs/designs/agent-doc-tools.md](docs/designs/agent-doc-tools.md)
 
 ## 架构
 

@@ -17,7 +17,7 @@ updated: 2026-11-10
 {
   "docId": "doc-…",
   "baseRevision": 12,          // 必须等于当前 revision；否则 doc/conflict
-  "idempotencyKey": "turn-…",  // 可选，24h 内重放返回原结果
+  "idempotencyKey": "turn-…",  // 可选，同 key 重放返回原结果
   "dryRun": false,             // true = 只返回 diff，不落盘
   "ops": [ /* Operation[]，顺序执行 */ ]
 }
@@ -43,7 +43,7 @@ updated: 2026-11-10
   追加 op log → revision+1 → 返回。
 - 并发：`baseRevision` 不匹配直接返回 `doc/conflict`，不做自动 merge；调用方应重新
   outline/read 后重试。
-- `idempotencyKey` 在 24h 内重放返回原结果；同 key 内容不同返回 `idempotency/conflict`。
+- `idempotencyKey` 重放返回原结果；同 key 内容不同返回 `idempotency/conflict`（当前实现不做过期裁剪）。
 - `dryRun` 只返回 diff 与校验结果：不写 AST、不追加 op log、不递增 revision。
 
 ## 3. Operation 集 v0
@@ -65,12 +65,15 @@ v0 限制：
 - 不提供任意路径寻址（如 `blocks[2].children[0]`），只认 block id + 相对锚点。
 - 不提供 range/mark 级编辑；需要改格式用 `replace_block`，或 `update_text` + 明确说明。
 - `update_text` 只作用于 textblock；改 codeBlock 内容用 `replace_block`。
+- Agent 工具层的单块纯文本编辑（`space_doc_patch`）是单次 `update_text` 的封装；工具契约见
+  [agent-doc-tools-v0.md](agent-doc-tools-v0.md)，本篇只定义 Operation 语义。
 
 ## 4. 撤销与审计
 
 - 每次 apply 写一条 `doc_ops`：`{ id, docId, revision, actor, ops, inverseOps, createdAt, idempotencyKey? }`。
 - `undo`：应用最近一次事务的 inverseOps，revision+1；作为新操作记录，不删除历史。
-- AI 一次 turn 的多个 op batch 归组为一个 transaction，可整体撤销；用户撤销与 AI 撤销分别标 actor。
+- 撤销以 apply 批次为单位：`undo_token` 对应一条 `doc_ops`；多次 apply 需分别撤销（不按 Agent turn
+  自动归组）；用户撤销与 AI 撤销分别标 actor。
 - op log 是审计与 undo 依据；版本历史仍用快照，两者并存（见 §7）。
 
 ## 5. 错误码
@@ -121,13 +124,12 @@ v0 限制：
       { "id": "n2", "text": "市场分析" },
       { "id": "n3", "text": "产品规划" }
     ]
-  },
-  "layout": { "type": "tree", "direction": "LR" },
-  "theme": "default"
+  }
 }
 ```
 
-约束：节点数 ≤ 500；单节点文本 ≤ 500 字；不允许环。
+约束：payload 只有 `root` 树（`id` + `text` + 可选 `children`），不存布局/主题等渲染参数；
+节点数 ≤ 500；单节点文本 ≤ 500 字。
 
 ### 6.3 组件 payload v1（声明式目录）
 
@@ -140,7 +142,7 @@ v0 限制：
 }
 ```
 
-- 组件目录（`vendor/protocol/src/components.ts`）声明 id、props schema、默认值与 `aiWritable`；
+- 组件目录（协议包 `vendor/protocol`）声明 id、props schema、默认值与 `aiWritable`；
   Host 按目录校验 `componentId/version/props`，未知组件或 props、类型/必填/长度/范围越界一律
   `object/invalid`（fail-closed）。AI 先查 `space_component_catalog`，写入走 `update_object`。
 - 文档只保存 `{ objectId, title? }`，不保存渲染器实现；渲染由客户端静态 registry 按目录 id 选择，

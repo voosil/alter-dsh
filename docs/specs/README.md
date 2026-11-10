@@ -16,7 +16,7 @@ updated: 2026-11-10
 | --- | --- | --- |
 | [document-model-v0.md](document-model-v0.md) | 文档权威表示：单一 `alter-doc/1` 格式、顶层信封与创建/写入约束、Block/Inline 节点、Marks、Schema Registry、v0 节点类型、Markdown 投影规则 | draft |
 | [document-operations-v0.md](document-operations-v0.md) | 写入契约：请求/响应信封、Operation 集、原子性与并发、撤销与审计、错误码、对象与资产、版本/快照/备份 | draft |
-| [agent-doc-tools-v0.md](agent-doc-tools-v0.md) | 模型可调用的文档工具契约、投影预算与裁剪、spike 验收标准、开放决策项 | draft |
+| [agent-doc-tools-v0.md](agent-doc-tools-v0.md) | 模型可调用的文档工具契约（11 个，含 patch 与组件目录）、投影预算与裁剪、spike 验收标准、开放决策项 | draft |
 | [system-architecture.md](system-architecture.md) | 分层与数据所有权、RPC 传输约束、SQLite 持久化与恢复、构建自包含、空间 ↔ 工作区映射不变量、已知边界 | active |
 
 ## 维护规则
