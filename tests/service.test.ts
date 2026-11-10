@@ -337,6 +337,100 @@ describe('Space business service over SQLite', () => {
     await store.close();
   });
 
+  it('persists comment anchors and validates their shape', async () => {
+    const dir = await tempDir();
+    const store = await openSpaceStore({ directory: dir, now: fixedNow });
+    const service = createSpaceAuthority(store, fixedNow);
+    const space = await service.createSpace({ name: '评论' });
+    const doc = await service.createNode({ spaceId: space.id, kind: 'note' });
+    await service.saveNode(doc.id, { content: astContent('hello world') });
+
+    const anchor = { blockId: 'blk_service_1', offset: 0, length: 5 };
+    const comment = await service.addComment({
+      docId: doc.id,
+      body: '  定位评论  ',
+      quote: 'hello',
+      anchor,
+    });
+    expect(comment.anchor).toEqual(anchor);
+    expect(comment.body).toBe('定位评论');
+    expect((await service.listComments(doc.id))[0]?.anchor).toEqual(anchor);
+
+    const moved = await service.updateComment(comment.id, {
+      anchor: { blockId: 'blk_service_1', offset: 6, length: 5 },
+      quote: 'world',
+    });
+    expect(moved.anchor).toEqual({
+      blockId: 'blk_service_1',
+      offset: 6,
+      length: 5,
+    });
+    expect(moved.quote).toBe('world');
+    // Resolving and supplementing keep the anchor attached.
+    expect((await service.resolveComment(comment.id)).anchor).toEqual(
+      moved.anchor,
+    );
+    expect(
+      (await service.addCommentSupplement(comment.id, '补充')).anchor,
+    ).toEqual(moved.anchor);
+    // An explicit null clears the anchor; omitting it leaves no anchor at all.
+    expect((await service.updateComment(comment.id, { anchor: null })).anchor).toBeNull();
+    const whole = await service.addComment({
+      docId: doc.id,
+      body: '全文评论',
+    });
+    expect(whole.anchor).toBeNull();
+
+    // Rows persisted before the anchor model read back as null.
+    await store.update((data) => {
+      const target = data.comments.find((item) => item.id === whole.id);
+      if (target !== undefined)
+        delete (target as { anchor?: unknown }).anchor;
+    });
+    const reloaded = await service.listComments(doc.id);
+    expect(reloaded.find((item) => item.id === whole.id)?.anchor).toBeNull();
+
+    const invalid: unknown[] = [
+      { blockId: '   ', offset: 0, length: 1 },
+      { blockId: 'blk_service_1', offset: -1, length: 1 },
+      { blockId: 'blk_service_1', offset: 1.5, length: 1 },
+      { blockId: 'blk_service_1', offset: 0, length: 0 },
+      { blockId: 'blk_service_1', offset: 0, length: -2 },
+      { blockId: 'blk_service_1', offset: 0, length: 1.5 },
+    ];
+    for (const bad of invalid) {
+      await expect(
+        service.addComment({
+          docId: doc.id,
+          body: '坏锚点',
+          anchor: bad as never,
+        }),
+      ).rejects.toThrow();
+      await expect(
+        service.updateComment(comment.id, { anchor: bad as never }),
+      ).rejects.toThrow();
+    }
+    await expect(
+      service.addComment({ docId: doc.id, body: '坏锚点', anchor: 'x' as never }),
+    ).rejects.toThrow('锚点');
+
+    // Anchors persist across a store reopen.
+    const persisted = await service.addComment({
+      docId: doc.id,
+      body: '持久化锚点',
+      anchor: { blockId: 'blk_service_1', offset: 6, length: 5 },
+    });
+    await store.close();
+    const reopened = await openSpaceStore({ directory: dir, now: fixedNow });
+    const restored = createSpaceAuthority(reopened, fixedNow);
+    expect(
+      (await restored.listComments(doc.id)).find(
+        (item) => item.id === persisted.id,
+      )?.anchor,
+    ).toEqual({ blockId: 'blk_service_1', offset: 6, length: 5 });
+    await reopened.close();
+  });
+
   it('keeps the default space immutable and rejects invalid operations', async () => {
     const dir = await tempDir();
     const store = await openSpaceStore({ directory: dir, now: fixedNow });

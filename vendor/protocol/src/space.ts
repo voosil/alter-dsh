@@ -85,12 +85,28 @@ export interface CommentSupplement {
   createdAt: string;
 }
 
+/**
+ * Position of a comment inside one document block.
+ *
+ * `offset`/`length` are plain-text offsets within the top-level block's
+ * flattened text (inline text as-is, hard breaks as a newline, nested blocks
+ * joined by newlines — the same convention as the editor). Stored comments
+ * always carry the anchor captured when the comment was created; comments
+ * written before the anchor model load with `anchor: null`.
+ */
+export interface CommentAnchor {
+  blockId: string;
+  offset: number;
+  length: number;
+}
+
 export interface Comment {
   id: string;
   docId: string;
   author: Creator;
   body: string;
   quote: string | null;
+  anchor: CommentAnchor | null;
   status: 'open' | 'resolved';
   createdAt: string;
   resolvedAt: string | null;
@@ -253,10 +269,15 @@ export interface SpaceService {
     docId: string;
     body: string;
     quote?: string | null;
+    anchor?: CommentAnchor | null;
   }): Promise<Comment>;
   updateComment(
     id: string,
-    patch: { body?: string; quote?: string | null },
+    patch: {
+      body?: string;
+      quote?: string | null;
+      anchor?: CommentAnchor | null;
+    },
   ): Promise<Comment>;
   addCommentSupplement(id: string, body: string): Promise<Comment>;
   deleteComment(id: string): Promise<void>;

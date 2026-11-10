@@ -19,20 +19,27 @@
  *
  * @module @alter-dsh/space/document/AlterDocumentView
  */
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Archive,
   ArchiveRestore,
   Download,
   FilePlus2,
   Link2,
+  MessageSquare,
 } from 'lucide-react';
 import type { MenuAction } from '@alter/ui-system';
-import type { SpaceNode } from '@alter/protocol';
+import type { Comment, CommentAnchor, SpaceNode } from '@alter/protocol';
 import { DirectoryButton } from '../../vendor/ui-space/src/components/DirectoryButton';
 import { useSpaceContext } from '../../vendor/ui-space/src/runtime';
 import { displayTitle } from '../../vendor/ui-space/src/utils/tree';
 import { documentClientOf } from './client-access';
+import {
+  anchorText,
+  CommentRail,
+  isCommentAnchorValid,
+  sortCommentsByAnchor,
+} from './comments';
 import {
   AlterTiptapEditor,
   astToTiptap,
@@ -102,9 +109,20 @@ export function AlterDocumentView({
   const [bannerError, setBannerError] = useState<string | null>(null);
   const [restore, setRestore] = useState<EditorRestoreRequest | null>(null);
   const [archived, setArchived] = useState(node.archived);
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [commentsOpen, setCommentsOpen] = useState(false);
+  const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
+  const [pendingAnchor, setPendingAnchor] = useState<
+    (CommentAnchor & { quote: string }) | null
+  >(null);
+  const [pendingDraft, setPendingDraft] = useState(false);
 
   const loadedRef = useRef(false);
   const titleEditedRef = useRef(false);
+  const commentsRef = useRef<Comment[]>([]);
+  commentsRef.current = comments;
+  const pendingDraftRef = useRef(false);
+  pendingDraftRef.current = pendingDraft;
 
   useEffect(() => {
     setArchived(node.archived);
@@ -182,6 +200,178 @@ export function AlterDocumentView({
     };
   }, [service, node.id, node.updatedAt]);
 
+  const reloadComments = useCallback(async () => {
+    const listComments = service.listComments;
+    if (typeof listComments !== 'function') return;
+    try {
+      setComments(await listComments.call(service, node.id));
+    } catch (error) {
+      toast(`评论加载失败：${describeError(error)}`);
+    }
+  }, [service, node.id, toast]);
+
+  useEffect(() => {
+    void reloadComments();
+  }, [reloadComments]);
+
+  /** Comment ids whose stored anchor no longer points inside the document. */
+  const invalidCommentIds = useMemo(() => {
+    const invalid = new Set<string>();
+    if (state.kind !== 'ready') return invalid;
+    for (const comment of comments) {
+      if (
+        comment.anchor !== null &&
+        comment.anchor !== undefined &&
+        !isCommentAnchorValid(state.snapshot.doc, comment.anchor)
+      )
+        invalid.add(comment.id);
+    }
+    return invalid;
+  }, [comments, state]);
+
+  const sortedComments = useMemo(
+    () =>
+      sortCommentsByAnchor(
+        comments,
+        state.kind === 'ready' ? state.snapshot.doc : undefined,
+      ),
+    [comments, state],
+  );
+
+  /** Markers handed to the editor for in-body comment highlighting. */
+  const commentMarkers = useMemo(
+    () =>
+      sortedComments
+        .filter(
+          (comment) =>
+            comment.status === 'open' &&
+            comment.anchor !== null &&
+            comment.anchor !== undefined &&
+            !invalidCommentIds.has(comment.id),
+        )
+        .map((comment) => ({
+          id: comment.id,
+          anchor: comment.anchor as CommentAnchor,
+        })),
+    [sortedComments, invalidCommentIds],
+  );
+
+  const openCommentCount = comments.filter(
+    (comment) => comment.status === 'open',
+  ).length;
+
+  /** Keep stored quotes in sync with the text currently under each anchor. */
+  const syncCommentQuotes = useCallback(
+    (doc: AlterDoc) => {
+      const updates: { id: string; quote: string }[] = [];
+      for (const comment of commentsRef.current) {
+        if (comment.anchor == null || comment.status !== 'open') continue;
+        const text = anchorText(doc, comment.anchor);
+        if (text === undefined || text === '' || text === comment.quote) continue;
+        updates.push({ id: comment.id, quote: text });
+      }
+      if (updates.length === 0) return;
+      void (async () => {
+        let changed = false;
+        for (const update of updates) {
+          try {
+            await service.updateComment(update.id, { quote: update.quote });
+            changed = true;
+          } catch {
+            // A failed quote refresh must not disturb editing or saving.
+          }
+        }
+        if (changed) await reloadComments();
+      })();
+    },
+    [service, reloadComments],
+  );
+
+  const handleCommentAnchorChange = useCallback(
+    (next: (CommentAnchor & { quote: string }) | null) => {
+      if (next === null) {
+        if (!pendingDraftRef.current) setPendingAnchor(null);
+        return;
+      }
+      setPendingAnchor(next);
+      setCommentsOpen(true);
+    },
+    [],
+  );
+
+  const handleCommentClick = useCallback((id: string) => {
+    setActiveCommentId(id);
+    setCommentsOpen(true);
+  }, []);
+
+  const cancelPendingComment = useCallback(() => {
+    setPendingAnchor(null);
+    setPendingDraft(false);
+  }, []);
+
+  const addPendingComment = useCallback(
+    async (body: string) => {
+      const anchor = pendingAnchor;
+      await service.addComment({
+        docId: node.id,
+        body,
+        quote: anchor === null ? null : anchor.quote,
+        anchor:
+          anchor === null
+            ? null
+            : {
+                blockId: anchor.blockId,
+                offset: anchor.offset,
+                length: anchor.length,
+              },
+      });
+      setPendingAnchor(null);
+      setPendingDraft(false);
+      await reloadComments();
+    },
+    [service, node.id, pendingAnchor, reloadComments],
+  );
+
+  const approveComment = useCallback(
+    async (id: string) => {
+      await service.resolveComment(id);
+      await reloadComments();
+    },
+    [service, reloadComments],
+  );
+
+  const editComment = useCallback(
+    async (id: string, body: string) => {
+      await service.updateComment(id, { body });
+      await reloadComments();
+    },
+    [service, reloadComments],
+  );
+
+  const supplementComment = useCallback(
+    async (id: string, body: string) => {
+      await service.addCommentSupplement(id, body);
+      await reloadComments();
+    },
+    [service, reloadComments],
+  );
+
+  const deleteComment = useCallback(
+    async (id: string) => {
+      await service.deleteComment(id);
+      await reloadComments();
+    },
+    [service, reloadComments],
+  );
+
+  /**
+   * Activate one comment; the editor selects and scrolls to the matching
+   * highlight when `activeCommentId` changes.
+   */
+  const locateComment = useCallback((comment: Comment) => {
+    setActiveCommentId(comment.id);
+  }, []);
+
   const handleSaved = (revision: number, doc: AlterDoc, savedTitle: string) => {
     setState((current) =>
       current.kind === 'ready'
@@ -191,6 +381,7 @@ export function AlterDocumentView({
           }
         : current,
     );
+    syncCommentQuotes(doc);
   };
 
   const handleRestoreDraft = () => {
@@ -392,6 +583,22 @@ export function AlterDocumentView({
             )}
             <button
               type="button"
+              className={
+                commentsOpen ? styles.panelToggleActive : styles.panelToggle
+              }
+              aria-pressed={commentsOpen}
+              aria-label="评论"
+              title="评论"
+              onClick={() => setCommentsOpen((open) => !open)}
+            >
+              <MessageSquare size={13} strokeWidth={1.7} aria-hidden="true" />
+              评论
+              {openCommentCount > 0 ? (
+                <span className={styles.commentCount}>{openCommentCount}</span>
+              ) : null}
+            </button>
+            <button
+              type="button"
               className={panelOpen ? styles.panelToggleActive : styles.panelToggle}
               aria-pressed={panelOpen}
               onClick={() => setPanelOpen((open) => !open)}
@@ -498,9 +705,30 @@ export function AlterDocumentView({
               onAdoptTitle={(next) => setTitle(next)}
               restore={restore}
               readOnly={titleLocked}
+              commentMarkers={commentMarkers}
+              activeCommentId={activeCommentId}
+              onCommentAnchorChange={handleCommentAnchorChange}
+              onCommentClick={handleCommentClick}
             />
           )}
         </div>
+        {commentsOpen ? (
+          <CommentRail
+            comments={sortedComments}
+            activeCommentId={activeCommentId}
+            invalidCommentIds={invalidCommentIds}
+            pendingQuote={pendingAnchor === null ? null : pendingAnchor.quote}
+            onActivate={setActiveCommentId}
+            onAddPending={addPendingComment}
+            onCancelPending={cancelPendingComment}
+            onPendingDraftChange={setPendingDraft}
+            onApprove={approveComment}
+            onEdit={editComment}
+            onSupplement={supplementComment}
+            onDelete={deleteComment}
+            onLocate={locateComment}
+          />
+        ) : null}
         {panelOpen && state.kind === 'ready' && client !== undefined ? (
           <DocumentSidePanel
             docId={node.id}

@@ -178,6 +178,16 @@ describe('Space RPC dispatch', () => {
       {},
     );
     expect(errorOf(blocked)?.code).toBe('node/not-writable');
+    // The legacy Space-level restore writes `node.content` directly and never
+    // advances the document revision, so it must stay unreachable.
+    const blockedRestore = await handler(
+      'space.restoreVersion',
+      { args: [created.id, 'ver-legacy'] },
+      signal,
+      {},
+    );
+    expect(errorOf(blockedRestore)?.code).toBe('node/not-writable');
+    expect(errorOf(blockedRestore)?.message).toContain('doc.restoreVersion');
     const renamed = valueOf(
       await handler(
         'space.saveNode',

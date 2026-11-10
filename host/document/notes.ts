@@ -39,5 +39,15 @@ export function createStructuredSpaceService(
         );
       return service.saveNode(id, patch);
     },
+    // The legacy Space-level restore assigns `node.content` directly and never
+    // advances the document revision, so it would bypass both Document
+    // Operations and the revision CAS. Recovering a version goes through
+    // `doc.restoreVersion`, which re-applies the snapshot as Operations.
+    async restoreVersion(_docId, _versionId) {
+      throw new DocumentError(
+        'node/not-writable',
+        '文档版本恢复只能通过文档模型接口（doc.restoreVersion）',
+      );
+    },
   };
 }

@@ -2,16 +2,16 @@
  * Comments and version-history side panel for AST-backed documents.
  *
  * Comments use the existing SpaceService comment API (quote anchoring stays
- * optional in v0). History lists AST snapshots and restores them through the
- * document RPC (`doc.restoreVersion`), which keeps revision CAS monotonic.
+ * optional in v0). The history tab is delegated to `history/HistoryView`:
+ * version list, AST block diff preview and restore through the document RPC
+ * (`doc.restoreVersion`), which keeps revision CAS monotonic.
  *
  * @module @alter-dsh/space/document/DocumentSidePanel
  */
 import { useCallback, useEffect, useState } from 'react';
 import type { Comment, DocVersion, SpaceService } from '@alter/protocol';
 import type { SpaceDocumentClient } from '../space-client';
-import { DocumentContent } from './DocumentContent';
-import { parseAlterDocContent } from './types';
+import { HistoryView } from './history';
 import styles from './DocumentSidePanel.module.css';
 
 export interface DocumentSidePanelProps {
@@ -38,17 +38,6 @@ function formatTime(value: string): string {
   )}:${pad(date.getMinutes())}`;
 }
 
-export function VersionPreview({ version }: { version: DocVersion }) {
-  const doc = parseAlterDocContent(version.content);
-  if (doc === undefined)
-    return <p className={styles.unparsedPreview}>版本内容无法解析</p>;
-  return (
-    <div className={styles.versionPreview}>
-      <DocumentContent doc={doc} />
-    </div>
-  );
-}
-
 /** Render the comments/history panel. */
 export function DocumentSidePanel({
   docId,
@@ -60,7 +49,6 @@ export function DocumentSidePanel({
   const [tab, setTab] = useState<Tab>('comments');
   const [comments, setComments] = useState<Comment[]>([]);
   const [versions, setVersions] = useState<DocVersion[]>([]);
-  const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
@@ -80,7 +68,6 @@ export function DocumentSidePanel({
     try {
       const list = await service.listVersions(docId);
       setVersions(list);
-      setSelectedVersionId((current) => current ?? list[0]?.id ?? null);
     } catch (error) {
       setStatus({
         kind: 'error',
@@ -136,30 +123,6 @@ export function DocumentSidePanel({
     }
   }
 
-  async function restoreSelected() {
-    if (selectedVersionId === null) return;
-    setBusy(true);
-    setStatus({ kind: 'idle' });
-    try {
-      const result = (await client.restoreVersion({
-        docId,
-        versionId: selectedVersionId,
-        baseRevision: revision,
-      })) as { revision: number };
-      setStatus({ kind: 'success', message: '已恢复到该版本' });
-      await reloadVersions();
-      onRestored(result.revision);
-    } catch (error) {
-      setStatus({
-        kind: 'error',
-        message: error instanceof Error ? error.message : String(error),
-      });
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const selected = versions.find((version) => version.id === selectedVersionId);
   const openComments = comments.filter((comment) => comment.status === 'open');
   const resolvedComments = comments.filter((comment) => comment.status === 'resolved');
 
@@ -254,45 +217,14 @@ export function DocumentSidePanel({
           </div>
         </div>
       ) : (
-        <div className={styles.history}>
-          <ol className={styles.versionList}>
-            {versions.length === 0 ? (
-              <p className={styles.empty}>还没有版本快照。</p>
-            ) : null}
-            {versions.map((version) => (
-              <li key={version.id}>
-                <button
-                  type="button"
-                  className={
-                    version.id === selectedVersionId
-                      ? styles.versionActive
-                      : styles.version
-                  }
-                  onClick={() => setSelectedVersionId(version.id)}
-                >
-                  <span>{formatTime(version.at)}</span>
-                  <span className={styles.versionMeta}>
-                    {version.author === 'alter' ? 'Alter' : '我'} ·{' '}
-                    {version.title || '未命名'}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ol>
-          {selected === undefined ? null : (
-            <div className={styles.preview}>
-              <VersionPreview version={selected} />
-              <button
-                type="button"
-                className={styles.primary}
-                disabled={busy}
-                onClick={() => void restoreSelected()}
-              >
-                恢复此版本
-              </button>
-            </div>
-          )}
-        </div>
+        <HistoryView
+          docId={docId}
+          revision={revision}
+          versions={versions}
+          client={client}
+          onRestored={onRestored}
+          onReloadVersions={reloadVersions}
+        />
       )}
     </aside>
   );

@@ -16,7 +16,7 @@
  */
 import { stat } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { backupsDirectory, pruneSnapshots, snapshotBytes } from './backup.js';
+import { pruneSnapshots, snapshotBytes } from './backup.js';
 import { trimAllVersions } from './retention.js';
 import {
   HISTORY_BYTE_BUDGET,
@@ -136,7 +136,6 @@ export function createSpaceStorage(options: {
   directory: string;
 }): SpaceStorageApi {
   const { store, directory } = options;
-  const backups = backupsDirectory(directory);
 
   async function get(): Promise<StorageState> {
     const settings = store.getStorageSettings();
@@ -160,8 +159,10 @@ export function createSpaceStorage(options: {
       await store.update((data) => {
         trimAllVersions(data, next);
       });
+      // `pruneSnapshots` takes the data directory and appends `backups/`
+      // itself; passing the backups directory here made the sweep a no-op.
       if (next.snapshotKeep !== previous.snapshotKeep)
-        await pruneSnapshots(backups, next.snapshotKeep).catch(() => undefined);
+        await pruneSnapshots(directory, next.snapshotKeep);
       return get();
     },
   };

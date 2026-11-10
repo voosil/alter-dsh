@@ -150,6 +150,7 @@ function makeContext(options: HarnessOptions = {}) {
           author: 'me',
           body: '侧栏评论内容',
           quote: null,
+          anchor: null,
           status: 'open',
           createdAt: '2026-11-09T00:00:00.000Z',
           resolvedAt: null,

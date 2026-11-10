@@ -84,6 +84,26 @@
   outline-offset: 1px;
 }
 
+.panelToggle svg,
+.panelToggleActive svg {
+  vertical-align: -2px;
+  margin-right: 4px;
+}
+
+.commentCount {
+  display: inline-block;
+  min-width: 15px;
+  margin-left: 5px;
+  padding: 0 4px;
+  border-radius: var(--alter-radius-pill);
+  background: var(--alter-surface-hover);
+  color: var(--alter-text-secondary);
+  font-family: var(--alter-font-mono);
+  font-size: var(--alter-font-micro);
+  line-height: 15px;
+  text-align: center;
+}
+
 .state,
 .error {
   max-width: 720px;
@@ -109,7 +129,13 @@
   }
 
   .body {
+    min-height: 0;
     padding: 20px 16px 64px;
+  }
+
+  /* The comment rail stacks under the body on narrow layouts. */
+  .bodyRow {
+    flex-direction: column;
   }
 }
 

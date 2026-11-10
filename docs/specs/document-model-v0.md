@@ -93,7 +93,8 @@ v0 行内子集与投影：
 - `bold` → `**x**`；`italic` → `*x*`；`strike` → `~~x~~`；`code` → `` `x` ``。
 - `highlight` → `==x==`（扩展语法）；`underline` → `<u>x</u>`（投影用内联 HTML，解析时仅接受 `<u>`）。
 - `link` → `[x](href)`；href 只允许 `https?`、`mailto` 或站内相对路径。
-- 评论锚点、颜色、字号 v0 不做（评论继续用 `Comment.quote`）；新增 mark 必须升 `schemaVersion`。
+- 评论以 `Comment.anchor = { blockId, offset, length }` 锚定到某个顶层块的展平文本（inline text 原样、
+  hardBreak 记 `\n`、嵌套块之间以 `\n` 连接）；颜色、字号 v0 不做；新增 mark 必须升 `schemaVersion`。
 
 ## 5. 文档级元数据
 

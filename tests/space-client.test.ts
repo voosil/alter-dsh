@@ -87,6 +87,40 @@ describe('createSpaceClient', () => {
       args: ['~'],
     });
   });
+
+  it('forwards comment anchors through the space RPC endpoints', async () => {
+    const calls: Array<{ op: string; args: unknown[] }> = [];
+    const rpc: SpaceRpcCaller = {
+      async call(_channel, _endpoint, payload) {
+        const { op, args } = payload as { op: string; args: unknown[] };
+        calls.push({ op, args });
+        return { ok: true, value: { value: null } };
+      },
+    };
+    const service = createSpaceClient(rpc);
+    const anchor = { blockId: 'blk_p', offset: 2, length: 4 };
+    await service.addComment({
+      docId: 'doc-1',
+      body: '定位评论',
+      quote: '选中文字',
+      anchor,
+    });
+    await service.updateComment('cm-1', { anchor });
+    expect(calls).toEqual([
+      {
+        op: 'space.addComment',
+        args: [
+          {
+            docId: 'doc-1',
+            body: '定位评论',
+            quote: '选中文字',
+            anchor,
+          },
+        ],
+      },
+      { op: 'space.updateComment', args: ['cm-1', { anchor }] },
+    ]);
+  });
 });
 
 describe('createSpaceDocumentClient', () => {

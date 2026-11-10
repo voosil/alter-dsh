@@ -65,6 +65,15 @@ import {
   clearDocumentDraft,
   writeDocumentDraft,
 } from './draft';
+import {
+  commentSelectionAnchor,
+  createCommentAnchorExtension,
+  refreshCommentDecorations,
+  scrollToCommentAnchor,
+  type CommentAnchor,
+  type CommentMarker,
+  type CommentSelectionAnchor,
+} from './comment-marks';
 import { astToTiptap } from './mapping';
 import { editorExtensions } from './schema';
 import {
@@ -193,6 +202,9 @@ function describeImageError(error: unknown): string {
   return '图片上传失败，请重试';
 }
 
+/** Stable empty marker list so effects do not re-run on every render. */
+const EMPTY_COMMENT_MARKERS: readonly CommentMarker[] = [];
+
 /** Props of the editable document surface. */
 export interface AlterTiptapEditorProps {
   /** Space node id of the document. */
@@ -221,6 +233,16 @@ export interface AlterTiptapEditorProps {
   uploadImage?: ImageUploader;
   /** Receives the editor instance once mounted (tests / integrations). */
   onEditorReady?: (editor: Editor) => void;
+  /** Comment highlights supplied by the comment rail (P2). */
+  commentMarkers?: readonly CommentMarker[];
+  /** Reports the current selection anchor (null when there is none). */
+  onCommentAnchorChange?: (
+    anchor: (CommentAnchor & { quote: string }) | null,
+  ) => void;
+  /** Called when a comment highlight is clicked. */
+  onCommentClick?: (id: string) => void;
+  /** Comment to select/scroll to; set by the comment rail. */
+  activeCommentId?: string | null;
 }
 
 interface LinkBarState {
@@ -355,6 +377,10 @@ export function AlterTiptapEditor({
   readOnly = false,
   uploadImage,
   onEditorReady,
+  commentMarkers,
+  onCommentAnchorChange,
+  onCommentClick,
+  activeCommentId,
 }: AlterTiptapEditorProps) {
   const [status, setStatus] = useState<AutosaveStatus>({ kind: 'idle' });
   const [dirty, setDirty] = useState(false);
@@ -381,6 +407,13 @@ export function AlterTiptapEditor({
   clientRef.current = client;
   const onEditorReadyRef = useRef(onEditorReady);
   onEditorReadyRef.current = onEditorReady;
+  const onCommentAnchorChangeRef = useRef(onCommentAnchorChange);
+  onCommentAnchorChangeRef.current = onCommentAnchorChange;
+  const onCommentClickRef = useRef(onCommentClick);
+  onCommentClickRef.current = onCommentClick;
+  const lastReportedCommentRef = useRef('');
+  const suppressCommentSelectionRef = useRef(false);
+  const composingRef = useRef(false);
 
   const uploadImageRef = useRef<ImageUploader>((file) =>
     uploadImageWithClient(clientRef.current, file),
@@ -652,8 +685,39 @@ export function AlterTiptapEditor({
   filteredCommandsRef.current = filteredCommands;
   executeSlashRef.current = executeSlashCommand;
 
+  const commentExtension = useMemo(() => createCommentAnchorExtension(), []);
+  const extensions = useMemo(
+    () => [...editorExtensions, commentExtension],
+    [commentExtension],
+  );
+
+  const reportCommentSelection = useCallback(
+    (next: CommentSelectionAnchor | null): void => {
+      const handler = onCommentAnchorChangeRef.current;
+      if (handler === undefined) return;
+      const key =
+        next === null
+          ? ''
+          : `${next.blockId}:${next.offset}:${next.length}:${next.quote}`;
+      if (key === lastReportedCommentRef.current) return;
+      lastReportedCommentRef.current = key;
+      handler(next);
+    },
+    [],
+  );
+
+  const syncCommentSelection = useCallback(
+    (instance: Editor): void => {
+      if (instance.isDestroyed) return;
+      if (suppressCommentSelectionRef.current) return;
+      if (instance.view.composing || composingRef.current) return;
+      reportCommentSelection(commentSelectionAnchor(instance) ?? null);
+    },
+    [reportCommentSelection],
+  );
+
   const editor = useEditor({
-    extensions: editorExtensions,
+    extensions,
     content: projectedContent,
     editable: !readOnly,
     editorProps: {
@@ -812,9 +876,11 @@ export function AlterTiptapEditor({
     onSelectionUpdate: () => {
       if (loadingRef.current) return;
       syncSlashState(editor);
+      syncCommentSelection(editor);
     },
     onBlur: () => {
       setSlash(null);
+      reportCommentSelection(null);
     },
   });
   editorRef.current = editor;
@@ -868,6 +934,52 @@ export function AlterTiptapEditor({
   useEffect(() => {
     editor.setEditable(!readOnly);
   }, [editor, readOnly]);
+
+  // Comment highlights follow the rail's markers without recreating the
+  // editor: the plugin rebuilds decorations from the current doc.
+  const markers = commentMarkers ?? EMPTY_COMMENT_MARKERS;
+  const activeComment = activeCommentId ?? null;
+  useEffect(() => {
+    refreshCommentDecorations(editor, markers, activeComment);
+  }, [editor, markers, activeComment]);
+
+  // IME composition must not report half-composed selections as anchors.
+  useEffect(() => {
+    const dom = editor.view.dom;
+    const onCompositionStart = (): void => {
+      composingRef.current = true;
+    };
+    const onCompositionEnd = (): void => {
+      composingRef.current = false;
+      syncCommentSelection(editor);
+    };
+    dom.addEventListener('compositionstart', onCompositionStart);
+    dom.addEventListener('compositionend', onCompositionEnd);
+    return () => {
+      dom.removeEventListener('compositionstart', onCompositionStart);
+      dom.removeEventListener('compositionend', onCompositionEnd);
+    };
+  }, [editor, syncCommentSelection]);
+
+  // The comment rail's active comment selects and scrolls to its anchor.
+  const lastScrolledCommentRef = useRef('');
+  useEffect(() => {
+    if (activeComment === null) {
+      lastScrolledCommentRef.current = '';
+      return;
+    }
+    const marker = markers.find((item) => item.id === activeComment);
+    if (marker === undefined) return;
+    const key = `${activeComment}:${marker.anchor.blockId}:${marker.anchor.offset}:${marker.anchor.length}`;
+    if (lastScrolledCommentRef.current === key) return;
+    lastScrolledCommentRef.current = key;
+    suppressCommentSelectionRef.current = true;
+    try {
+      scrollToCommentAnchor(editor, marker.anchor);
+    } finally {
+      suppressCommentSelectionRef.current = false;
+    }
+  }, [activeComment, editor, markers]);
 
   // Hand the editor instance to test/integration seams once.
   const readyNotifiedRef = useRef(false);
@@ -1054,6 +1166,18 @@ export function AlterTiptapEditor({
     event.target.value = '';
     if (files.length > 0) void insertImageFiles(files);
   };
+
+  const handleSurfaceClick = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>): void => {
+      const target = event.target as HTMLElement | null;
+      const marked =
+        target === null ? null : target.closest('[data-comment-id]');
+      const id = marked?.getAttribute('data-comment-id') ?? '';
+      if (id === '') return;
+      onCommentClickRef.current?.(id);
+    },
+    [],
+  );
 
   const handleEditorMouseOver = (
     event: ReactMouseEvent<HTMLDivElement>,
@@ -1376,7 +1500,11 @@ export function AlterTiptapEditor({
         </div>
       ) : null}
 
-      <div className={styles.surface} onMouseOver={handleEditorMouseOver}>
+      <div
+        className={styles.surface}
+        onMouseOver={handleEditorMouseOver}
+        onClick={handleSurfaceClick}
+      >
         <EditorContent editor={editor} className={styles.content} />
       </div>
 

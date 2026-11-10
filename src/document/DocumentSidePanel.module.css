@@ -50,8 +50,7 @@
   color: var(--alter-danger);
 }
 
-.comments,
-.history {
+.comments {
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -171,67 +170,4 @@
 .primary:disabled {
   opacity: 0.5;
   cursor: default;
-}
-
-.versionList {
-  margin: 0;
-  padding: 10px 12px;
-  list-style: none;
-  overflow: auto;
-  max-height: 40%;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.version,
-.versionActive {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  width: 100%;
-  padding: 7px 8px;
-  border: 1px solid transparent;
-  border-radius: var(--alter-radius-xs);
-  background: transparent;
-  color: var(--alter-text);
-  text-align: left;
-  font-size: var(--alter-font-caption);
-  cursor: pointer;
-}
-
-.versionActive {
-  border-color: var(--alter-control-line);
-  background: var(--alter-surface-hover);
-}
-
-.versionMeta {
-  color: var(--alter-text-muted);
-  font-size: var(--alter-font-micro);
-}
-
-.preview {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 10px 12px 12px;
-  border-top: 1px solid var(--alter-line);
-}
-
-.versionPreview {
-  flex: 1;
-  overflow: auto;
-  border: 1px solid var(--alter-line);
-  border-radius: var(--alter-radius-control);
-  padding: 10px 12px;
-  font-size: var(--alter-font-body-sm);
-}
-
-.unparsedPreview {
-  margin: 0;
-  color: var(--alter-text-muted);
-  font-size: var(--alter-font-caption);
-  line-height: 1.7;
 }

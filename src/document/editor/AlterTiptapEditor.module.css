@@ -582,3 +582,24 @@
   border-radius: var(--alter-radius-control);
   object-fit: contain;
 }
+
+/* ------------------------------------------------------------------------- */
+/* Comment highlights (P2)                                                    */
+/* ------------------------------------------------------------------------- */
+
+:global(.alter-comment-mark) {
+  border-bottom: 1px solid var(--alter-accent, #d1512a);
+  background: var(--alter-accent-soft, rgba(209, 81, 42, 0.12));
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+:global(.alter-comment-mark-active) {
+  background: var(--alter-accent-soft-strong, rgba(209, 81, 42, 0.26));
+  box-shadow: 0 0 0 1px var(--alter-accent, #d1512a);
+}
+
+:global(.alter-comment-mark-resolved) {
+  opacity: 0.55;
+  border-bottom-style: dotted;
+}

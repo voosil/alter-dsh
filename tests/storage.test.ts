@@ -296,3 +296,29 @@ describe('storage estimate', () => {
     await store.close();
   });
 });
+
+describe('snapshot policy pruning', () => {
+  it('prunes existing snapshots as soon as the keep count is lowered', async () => {
+    let clock = new Date('2026-02-01T10:00:00.000Z');
+    const now = () => new Date(clock);
+    const dir = await tempDir();
+    const store = await openSpaceStore({ directory: dir, now });
+    await store.setStorageSettings({ historyLimit: 10, snapshotKeep: 3 });
+    for (const day of [1, 2, 3]) {
+      clock = new Date(`2026-02-0${day}T10:00:00.000Z`);
+      expect(
+        (await createDailySnapshot({ store, directory: dir, now, logger }))
+          .status,
+      ).toBe('created');
+    }
+    expect(await listSnapshots(dir)).toHaveLength(3);
+
+    const storage = createSpaceStorage({ store, directory: dir });
+    const state = await storage.set({ snapshotKeep: 1 });
+
+    const files = await listSnapshots(dir);
+    expect(files.map((file) => file.name)).toEqual(['space-20260203.db.gz']);
+    expect(state.settings.snapshotKeep).toBe(1);
+    await store.close();
+  });
+});

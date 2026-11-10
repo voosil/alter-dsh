@@ -9,6 +9,7 @@ import type {
   AgentEvent,
   AgentPermission,
   Comment,
+  CommentAnchor,
   CreateAgentInput,
   DirectoryEntry,
   Milestone,
@@ -54,6 +55,35 @@ const AGENT_PERMISSIONS: AgentPermission[] = [
 function normalizeAgentPermissions(input: unknown): AgentPermission[] {
   if (!Array.isArray(input)) return [];
   return AGENT_PERMISSIONS.filter((permission) => input.includes(permission));
+}
+
+/**
+ * Validate one optional comment anchor.
+ *
+ * `undefined`/`null` means "no anchor"; a present anchor must point at a
+ * non-empty text range: a non-empty block id plus a non-negative integer
+ * `offset` and a positive integer `length`.
+ */
+function readCommentAnchor(value: unknown): CommentAnchor | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'object' || Array.isArray(value))
+    throw new Error('评论锚点格式不正确');
+  const record = value as Record<string, unknown>;
+  const blockId = record['blockId'];
+  const offset = record['offset'];
+  const length = record['length'];
+  if (typeof blockId !== 'string' || blockId.trim() === '')
+    throw new Error('评论锚点缺少 blockId');
+  if (typeof offset !== 'number' || !Number.isInteger(offset) || offset < 0)
+    throw new Error('评论锚点 offset 必须是非负整数');
+  if (typeof length !== 'number' || !Number.isInteger(length) || length <= 0)
+    throw new Error('评论锚点 length 必须是正整数');
+  return { blockId: blockId.trim(), offset, length };
+}
+
+/** Attach the anchor field to comments persisted before the anchor model. */
+function withCommentAnchor(comment: Comment): Comment {
+  return { ...comment, anchor: comment.anchor ?? null };
 }
 
 function toIso(date: Date) {
@@ -715,7 +745,8 @@ export function createContentService(
         store
           .read()
           .comments.filter((comment) => comment.docId === docId)
-          .sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+          .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+          .map(withCommentAnchor),
       );
     },
 
@@ -723,6 +754,7 @@ export function createContentService(
       docId: string;
       body: string;
       quote?: string | null;
+      anchor?: CommentAnchor | null;
     }) {
       return store.update((data) => {
         const node = currentNode(data, input.docId);
@@ -734,6 +766,7 @@ export function createContentService(
           author: 'me',
           body,
           quote: input.quote?.trim() || null,
+          anchor: readCommentAnchor(input.anchor),
           status: 'open',
           createdAt: toIso(now()),
           resolvedAt: null,
@@ -760,7 +793,10 @@ export function createContentService(
         if (patch.quote !== undefined) {
           comment.quote = patch.quote;
         }
-        return clone(comment);
+        if (patch.anchor !== undefined) {
+          comment.anchor = readCommentAnchor(patch.anchor);
+        }
+        return withCommentAnchor(clone(comment));
       });
     },
 
@@ -776,7 +812,7 @@ export function createContentService(
           body: content,
           createdAt: toIso(now()),
         });
-        return clone(comment);
+        return withCommentAnchor(clone(comment));
       });
     },
 
@@ -794,7 +830,7 @@ export function createContentService(
         if (!comment) throw new Error('评论不存在');
         comment.status = 'resolved';
         comment.resolvedAt = toIso(now());
-        return clone(comment);
+        return withCommentAnchor(clone(comment));
       });
     },
 
