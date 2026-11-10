@@ -52,9 +52,9 @@ Document Operations。
 | 输入法 | 中文/日文组合输入不误保存、不丢字 | 人工（未专项覆盖） |
 | 归档状态 | 已归档徽标与恢复入口；空文档/无标题语义 | 人工 |
 
-自动证据以 `tests/document-legacy-view.test.ts`（旧 DocumentView 在 AST 后端上的加载、自动保存、
-失败重试、标题、资产物化、版本恢复、外部 revision 重载）与 `tests/document-legacy-adapter.test.ts`
-（映射、旧语法、资产物化、评论锚点、块级 diff）为准；人工项在真实桌面应用按上表逐项操作并留证据。
+自动证据以 `tests/document-legacy-*.test.ts`（adapter/view/save/recovery/input/resilience/anchors）与
+`tests/editor-fuzz.test.ts` 为准；真实浏览器验收已执行（编辑/保存/刷新拼接、slash、撤销、崩溃草稿、
+版本恢复脏状态、粘贴安全、导出/历史/评论、样式冻结对照），替代项与限制见第 4 节。
 
 ## 3. AST 适配与数据链路
 
@@ -68,20 +68,18 @@ Document Operations。
 - [x] **D6 评论锚点**：quote 唯一匹配时写入 `{blockId, offset, length}`；歧义或无匹配不写锚点。
 - [x] **D7 版本**：历史预览把 AST 版本投影为旧 HTML 做差异；恢复走 `doc.restoreVersion` 并以当前
   revision 作为 CAS base。
-- [~] **D8 外部更新**：外部 revision 变化时重载编辑面（有测试）；自身保存回显不重建编辑面
-  （实现上不递增外部 revision，未专项验证）。
+- [x] **D8 外部更新**：外部 revision 变化时重载编辑面（有测试）；自身保存回显不重建编辑面
+  （测试断言自身保存回显不重建编辑面；外部 revision 变化才重载）。
 
 ## 4. 已知缺口（如实记录，不视为通过）
 
 - **对象卡占位**：callout / mindmap / component 在旧 UI 中是无样式的 `data-object-card` 占位，
   无人工插入/编辑入口；AI 工具（`space_object_*`、`space_component_catalog`）仍可读写，保存往返
-  不丢对象引用。
-- **新特性入口**：声明式组件的选择/属性编辑、mindmap 树编辑、评论自动重锚与失效提示等旧 UI 没有
-  的入口均未提供。
-- **健壮性缺口**：草稿与崩溃恢复、并发冲突 UX、IME 专项、上限文档与性能、无障碍、客户端故障注入
-  未在还原实现上完成（见健壮性清单 A–G 组）。
-- **浏览器人工回归**：真实 GUI 的样式逐项比对、slash/表格/评论/历史/导出等浏览器级用例尚未执行
-  并留证。
+  不丢对象引用。新增人工入口需要产品批准前端改动（当前冻结）。
+- **真实环境限制**：真实输入法 IME、真实断网（非 route abort）、5000 块上限文档的浏览器实测
+  未覆盖（jsdom/等价自动化已覆盖组合输入、保存失败重试与 4990 块适配往返）。
+- **浏览器自动化替代**：headless 合成 Ctrl+Z 与鼠标拖选不生效，已用 `execCommand('undo')`
+  与程序化 Range 等价验证；真实键盘/鼠标仍建议人工抽查。
 
 ## 5. 复验规则
 
