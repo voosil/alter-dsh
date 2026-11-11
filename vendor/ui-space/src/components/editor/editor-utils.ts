@@ -74,6 +74,19 @@ export function isCaretAtEnd(line: HTMLElement) {
   return tail.toString().length === 0;
 }
 
+/** Mirror of {@link isCaretAtEnd}: nothing of the line precedes the caret. */
+export function isCaretAtStart(line: HTMLElement) {
+  const selection = window.getSelection();
+  if (!selection?.rangeCount) return false;
+  const range = selection.getRangeAt(0);
+  if (!range.collapsed || !line.contains(range.startContainer)) return false;
+  const head = document.createRange();
+  head.selectNodeContents(line);
+  if (!range.startContainer) return false;
+  head.setEnd(range.startContainer, range.startOffset);
+  return head.toString().length === 0;
+}
+
 export function placeCaretAtEnd(element: HTMLElement) {
   const editable = element.closest<HTMLElement>('[contenteditable="true"]');
   editable?.focus();
