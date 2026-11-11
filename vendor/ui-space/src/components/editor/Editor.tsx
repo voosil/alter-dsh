@@ -956,6 +956,40 @@ export function Editor({
     clearFloatingUi();
   }
 
+  /**
+   * Finish a block shortcut whose marker arrived through an IME. Some browsers
+   * do not emit a trailing non-composing input event (and the space that
+   * commits `N. ` can be part of the composition), so the trigger is re-checked
+   * after the composition ends. Never runs while a composition is open.
+   */
+  function convertCompositionShortcut(): boolean {
+    const editor = editorRef.current;
+    if (!editor || composingRef.current) return false;
+    const selection = window.getSelection();
+    if (!selection?.rangeCount || !selection.isCollapsed) return false;
+    const line = lineElement(selection.anchorNode);
+    if (
+      !line ||
+      line.tagName.toLowerCase() === 'blockquote' ||
+      !isCaretAtEnd(line)
+    )
+      return false;
+    const text = line.textContent ?? '';
+    if (text === '》') {
+      line.innerHTML = '';
+      convertLineTo(line, 'blockquote');
+      return true;
+    }
+    // `3. ` where the trailing space was committed by the IME as well.
+    const ordered = /^(\d{1,7})\.\s$/.exec(text);
+    if (ordered) {
+      line.innerHTML = '';
+      convertLineToList(line, true, Number.parseInt(ordered[1]!, 10));
+      return true;
+    }
+    return false;
+  }
+
   function handleCompositionEnd() {
     composingRef.current = false;
     onCompositionChangeRef.current?.(false);
@@ -963,6 +997,7 @@ export function Editor({
     composingSlashLineRef.current = null;
     // Some browsers do not emit a trailing non-composing input event; finish
     // the composition with one final change notification.
+    convertCompositionShortcut();
     notifyChange();
     if (!slashLine || !slashLine.isConnected) return;
     // The IME committed text without any keydown flowing through the editor,
@@ -1654,22 +1689,26 @@ export function Editor({
 
     if (line && (event.key === ' ' || event.key === 'Enter')) {
       const text = (line.textContent ?? '').trimEnd();
+      const ordered = /^(\d{1,7})\.$/.exec(text);
       const blocks: Record<string, () => void> = {
         '#': () => convertLineTo(line, 'h1'),
         '##': () => convertLineTo(line, 'h2'),
         '###': () => convertLineTo(line, 'h3'),
         '-': () => convertLineToList(line, false),
         '*': () => convertLineToList(line, false),
-        '1.': () => convertLineToList(line, true),
         '[]': () => convertLineToTodo(line),
         '[ ]': () => convertLineToTodo(line),
         '>': () => convertLineTo(line, 'blockquote'),
       };
-      if (event.key === ' ' && blocks[text]) {
+      if (event.key === ' ' && (blocks[text] || ordered)) {
         event.preventDefault();
         if (isCaretAtEnd(line)) {
           line.innerHTML = '';
-          blocks[text]?.();
+          if (ordered) {
+            convertLineToList(line, true, Number.parseInt(ordered[1]!, 10));
+          } else {
+            blocks[text]?.();
+          }
           notifyChange();
         }
         return;
@@ -1774,23 +1813,41 @@ export function Editor({
     }
   }
 
-  /** Remove one empty list item and place the caret at a typable position. */
+  /**
+   * Remove one empty list item and keep the caret on the current line.
+   *
+   * Per 《编辑器专题优化》第 2 项 the current line degrades to an empty
+   * paragraph (splitting the list around it) instead of sending the caret back
+   * to the end of the previous item. An ordered list tail keeps numbering.
+   */
   function removeEmptyListItem(item: HTMLElement, list: HTMLElement) {
-    const previous = item.previousElementSibling;
-    const next = item.nextElementSibling;
-    item.remove();
-    if (previous instanceof HTMLElement) {
-      placeCaretAtEnd(previous);
-      return;
+    const ordered = list.tagName === 'OL';
+    const rawStart = Number.parseInt(list.getAttribute('start') ?? '1', 10);
+    const baseStart = Number.isFinite(rawStart) ? rawStart : 1;
+    const index = [...list.children].indexOf(item);
+    const trailing: HTMLElement[] = [];
+    for (
+      let node = item.nextElementSibling;
+      node !== null;
+      node = node.nextElementSibling
+    ) {
+      if (node instanceof HTMLElement) trailing.push(node);
     }
-    if (next instanceof HTMLElement) {
-      placeCaretAtStart(next);
-      return;
-    }
-    // The list is now empty: leave a plain paragraph instead of an empty list.
     const paragraph = createParagraph();
-    list.replaceWith(paragraph);
-    placeCaretAtEnd(paragraph);
+    item.remove();
+    if (trailing.length === 0) {
+      if (list.children.length === 0) list.replaceWith(paragraph);
+      else list.after(paragraph);
+    } else {
+      // The tail keeps its displayed numbers: start = base + removed index + 1.
+      const tail = document.createElement(list.tagName.toLowerCase());
+      const start = baseStart + index + 1;
+      if (ordered && start !== 1) tail.setAttribute('start', String(start));
+      tail.append(...trailing);
+      if (list.children.length === 0) list.replaceWith(paragraph, tail);
+      else list.after(paragraph, tail);
+    }
+    placeCaretAtStart(paragraph);
   }
 
   /** True when the caret sits on the editor's only line and that line is empty. */
@@ -1885,19 +1942,7 @@ export function Editor({
         setSlash(null);
       }
     }
-    const selection = window.getSelection();
-    const line = lineElement(selection?.anchorNode ?? null);
-    if (
-      line &&
-      line.tagName.toLowerCase() !== 'blockquote' &&
-      (line.textContent ?? '') === '》' &&
-      isCaretAtEnd(line)
-    ) {
-      line.innerHTML = '';
-      convertLineTo(line, 'blockquote');
-      notifyChange();
-      return;
-    }
+    convertCompositionShortcut();
     notifyChange();
   }
 
