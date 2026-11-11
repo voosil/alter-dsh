@@ -18,7 +18,7 @@ Host 半侧（`host/` → `lib/`）是 Cordis 插件，持有 SQLite 与业务�
   既有约定一致。构建期覆盖与别名集中在 `build/build.mjs`，当前生效的清单写在 `vendor/README.md`。
 - **客户端 bundle 自包含**：外置依赖仅限 react 族；新增第三方库必须打进 bundle。
 - **空间 ↔ 工作区不变量**：一个空间只把主工作目录（`directories[0]`）映射为一个 DSH 工作区；
-  工作区以 canonical 路径为唯一身份；同一目录只能归属一个空间（含已归档空间）；标题前缀 `🪐 `；
+  工作区以 canonical 路径为唯一身份；同一目录只能归属一个空间（含已归档空间）；标题前缀 `🪐`；
   绑定只落 `workspace_links` 侧表，**不要写进 Space 实体**。
 - **文档正文单一格式**：所有 Space note 正文只有 `alter-doc/1` AST 一种格式；正文写入必须经
   Document Operations，`space.saveNode` 只更新元数据、不接受正文。
@@ -62,4 +62,7 @@ pnpm check         # build + verify + docs:check + typecheck + test（提交前�
 
 - 行为或契约变更时，代码、测试、spec 与索引在同一变更里更新；不要让文档与实现分叉。
 - 提交前 `pnpm check` 全绿（其中含 `pnpm docs:check`）。
+- 提交信息用 Conventional Commits：`<type>(<scope>): <一句话说明>`，scope 写具体模块或范畴
+  （如 `host`、`document`、`editor`、`workspace`、`settings`、`build`、`docs`），**不要写 `space`** 这类整体名。
+- 改动横跨多层时按主变更面取一个 scope，其余改动在提交正文说明。
 - 文档只写当前有效内容；变更历史交给 git，不写流水账、不贴源码、不写逐文件实现说明。
