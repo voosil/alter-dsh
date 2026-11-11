@@ -63,6 +63,5 @@ pnpm check         # build + verify + docs:check + typecheck + test（提交前�
 - 行为或契约变更时，代码、测试、spec 与索引在同一变更里更新；不要让文档与实现分叉。
 - 提交前 `pnpm check` 全绿（其中含 `pnpm docs:check`）。
 - 提交信息用 Conventional Commits：`<type>(<scope>): <一句话说明>`，scope 写具体模块或范畴
-  （如 `host`、`document`、`editor`、`workspace`、`settings`、`build`、`docs`），**不要写 `space`** 这类整体名。
-- 改动横跨多层时按主变更面取一个 scope，其余改动在提交正文说明。
+  （如 `host`、`document`、`editor`、`workspace`、`settings`、`build`、`docs`）改动横跨多层时按主变更面取一个 scope，其余改动在提交正文说明。
 - 文档只写当前有效内容；变更历史交给 git，不写流水账、不贴源码、不写逐文件实现说明。
