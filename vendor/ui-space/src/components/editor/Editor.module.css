@@ -332,6 +332,11 @@
   height: auto;
   margin: 14px 0;
   border-radius: var(--alter-radius-xs);
+  cursor: pointer;
+}
+.surface img[data-selected] {
+  outline: 2px solid var(--alter-focus-ring);
+  outline-offset: 2px;
 }
 .surface table {
   width: 100%;
@@ -339,6 +344,10 @@
   border-collapse: collapse;
   font-size: inherit;
   line-height: inherit;
+}
+.surface table[data-selected] {
+  outline: 2px solid var(--alter-focus-ring);
+  outline-offset: 2px;
 }
 .surface th,
 .surface td {

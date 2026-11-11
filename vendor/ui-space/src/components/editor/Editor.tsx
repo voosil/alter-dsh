@@ -53,6 +53,7 @@ import {
   insertPlainTextAtCaret,
   insertSanitizedHtml,
   isCaretAtEnd,
+  isCaretAtStart,
   isWebUrl,
   lineElement,
   linkCardElement,
@@ -262,6 +263,13 @@ interface LinkEditingState {
   kind: 'inline' | 'card';
 }
 
+/** Hover handle that turns a table into one selectable block. */
+interface TableBarState {
+  element: HTMLTableElement;
+  left: number;
+  top: number;
+}
+
 interface SlashCommand {
   id: string;
   label: string;
@@ -304,6 +312,31 @@ function commandMatchRank(command: SlashCommand, query: string) {
     if (best === 0) break;
   }
   return best;
+}
+
+/** True when a line holds nothing but one image (placeholder spaces allowed). */
+function isImageOnlyLine(line: HTMLElement, image: HTMLElement) {
+  for (const node of [...line.childNodes]) {
+    if (node === image) continue;
+    if (node.nodeType === Node.TEXT_NODE) {
+      if ((node.textContent ?? '').replaceAll('\u00a0', '').trim() !== '') {
+        return false;
+      }
+      continue;
+    }
+    if (node instanceof HTMLElement && node.tagName === 'BR') continue;
+    return false;
+  }
+  return true;
+}
+
+/** The image that visually owns one block (block image or image-only line). */
+function blockImage(block: HTMLElement): HTMLElement | null {
+  if (block.tagName === 'IMG') return block;
+  const images = block.querySelectorAll<HTMLElement>('img');
+  if (images.length !== 1) return null;
+  const image = images[0];
+  return image && isImageOnlyLine(block, image) ? image : null;
 }
 
 function filterCommands(commands: SlashCommand[], query: string) {
@@ -514,9 +547,8 @@ export function Editor({
   const [activeBlock, setActiveBlock] = useState<BlockKind | null>(null);
   const [inlineFormats, setInlineFormats] =
     useState<InlineFormats>(emptyInlineFormats);
-  const [selectedDivider, setSelectedDivider] = useState<HTMLElement | null>(
-    null,
-  );
+  const [selectedBlock, setSelectedBlock] = useState<HTMLElement | null>(null);
+  const [tableBar, setTableBar] = useState<TableBarState | null>(null);
   const [linkBar, setLinkBar] = useState<LinkBarState | null>(null);
   const [linkEditing, setLinkEditing] = useState<LinkEditingState | null>(null);
   const linkEditingElementRef = useRef<HTMLElement | null>(null);
@@ -624,6 +656,11 @@ export function Editor({
       '[data-doc-icon][data-comment-mark]',
     ))
       delete icon.dataset.commentMark;
+    // `data-selected` is editing-surface state only; it must never be saved.
+    for (const element of clone.querySelectorAll<HTMLElement>(
+      '[data-selected]',
+    ))
+      delete element.dataset.selected;
     for (const link of clone.querySelectorAll<HTMLElement>(
       'a[data-doc-link]',
     )) {
@@ -703,6 +740,214 @@ export function Editor({
     setBlockAnchor(null);
   }
 
+  // -------------------------------------------------------------------------
+  // Block-level selection (divider / image / table)
+  // -------------------------------------------------------------------------
+
+  /** Drop the current block selection mark without touching content. */
+  function clearBlockSelection() {
+    if (!selectedBlock) return;
+    selectedBlock.removeAttribute('data-selected');
+    setSelectedBlock(null);
+  }
+
+  /** Select one non-editable block; only one block can be selected at a time. */
+  function selectBlock(element: HTMLElement) {
+    if (element === selectedBlock) return;
+    clearBlockSelection();
+    element.dataset.selected = '';
+    setSelectedBlock(element);
+  }
+
+  /** Block the caret can pick up with one more delete key press, if any. */
+  function adjacentSelectableBlock(
+    direction: 'backward' | 'forward',
+  ): HTMLElement | null {
+    if (selectedBlock) return null;
+    const editor = editorRef.current;
+    const selection = window.getSelection();
+    if (!editor || !selection?.rangeCount || !selection.isCollapsed) {
+      return null;
+    }
+    if (!selection.anchorNode || !editor.contains(selection.anchorNode)) {
+      return null;
+    }
+    const line = lineElement(selection.anchorNode);
+    if (!line) return null;
+    const atEdge =
+      direction === 'backward' ? isCaretAtStart(line) : isCaretAtEnd(line);
+    if (!atEdge) return null;
+    const sibling =
+      direction === 'backward'
+        ? line.previousElementSibling
+        : line.nextElementSibling;
+    if (!(sibling instanceof HTMLElement)) return null;
+    if (sibling.hasAttribute('data-divider')) return sibling;
+    return blockImage(sibling);
+  }
+
+  /** Put the caret at a block's edge; tables resolve to their first/last cell. */
+  function placeCaretInBlock(
+    block: HTMLElement | null,
+    edge: 'start' | 'end',
+  ): boolean {
+    if (!block || !block.isConnected) return false;
+    if (
+      block.tagName === 'IMG' ||
+      block.hasAttribute('data-divider') ||
+      block.hasAttribute('data-object-card')
+    ) {
+      return false;
+    }
+    if (block.tagName === 'TABLE') {
+      const cells = [...block.querySelectorAll<HTMLElement>('th,td')];
+      const cell = edge === 'end' ? cells[cells.length - 1] : cells[0];
+      if (!cell) return false;
+      if (edge === 'end') placeCaretAtEnd(cell);
+      else placeCaretAtStart(cell);
+      return true;
+    }
+    if (edge === 'end') placeCaretAtEnd(block);
+    else placeCaretAtStart(block);
+    return true;
+  }
+
+  /** Caret at the nearest typable line before `before`, else after `after`. */
+  function caretAroundBlock(
+    before: HTMLElement | null,
+    after: HTMLElement | null,
+  ): boolean {
+    let previous = before;
+    while (previous) {
+      if (placeCaretInBlock(previous, 'end')) return true;
+      previous = previous.previousElementSibling as HTMLElement | null;
+    }
+    let next = after;
+    while (next) {
+      if (placeCaretInBlock(next, 'start')) return true;
+      next = next.nextElementSibling as HTMLElement | null;
+    }
+    return false;
+  }
+
+  /** After a block is removed the caret lands at the previous line's end. */
+  function caretAfterRemoval(
+    previous: HTMLElement | null,
+    next: HTMLElement | null,
+  ) {
+    if (caretAroundBlock(previous, next)) return;
+    const paragraph = createParagraph();
+    const editor = editorRef.current;
+    if (editor) editor.append(paragraph);
+    placeCaretAtEnd(paragraph);
+  }
+
+  /** Remove the selected block and leave the caret on a typable neighbour. */
+  function removeSelectedBlock() {
+    const block = selectedBlock;
+    if (!block || !block.isConnected) {
+      setSelectedBlock(null);
+      return;
+    }
+    const imageLine = block.tagName === 'IMG' ? lineElement(block) : null;
+    const inlineImage =
+      block.tagName === 'IMG' &&
+      imageLine !== null &&
+      !isImageOnlyLine(imageLine, block);
+    if (inlineImage) {
+      // An image inside running text: keep its paragraph, park the caret where
+      // the image was so typing continues in place.
+      const caret = document.createRange();
+      caret.setStartBefore(block);
+      caret.collapse(true);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(caret);
+      block.remove();
+      setSelectedBlock(null);
+      notifyChange();
+      return;
+    }
+    const removeLine =
+      block.tagName === 'IMG' &&
+      imageLine !== null &&
+      isImageOnlyLine(imageLine, block);
+    const removable = removeLine && imageLine ? imageLine : block;
+    const previous = removable.previousElementSibling as HTMLElement | null;
+    const next = removable.nextElementSibling as HTMLElement | null;
+    if (tableBar?.element === removable) setTableBar(null);
+    removable.removeAttribute('data-selected');
+    removable.remove();
+    setSelectedBlock(null);
+    caretAfterRemoval(previous, next);
+    notifyChange();
+  }
+
+  // -------------------------------------------------------------------------
+  // Table block handle (select / move / delete)
+  // -------------------------------------------------------------------------
+
+  function tableBarPosition(element: HTMLTableElement): TableBarState {
+    const rect = element.getBoundingClientRect();
+    return {
+      element,
+      left: Math.min(
+        Math.max(12, rect.left),
+        Math.max(12, window.innerWidth - 160),
+      ),
+      top: Math.max(10, rect.top - 34),
+    };
+  }
+
+  /** Show the hover handle above one table. */
+  function showTableBar(element: HTMLTableElement) {
+    if (tableBar?.element === element) return;
+    if (linkTimerRef.current) window.clearTimeout(linkTimerRef.current);
+    setTableBar(tableBarPosition(element));
+  }
+
+  /** Follow the table after it moved among its siblings. */
+  function refreshTableBar() {
+    if (!tableBar) return;
+    if (!tableBar.element.isConnected) {
+      setTableBar(null);
+      return;
+    }
+    setTableBar(tableBarPosition(tableBar.element));
+  }
+
+  /** Turn the hovered table into one selected block. */
+  function selectTableBlock() {
+    const element = tableBar?.element;
+    const editor = editorRef.current;
+    if (!element || !editor || !editor.contains(element)) return;
+    selectBlock(element);
+    // Keep editing focus on the surface and park the caret outside the table so
+    // the next delete key removes the whole table instead of a cell character.
+    editor.focus();
+    caretAroundBlock(
+      element.previousElementSibling as HTMLElement | null,
+      element.nextElementSibling as HTMLElement | null,
+    );
+  }
+
+  /** Move the selected table one block up or down. */
+  function moveSelectedTable(offset: -1 | 1) {
+    const element = selectedBlock;
+    if (!(element instanceof HTMLTableElement)) return;
+    const sibling =
+      offset < 0 ? element.previousElementSibling : element.nextElementSibling;
+    if (!(sibling instanceof HTMLElement)) return;
+    if (offset < 0) sibling.before(element);
+    else sibling.after(element);
+    caretAroundBlock(
+      element.previousElementSibling as HTMLElement | null,
+      element.nextElementSibling as HTMLElement | null,
+    );
+    refreshTableBar();
+    notifyChange();
+  }
+
   // IME composition: suppress floating UI and half-composed saves.
   function handleCompositionStart() {
     composingRef.current = true;
@@ -740,7 +985,8 @@ export function Editor({
       lastTextRef.current = editor.textContent ?? '';
       setSlash(null);
       setToolbar(null);
-      setSelectedDivider(null);
+      setSelectedBlock(null);
+      setTableBar(null);
       return;
     }
     if (lastRevisionRef.current !== externalRevision) {
@@ -1246,6 +1492,24 @@ export function Editor({
       );
       return;
     }
+    // 第 1/6 项：分割线与图片先选中再删除。光标贴着这类块时，第一次删除键
+    // 只选中整块（Escape 可取消），第二次才真正移除。
+    if (
+      (event.key === 'Backspace' || event.key === 'Delete') &&
+      !event.shiftKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      !event.ctrlKey
+    ) {
+      const selectable = adjacentSelectableBlock(
+        event.key === 'Backspace' ? 'backward' : 'forward',
+      );
+      if (selectable) {
+        event.preventDefault();
+        selectBlock(selectable);
+        return;
+      }
+    }
     // D3: deleting an empty list item keeps the list continuous and puts the
     // caret where the user can keep typing.
     if (
@@ -1316,19 +1580,21 @@ export function Editor({
     }
 
     if (
-      selectedDivider &&
+      selectedBlock &&
       (event.key === 'Backspace' || event.key === 'Delete')
     ) {
       event.preventDefault();
-      selectedDivider.remove();
-      setSelectedDivider(null);
-      notifyChange();
+      removeSelectedBlock();
       return;
     }
-    if (selectedDivider && event.key === 'Escape') {
-      selectedDivider.removeAttribute('data-selected');
-      setSelectedDivider(null);
+    if (selectedBlock && event.key === 'Escape') {
+      event.preventDefault();
+      clearBlockSelection();
       return;
+    }
+    if (selectedBlock) {
+      // Any other key returns to normal caret editing.
+      clearBlockSelection();
     }
 
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'u') {
@@ -1526,6 +1792,7 @@ export function Editor({
   function handleBlur() {
     commentCaretRef.current = null;
     onCommentAtCaretChangeRef.current?.(null);
+    clearBlockSelection();
   }
 
   function handleInput(event: FormEvent<HTMLDivElement>) {
@@ -1790,16 +2057,21 @@ export function Editor({
       if (todo instanceof HTMLElement) toggleTodo(todo);
       return;
     }
+    const image = target.closest('img');
+    if (image instanceof HTMLElement) {
+      event.preventDefault();
+      selectBlock(image);
+      return;
+    }
     const divider = target.closest('[data-divider]');
     if (divider instanceof HTMLElement) {
       event.preventDefault();
-      selectedDivider?.removeAttribute('data-selected');
-      divider.dataset.selected = '';
-      setSelectedDivider(divider);
+      selectBlock(divider);
       return;
     }
-    selectedDivider?.removeAttribute('data-selected');
-    setSelectedDivider(null);
+    clearBlockSelection();
+    const clickedTable = target.closest('table');
+    if (!(clickedTable instanceof HTMLTableElement)) setTableBar(null);
     const linkCard = target.closest<HTMLElement>('[data-link-card]');
     if (linkCard?.dataset.linkCard) {
       event.preventDefault();
@@ -1836,12 +2108,19 @@ export function Editor({
     const target = (event.target as HTMLElement).closest<HTMLElement>(
       'a[data-web-link], [data-link-card]',
     );
-    if (!target) return;
-    showLinkBar(target);
+    if (target) {
+      showLinkBar(target);
+      return;
+    }
+    const table = (event.target as HTMLElement).closest('table');
+    if (table instanceof HTMLTableElement) showTableBar(table);
   }
 
   function handleMouseLeave() {
-    linkTimerRef.current = window.setTimeout(() => setLinkBar(null), 180);
+    linkTimerRef.current = window.setTimeout(() => {
+      setLinkBar(null);
+      setTableBar(null);
+    }, 180);
   }
 
   function openLinkEditor(element: HTMLElement) {
@@ -2226,6 +2505,62 @@ export function Editor({
               >
                 编辑
               </button>
+            </div>,
+            document.body,
+          )
+        : null}
+
+      {tableBar
+        ? createPortal(
+            <div
+              className={styles.linkBar}
+              style={{ top: tableBar.top, left: tableBar.left }}
+              role="group"
+              aria-label="表格操作"
+              onMouseDown={(event) => event.preventDefault()}
+              onMouseEnter={() => {
+                if (linkTimerRef.current)
+                  window.clearTimeout(linkTimerRef.current);
+              }}
+              onMouseLeave={handleMouseLeave}
+            >
+              {selectedBlock === tableBar.element ? (
+                <>
+                  <button
+                    type="button"
+                    aria-label="上移表格"
+                    title="上移"
+                    onClick={() => moveSelectedTable(-1)}
+                  >
+                    上移
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="下移表格"
+                    title="下移"
+                    onClick={() => moveSelectedTable(1)}
+                  >
+                    下移
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="删除表格"
+                    title="删除"
+                    onClick={() => removeSelectedBlock()}
+                  >
+                    删除
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  aria-label="选中表格"
+                  title="选中整表"
+                  onClick={selectTableBlock}
+                >
+                  选中
+                </button>
+              )}
             </div>,
             document.body,
           )
