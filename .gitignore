@@ -9,3 +9,4 @@ client.js
 
 # Local tooling noise.
 .DS_Store
+.vitest-cache
