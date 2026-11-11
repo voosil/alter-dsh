@@ -102,7 +102,7 @@ save,recovery,input,resilience,anchors}.test.ts`、`tests/editor-fuzz.test.ts`�
 - [x] **G4 故障注入**：保存超时、宿主重启、数据库忙、回执丢失等故障下输入不丢且可恢复（自动化）。
 - [x] **G5 文档同步**：实施范围、验收状态与代码在同一变更里更新；独立复验通过，清单状态 `active`。
 
-自动证据：`tests/document-legacy-{adapter,view,save,recovery,input,resilience,anchors}.test.ts`、`tests/editor-fuzz.test.ts`；编辑器专题优化（分割线/图片/表格选择、空 checkbox/placeholder、列表与 IME 转换、slash 菜单）另见 `tests/document-editor-{blocks,caret,convert,slash}.test.ts`；真实浏览器验收（G3）覆盖编辑/保存/刷新、slash、撤销、崩溃草稿、版本恢复脏状态、粘贴 XSS 与资产物化、大文档+保存失败重试、导出/历史/评论、样式/DOM 冻结对照。
+自动证据：`tests/document-legacy-{adapter,view,save,recovery,input,resilience,anchors}.test.ts`、`tests/editor-fuzz.test.ts`；编辑器专题优化（分割线/图片/表格选择、空 checkbox/placeholder、列表与 IME 转换、`---` 即时分割线、slash 菜单）另见 `tests/document-editor-{blocks,caret,convert,slash}.test.ts`；真实浏览器验收（G3）覆盖编辑/保存/刷新、slash、撤销、崩溃草稿、版本恢复脏状态、粘贴 XSS 与资产物化、大文档+保存失败重试、导出/历史/评论、样式/DOM 冻结对照。
 
 ## 相关文档
 

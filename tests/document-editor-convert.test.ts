@@ -7,6 +7,8 @@
  * the caret on the current line instead of jumping to the previous item.
  * Item 3: an IME-committed `N. ` / `》` triggers the same conversion even when
  * the browser emits no trailing `input` event.
+ * Divider: typing `---` alone on a line converts it as soon as the third dash
+ * lands, without the Enter the legacy editor required.
  *
  * The editor DOM/CSS is frozen (1:1 legacy restore); these tests assert
  * behaviour (block type, list/caret position), never whole-HTML structure.
@@ -489,6 +491,126 @@ describe('第 3 项 中文输入法收尾转换', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 分割线即时转换：整行输入 "---" 立即变成分割线，不需要回车
+// ---------------------------------------------------------------------------
+
+function divider(): HTMLElement | null {
+  return surface().querySelector<HTMLElement>('[data-divider]');
+}
+
+/** One element's next sibling among the editor's top-level blocks. */
+function nextBlock(element: HTMLElement): HTMLElement | null {
+  const next = element.nextElementSibling;
+  return next instanceof HTMLElement ? next : null;
+}
+
+describe('分割线即时转换', () => {
+  it('turns "---" into a divider on input without pressing Enter', () => {
+    const props = renderEditor({ initialHtml: '<p><br></p>' });
+    const line = surface().querySelector('p')!;
+
+    typeText(line, '---');
+    fireEvent.input(surface(), { inputType: 'insertText', data: '-' });
+
+    const created = divider();
+    expect(created).not.toBeNull();
+    expect(created!.querySelector('hr')).not.toBeNull();
+    // The marker text is consumed, not kept next to the rule.
+    expect(surface().textContent).not.toContain('---');
+    expect(surface().firstElementChild).toBe(created);
+    const following = nextBlock(created!);
+    expect(following).not.toBeNull();
+    expect(following!.tagName).toBe('P');
+    expect(caretInside(following!)).toBe(true);
+    expect(props.onChange).toHaveBeenCalled();
+  });
+
+  it('ignores a delete input that leaves the line as "---"', () => {
+    renderEditor({ initialHtml: '<p>---</p>' });
+    const line = surface().querySelector('p')!;
+    caretAtEnd(line);
+
+    fireEvent.input(surface(), { inputType: 'deleteContentBackward' });
+
+    expect(divider()).toBeNull();
+    expect(surface().querySelector('p')!.textContent).toBe('---');
+  });
+
+  it.each([
+    ['h2', '<h2><br></h2>', 'h2'],
+    ['blockquote', '<blockquote><br></blockquote>', 'blockquote'],
+  ])('converts a divider typed on an empty %s line', (_name, html, tag) => {
+    renderEditor({ initialHtml: html });
+    typeText(surface().querySelector(tag)!, '---');
+
+    fireEvent.input(surface());
+
+    expect(divider()).not.toBeNull();
+    expect(surface().querySelector(tag)).toBeNull();
+  });
+
+  it('keeps incomplete or embedded markers as text', () => {
+    renderEditor({ initialHtml: '<p><br></p>' });
+    const line = surface().querySelector('p')!;
+
+    typeText(line, '--');
+    fireEvent.input(surface());
+    expect(divider()).toBeNull();
+    expect(line.textContent).toBe('--');
+
+    typeText(line, '前---');
+    fireEvent.input(surface());
+    expect(divider()).toBeNull();
+    expect(line.textContent).toBe('前---');
+  });
+
+  it('does not convert when the caret is not at the end of the marker', () => {
+    renderEditor({ initialHtml: '<p>---</p>' });
+    const line = surface().querySelector('p')!;
+    caretAt(line.firstChild!, 0);
+
+    fireEvent.input(surface());
+
+    expect(divider()).toBeNull();
+    expect(surface().querySelector('p')!.textContent).toBe('---');
+  });
+
+  it('keeps "---" literal inside a code block', () => {
+    renderEditor({ initialHtml: '<pre data-code=""><code><br></code></pre>' });
+    typeText(surface().querySelector('code')!, '---');
+
+    fireEvent.input(surface());
+
+    expect(divider()).toBeNull();
+    expect(surface().querySelector('pre code')!.textContent).toBe('---');
+  });
+
+  it('keeps "---" literal inside a list item', () => {
+    renderEditor({ initialHtml: '<ul><li><br></li></ul>' });
+    typeText(surface().querySelector('ul > li')!, '---');
+
+    fireEvent.input(surface());
+
+    expect(divider()).toBeNull();
+    expect(surface().querySelector('ul > li')!.textContent).toBe('---');
+  });
+
+  it('converts "---" committed by the IME only after the composition ends', () => {
+    renderEditor({ initialHtml: '<p><br></p>' });
+    const editor = surface();
+    const line = editor.querySelector('p')!;
+
+    compositionStart(editor);
+    typeText(line, '---');
+    fireEvent.input(editor);
+    expect(divider()).toBeNull();
+
+    compositionEnd(editor);
+    expect(divider()).not.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // AST compatibility of the auto-converted markers
 // ---------------------------------------------------------------------------
 
@@ -546,5 +668,19 @@ describe('转换结果与 AST 兼容', () => {
       'orderedList',
     ]);
     expect(parsed.blocks[2]!.attrs.start).toBe(3);
+  });
+
+  it('round-trips the divider produced by a typed "---"', () => {
+    const props = renderEditor({ initialHtml: '<p><br></p>' });
+    typeText(surface().querySelector('p')!, '---');
+    fireEvent.input(surface());
+
+    const html = String(props.onChange.mock.calls.at(-1)?.[0] ?? '');
+    expect(html).toContain('data-divider');
+    const parsed = parseLegacyHtml(html);
+    expect(parsed.blocks.map((block) => block.type)).toEqual([
+      'divider',
+      'paragraph',
+    ]);
   });
 });
