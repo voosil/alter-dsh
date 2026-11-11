@@ -65,3 +65,4 @@ pnpm check         # build + verify + docs:check + typecheck + test（提交前�
 - 提交信息用 Conventional Commits：`<type>(<scope>): <一句话说明>`，scope 写具体模块或范畴
   （如 `host`、`document`、`editor`、`workspace`、`settings`、`build`、`docs`）改动横跨多层时按主变更面取一个 scope，其余改动在提交正文说明。
 - 文档只写当前有效内容；变更历史交给 git，不写流水账、不贴源码、不写逐文件实现说明。
+- 大量涉及样式、UX这类花费时间非常长但人做起来很简单的验证不需要自己做，条理清晰地总结出来让用户Review。
