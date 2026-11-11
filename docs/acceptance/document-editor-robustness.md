@@ -1,7 +1,7 @@
 ---
 type: acceptance
 status: active
-updated: 2026-11-10
+updated: 2026-11-11
 ---
 
 # 即时编辑器健壮性 · 验收清单
@@ -63,8 +63,9 @@ save,recovery,input,resilience,anchors}.test.ts`、`tests/editor-fuzz.test.ts`�
   中途保存 → 光标不跳、不丢字、不重复；未完成的组合输入不会被保存为半成品。
 - [x] **D2 空块语义正确**：空行、空标题、空列表项、空表格单元格经过编辑→保存→重开往返 → 结构与
   内容不变；空行与空列表项不消失，空容器不塌陷。
-- [x] **D3 空列表项删除行为正确**：列表中间的空列表项退格或向前删除 → 列表保持连续、序号正确，
-  光标落在可继续输入的位置。
+- [x] **D3 空列表项删除行为正确**：光标在空列表项按退格或向前删除 → 删除该列表项，该行原地退化为可继续
+  输入的空段落，光标停在该段落行首；列表在删除点断为前后两段且有序列表后段 `start` 维持原显示序号，
+  无空列表残留（2026-11-11 按《编辑器专题优化》第 2 项调整，原「列表保持连续」契约作废）。
 - [x] **D4 撤销语义统一**：保存后撤销、跨保存撤销、服务端撤销与版本恢复组合使用 → 行为符合单一
   已定义约定，不出现「保存后无法撤销」或「撤销与版本恢复互相打脸」。
 - [x] **D5 键盘与无障碍**：工具栏可键盘到达与操作，编辑器与状态有可读的语义标签，屏幕阅读器不
@@ -101,7 +102,7 @@ save,recovery,input,resilience,anchors}.test.ts`、`tests/editor-fuzz.test.ts`�
 - [x] **G4 故障注入**：保存超时、宿主重启、数据库忙、回执丢失等故障下输入不丢且可恢复（自动化）。
 - [x] **G5 文档同步**：实施范围、验收状态与代码在同一变更里更新；独立复验通过，清单状态 `active`。
 
-自动证据：`tests/document-legacy-{adapter,view,save,recovery,input,resilience,anchors}.test.ts`、`tests/editor-fuzz.test.ts`；真实浏览器验收（G3）覆盖编辑/保存/刷新、slash、撤销、崩溃草稿、版本恢复脏状态、粘贴 XSS 与资产物化、大文档+保存失败重试、导出/历史/评论、样式/DOM 冻结对照。
+自动证据：`tests/document-legacy-{adapter,view,save,recovery,input,resilience,anchors}.test.ts`、`tests/editor-fuzz.test.ts`；编辑器专题优化（分割线/图片/表格选择、空 checkbox/placeholder、列表与 IME 转换、slash 菜单）另见 `tests/document-editor-{blocks,caret,convert,slash}.test.ts`；真实浏览器验收（G3）覆盖编辑/保存/刷新、slash、撤销、崩溃草稿、版本恢复脏状态、粘贴 XSS 与资产物化、大文档+保存失败重试、导出/历史/评论、样式/DOM 冻结对照。
 
 ## 相关文档
 
