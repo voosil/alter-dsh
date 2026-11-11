@@ -31,4 +31,4 @@ VOLUME ["/data"]
 EXPOSE 8787
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.SPACE_PORT||8787)+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-ENTRYPOINT ["node", "lib/server/index.js"]
+ENTRYPOINT ["node", "lib/server/core/index.js"]

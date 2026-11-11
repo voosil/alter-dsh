@@ -58,11 +58,18 @@ const alias = [
     // Plugin-owned adapter seam: the restored legacy document UI keeps its
     // pre-rebuild DOM/CSS and delegates AST parsing/serialization here.
     find: /^@alter-space\/legacy-adapter$/,
-    replacement: path.join(pluginRoot, 'src', 'document', 'legacy', 'index.ts'),
+    replacement: path.join(
+      pluginRoot,
+      'src',
+      'document',
+      'editors',
+      'legacy',
+      'index.ts',
+    ),
   },
   {
     // Kept resolvable: the panel renders its own settings page
-    // (`src/settings-page.tsx`) because that page also owns the DSH-only
+    // (`src/settings/page.tsx`) because that page also owns the DSH-only
     // storage policy, so this source page is not mounted.
     find: /^@alter\/ui-settings\/SettingsPage$/,
     replacement: path.join(vendorSrc('ui-settings'), 'SettingsPage.tsx'),

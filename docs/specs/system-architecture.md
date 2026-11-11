@@ -26,7 +26,7 @@ updated: 2026-11-11
   客户端不得绕过该链路读写业务数据。
 - 业务数据只存在于 Host 与 SQLite；浏览器 localStorage 只存 UI 偏好，刷新或重开面板后从 Host 重新读取。
 - 插件自有数据放 SQLite 侧表（如空间 ↔ 工作区绑定），不写入 `vendor/` 的实体结构。
-- 文档页是 `vendor/ui-space` 的旧 UI 1:1 还原（DOM/CSS 冻结）；AST 适配层在 `src/document/legacy`，
+- 文档页是 `vendor/ui-space` 的旧 UI 1:1 还原（DOM/CSS 冻结）；AST 适配层在 `src/document/editors/legacy`，
   正文仍只经 Document Operations 写入 Host。
 - 服务端模式的数据流：`SpaceApp` → Connection → 本地 Host bridge → HTTPS + bearer token → 服务端
   `LocalSpaceRuntime` → SQLite。bridge 的读缓存与写队列只存在于本地数据目录，不能作为权威。
@@ -62,7 +62,7 @@ updated: 2026-11-11
   `{ value }` 或 `{ error: { code, message } }`；HTTP 层只处理信封错误（405/400/500），
   业务失败留在成功响应的 `value` 内。
 - **端点白名单**：Host 维护 Space 与 hub 方法白名单；新增端点必须同时加入 Host 白名单与浏览器
-  客户端映射（`host/rpc.ts`、`src/space-client.ts`，`storage.*` 在 `src/storage-client.ts`），
+  客户端映射（`host/authority/rpc.ts`、`src/client/rpc.ts`，`storage.*` 在 `src/client/storage.ts`），
   缺一视为未完成。
 - 参数与结果校验在 Host 侧执行；错误以稳定 `code` 返回，不在信封层抛裸异常。
 - 浏览器不得把业务数据持久化到 localStorage、IndexedDB 等本地存储。
@@ -134,8 +134,8 @@ updated: 2026-11-11
 
 - 要求 Node.js ≥ 24 与 pnpm；`client.js`、`lib/` 是生成产物，不入库，安装或更新前必须先构建。
 - 构建期适配集中在 `build/build.mjs`（CSS 适配 + 模块级覆盖）：当前生效的模块覆盖只有
-  `DirectoryField → src/native-directory-field.tsx`（宿主目录选择）；`@alter-space/legacy-adapter`
-  别名指向 `src/document/legacy/index.ts`，在 `build/build.mjs`、`tsconfig.json` paths 与
+  `DirectoryField → src/app/native-directory-field.tsx`（宿主目录选择）；`@alter-space/legacy-adapter`
+  别名指向 `src/document/editors/legacy/index.ts`，在 `build/build.mjs`、`tsconfig.json` paths 与
   `vitest.config.mts` 三处声明，必须保持同步。新增覆盖或别名须在 `vendor/README.md` 登记。
 - 客户端 bundle 自包含：外置依赖仅限 react 族，新增第三方库必须打进 bundle；
   Host 侧新增依赖不得引入 `@deepseek-ai/*` 运行时依赖。

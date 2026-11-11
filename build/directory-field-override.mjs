@@ -3,7 +3,7 @@
  *
  * The Space UI views import `DirectoryField` in two places; this Vite
  * `resolveId` plugin redirects only those two import sites (`CreateSpaceDialog`
- * and `ConfigView`) to [`src/native-directory-field.tsx`](../src/native-directory-field.tsx),
+ * and `ConfigView`) to [`src/app/native-directory-field.tsx`](../src/app/native-directory-field.tsx),
  * which opens the host directory picker and keeps the built-in browser as
  * fallback.
  *
@@ -18,7 +18,7 @@ import path from 'node:path';
  */
 export function createDirectoryFieldOverride(root) {
   const vendorUiSpace = path.join(root, 'vendor', 'ui-space', 'src');
-  const nativeField = path.join(root, 'src', 'native-directory-field.tsx');
+  const nativeField = path.join(root, 'src', 'app', 'native-directory-field.tsx');
 
   /** The two source import sites this override owns. */
   const redirects = new Map([

@@ -22,7 +22,7 @@
 
 | 层 | 位置 | 说明 |
 | --- | --- | --- |
-| 权威数据 | Host 进程（Cordis 插件） | Space 业务服务 + `host/store.ts` 的 SQLite 持久化 |
+| 权威数据 | Host 进程（Cordis 插件） | Space 业务服务 + `host/persistence/store.ts` 的 SQLite 持久化 |
 | 传输 | DSH Connection 精确 Fetch 路由 | `/api/alter-space`，由 Connection 统一完成鉴权与 Host/Origin 校验 |
 | 浏览器 | `client.js` | 浏览器端 `SpaceService` over RPC；`vendor/ui-space` 的 `SpaceApp` 直接消费 |
 

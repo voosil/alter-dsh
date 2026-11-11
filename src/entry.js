@@ -18,15 +18,15 @@ import {
   createSpaceDocumentClient,
   createSpaceSettingsClient,
   createSpaceMigrationClient,
-} from './space-client';
-import { createSpaceStorageClient } from './storage-client';
-import { createReloadContinuity } from './reload-continuity';
-import { createSpaceRouter } from './router.js';
-import { SpaceShell } from './space-shell';
-import { DIRECTORY_PICKER_UNAVAILABLE } from './native-directory-field';
-import resetCss from './global-reset.css?inline';
+} from './client/rpc';
+import { createSpaceStorageClient } from './client/storage';
+import { createReloadContinuity } from './app/reload-continuity';
+import { createSpaceRouter } from './app/router.js';
+import { SpaceShell } from './app/shell';
+import { DIRECTORY_PICKER_UNAVAILABLE } from './app/native-directory-field';
+import resetCss from './app/global-reset.css?inline';
 import '@alter/ui-system/tokens.css';
-import './host.css';
+import './app/host.css';
 
 /** Main-panel key; the sidebar panel entry reuses the same id. */
 const PANEL_ID = 'alter-space';

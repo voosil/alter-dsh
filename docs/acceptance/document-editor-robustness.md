@@ -7,7 +7,7 @@ updated: 2026-11-11
 # 即时编辑器健壮性 · 验收清单
 
 验收对象：空间文档页的旧编辑器——`vendor/ui-space` 1:1 还原的 `DocumentView` 与 contentEditable
-编辑器，经 `src/document/legacy` 适配 `alter-doc/1` AST 的编辑面。
+编辑器，经 `src/document/editors/legacy` 适配 `alter-doc/1` AST 的编辑面。
 
 结论口径：健壮性以「每条失败路径都有兜底与回归」为验收原则，不以功能齐全为准。A–C 组为 P0，任一
 未通过即整体不通过；D–F 组为 P1；G 组是支撑上述结论的回归与自动化要求。
@@ -18,8 +18,8 @@ updated: 2026-11-11
 对象卡人工入口不在本清单范围（见[编辑器还原验收](editor-experience-p0-p6.md)）。
 
 验收环境：DSH 桌面 profile 与真实桌面应用；测试文档用 Agent 文档工具生成，不手工改库。
-未自动化前按「人工」执行，并在验收时记录可复现步骤。自动证据：`tests/document-legacy-{adapter,view,
-save,recovery,input,resilience,anchors}.test.ts`、`tests/editor-fuzz.test.ts`（G2+Host 引擎回归）；
+未自动化前按「人工」执行，并在验收时记录可复现步骤。自动证据：`tests/document/editors/legacy/{adapter,view,
+save,recovery,input,resilience,anchors}.test.ts`、`tests/document/fuzz.test.ts`（G2+Host 引擎回归）；
 浏览器级证据见验收记录中的真实 GUI 用例。
 
 ## A. 数据安全（P0）
@@ -111,7 +111,7 @@ save,recovery,input,resilience,anchors}.test.ts`、`tests/editor-fuzz.test.ts`�
 - [x] **G4 故障注入**：保存超时、宿主重启、数据库忙、回执丢失等故障下输入不丢且可恢复（自动化）。
 - [x] **G5 文档同步**：实施范围、验收状态与代码在同一变更里更新；独立复验通过，清单状态 `active`。
 
-自动证据：`tests/document-legacy-{adapter,view,save,recovery,input,resilience,anchors}.test.ts`、`tests/editor-fuzz.test.ts`；编辑器专题优化（分割线/图片/表格选择、空 checkbox/placeholder、列表与 IME 转换、`---` 即时分割线、slash 菜单与方向固定、引用标记输入与行首删除）另见 `tests/document-editor-{blocks,caret,convert,slash}.test.ts`；真实浏览器验收（G3）覆盖编辑/保存/刷新、slash、撤销、崩溃草稿、版本恢复脏状态、粘贴 XSS 与资产物化、大文档+保存失败重试、导出/历史/评论、样式/DOM 冻结对照；第 12–14 项（D6/D7）当前以 jsdom 行为测试为准，真实浏览器与真实输入法抽查待补。
+自动证据：`tests/document/editors/legacy/{adapter,view,save,recovery,input,resilience,anchors}.test.ts`、`tests/document/fuzz.test.ts`；编辑器专题优化（分割线/图片/表格选择、空 checkbox/placeholder、列表与 IME 转换、`---` 即时分割线、slash 菜单与方向固定、引用标记输入与行首删除）另见 `tests/document/editors/legacy/{blocks,caret,convert,slash}.test.ts`；真实浏览器验收（G3）覆盖编辑/保存/刷新、slash、撤销、崩溃草稿、版本恢复脏状态、粘贴 XSS 与资产物化、大文档+保存失败重试、导出/历史/评论、样式/DOM 冻结对照；第 12–14 项（D6/D7）当前以 jsdom 行为测试为准，真实浏览器与真实输入法抽查待补。
 
 ## 相关文档
 

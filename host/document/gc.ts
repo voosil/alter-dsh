@@ -9,9 +9,9 @@
  * @module @alter-dsh/space/document/gc
  */
 import { rm } from 'node:fs/promises';
-import type { SpaceStoreData, SpaceStoreHandle } from '../store.js';
-import { assetFilePath } from './assets.js';
-import { tryParseAlterDoc, type BlockNode } from './types.js';
+import type { SpaceStoreData, SpaceStoreHandle } from '../persistence/store.js';
+import { assetFilePath } from './asset-store.js';
+import { tryParseAlterDoc, type BlockNode } from './editors/legacy/types.js';
 
 export interface DocumentArtifactRefs {
   objectIds: Set<string>;

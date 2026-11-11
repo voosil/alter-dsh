@@ -8,7 +8,7 @@ updated: 2026-11-11
 
 验收对象：空间文档页——`vendor/ui-space` 的 `DocumentView` 及其旧编辑器、评论轨/评论卡/评论框、
 历史面板、历史评论弹窗、底部「子文档 / 全文评论」与导出。前端按产品要求 **1:1 还原为重构前的
-旧 UI**（`c73c3f6` 基线）；数据层经 `src/document/legacy` 适配到 `alter-doc/1` AST 与
+旧 UI**（`c73c3f6` 基线）；数据层经 `src/document/editors/legacy` 适配到 `alter-doc/1` AST 与
 Document Operations。
 
 结论口径：本清单只验收「前端还原一致 + AST 数据链路正确 + 已知缺口如实披露」。编辑体验的健壮性
@@ -25,7 +25,7 @@ Document Operations。
   （分割线/图片选中态、附件态、placeholder 定位、表格选中与操作条、整行输入 `---` 即时转分割线、
   slash 菜单方向固定、引用标记 `>`/`》`+空格输入、引用行首退格删标记），不得重排 DOM、不得改既有样式类名；
   新增交互态（如 `data-selected`）只存在于编辑面，序列化前剥除、不写入 AST。
-- **数据层唯一入口**：编辑器 HTML 只能经 `@alter-space/legacy-adapter`（`src/document/legacy`）
+- **数据层唯一入口**：编辑器 HTML 只能经 `@alter-space/legacy-adapter`（`src/document/editors/legacy`）
   转成 AST 与 Operation 批次；视图不得直接写 `node.content`，也不得绕过 `doc.applyOps` /
   `doc.restoreVersion`。
 - **正文单一格式**：正文只有 `alter-doc/1` AST；标题等元数据经 `space.saveNode`，正文写入只经
@@ -59,9 +59,9 @@ Document Operations。
 | 输入法 | 中文/日文组合输入不误保存、不丢字 | 人工（未专项覆盖） |
 | 归档状态 | 已归档徽标与恢复入口；空文档/无标题语义 | 人工 |
 
-自动证据以 `tests/document-legacy-*.test.ts`（adapter/view/save/recovery/input/resilience/anchors）、
-`tests/editor-fuzz.test.ts`、`tests/document-editor-{blocks,caret,convert,slash}.test.ts`（编辑器专题优化）与
-`tests/space-navigation.test.ts`（新建文档的路由落点）为准；真实浏览器
+自动证据以 `tests/document/editors/legacy/*.test.ts`（adapter/view/save/recovery/input/resilience/anchors）、
+`tests/document/fuzz.test.ts`、`tests/document/editors/legacy/{blocks,caret,convert,slash}.test.ts`（编辑器专题优化）与
+`tests/app/navigation.test.ts`（新建文档的路由落点）为准；真实浏览器
 验收已执行（编辑/保存/刷新拼接、slash、撤销、崩溃草稿、版本恢复脏状态、粘贴安全、导出/历史/评论、
 样式冻结对照），替代项与限制见第 4 节。
 

@@ -8,7 +8,7 @@
  * @module @alter-dsh/space/document/client-access
  */
 import type { SpaceService } from '@alter/protocol';
-import type { SpaceDocumentClient } from '../space-client';
+import type { SpaceDocumentClient } from '../client/rpc';
 
 /** `SpaceService` plus the optional document RPC client. */
 export type SpaceServiceWithDocument = SpaceService & {

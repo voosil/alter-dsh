@@ -159,11 +159,11 @@ Operations 把一次修改收敛为可校验的意图，才谈得上可审计与
 - `SpaceNode.content` 只存 `alter-doc/1` AST JSON 字符串，没有格式标记字段；`space.saveNode` 只改
   标题等元数据，正文写入只经 Document Operations（含新建文档的 AST 空文档）。
 - 新增旁表 `doc_objects` / `doc_assets` / `doc_ops`（代码组件的 `component_specs` 属后续）；
-  `host/store.ts` 用 `PRAGMA user_version` 升级建表；资产二进制放 `dataDir/assets/`，备份必须覆盖该目录。
+  `host/persistence/store.ts` 用 `PRAGMA user_version` 升级建表；资产二进制放 `dataDir/assets/`，备份必须覆盖该目录。
 - Host：新增 Document Service（projection / validation / ops / audit）与 Schema Registry，
-  仍复用 SQLite 单写者队列与事务；RPC 端点与 `src/space-client.ts` 映射同步增加。
+  仍复用 SQLite 单写者队列与事务；RPC 端点与 `src/client/rpc.ts` 映射同步增加。
 - 客户端：文档页是 `vendor/ui-space` 的旧 UI 1:1 还原（DOM/CSS 冻结）；AST 适配层放
-  `src/document/legacy`，经 `@alter-space/legacy-adapter` 别名（`build/build.mjs`、tsconfig paths、
+  `src/document/editors/legacy`，经 `@alter-space/legacy-adapter` 别名（`build/build.mjs`、tsconfig paths、
   `vitest.config.mts` 三处）接进旧 `DocumentView`，保存/恢复/资产/评论锚点都走 document client。
 - Agent 工具面为 `space_doc_outline` / `space_doc_read` / `space_doc_search` / `space_doc_ops` /
   `space_doc_patch` / `space_doc_generate` / `space_doc_undo`、对象/资产与组件目录工具；正文写入只有

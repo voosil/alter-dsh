@@ -30,7 +30,7 @@ check(pkg.name === '@alter-dsh/space', 'package name must be @alter-dsh/space');
 check(Boolean(pkg.version), 'package version is required');
 check(pkg.type === 'module', 'package must be an ES module');
 check(
-  pkg.exports?.['.'] === './lib/host/index.js',
+  pkg.exports?.['.'] === './lib/host/core/index.js',
   'exports(".") must point at the compiled Host half',
 );
 check(
@@ -133,7 +133,7 @@ check(
 );
 
 // --- Host half -------------------------------------------------------------
-const hostEntry = 'lib/host/index.js';
+const hostEntry = 'lib/host/core/index.js';
 const host = await read(hostEntry);
 const hostSyntax = spawnSync(
   process.execPath,
@@ -141,7 +141,7 @@ const hostSyntax = spawnSync(
   { encoding: 'utf8' },
 );
 check(hostSyntax.status === 0, `node --check ${hostEntry} failed: ${hostSyntax.stderr.trim()}`);
-const hostRpc = await read('lib/host/rpc.js');
+const hostRpc = await read('lib/host/authority/rpc.js');
 check(
   hostRpc.includes('/api/alter-space') && hostRpc.includes('alter-space'),
   'Host half must register the /api/alter-space fetch route',
@@ -151,15 +151,17 @@ check(
   'Host half must register through ctx.connection.fetch',
 );
 for (const fragment of ['space.db', 'node:sqlite']) {
-  const storeFile = await read('lib/host/store.js');
+  const storeFile = await read('lib/host/persistence/store.js');
   check(
     storeFile.includes(fragment),
     `compiled store must carry ${JSON.stringify(fragment)}`,
   );
 }
-const hostFiles = await readdir(path.join(pluginRoot, 'lib'), {
-  recursive: true,
-});
+// Recursive readdir yields platform-native separators, so normalise before the
+// POSIX-style prefix checks below.
+const hostFiles = (
+  await readdir(path.join(pluginRoot, 'lib'), { recursive: true })
+).map((file) => file.split(path.sep).join('/'));
 const hostScripts = hostFiles
   .filter((file) => file.endsWith('.js'))
   .map((file) => path.join(pluginRoot, 'lib', file));
@@ -181,12 +183,13 @@ for (const script of hostScripts) {
 }
 for (const fragment of ['storage.get', 'storage.set', 'storage.estimate']) {
   check(
-    (await read('lib/host/rpc.js')).includes(fragment),
+    (await read('lib/host/authority/rpc.js')).includes(fragment),
     `compiled RPC must carry ${fragment}`,
   );
 }
 check(
-  hostFiles.includes('host/storage.js') && hostFiles.includes('host/backup.js'),
+  hostFiles.includes('host/persistence/storage.js') &&
+    hostFiles.includes('host/persistence/backup.js'),
   'compiled Host half must carry the storage controller and snapshot scheduler',
 );
 notes.push(`host scripts: ${String(hostScripts.length)}`);
@@ -208,12 +211,12 @@ for (const file of hostFiles.filter((entry) => entry.endsWith('.js'))) {
   }
 }
 check(
-  hostFiles.includes('server/index.js'),
-  'compiled server entry lib/server/index.js must exist',
+  hostFiles.includes('server/core/index.js'),
+  'compiled server entry lib/server/core/index.js must exist',
 );
 check(
   hostFiles.includes('host/remote/bridge.js') &&
-    hostFiles.includes('host/migration/transfer.js'),
+    hostFiles.includes('host/control/migration/transfer.js'),
   'compiled Host half must carry the server bridge and migration transfer',
 );
 check(

@@ -8,8 +8,8 @@
  *
  * @module @alter-dsh/space/document/asset-route
  */
-import { isImageMime, type DocumentAssets } from './assets.js';
-import { DocumentError, type DocumentAssetRecord } from './types.js';
+import { isImageMime, type DocumentAssets } from './asset-store.js';
+import { DocumentError, type DocumentAssetRecord } from './editors/legacy/types.js';
 
 const IMMUTABLE_CACHE = 'public, max-age=31536000, immutable';
 /** Longest filename kept in the Content-Disposition header. */

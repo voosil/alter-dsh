@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Self-contained Space feature for the DSH Web client: SQLite-backed Host authority, browser RPC client, space directory, documents, thoughts, hub overview, activity, archive and configuration.",
   "exports": {
-    ".": "./lib/host/index.js",
+    ".": "./lib/host/core/index.js",
     "./client": "./client.js",
     "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json",
@@ -42,7 +42,7 @@
     "verify": "node scripts/verify.mjs",
     "docs:check": "node scripts/docs-check.mjs",
     "check": "node build/build.mjs && node scripts/clean-lib.mjs && tsc -p tsconfig.host.json && node scripts/verify.mjs && node scripts/docs-check.mjs && tsc -p tsconfig.json --noEmit && tsc -p tsconfig.host.json --noEmit && vitest run",
-    "server": "node lib/server/index.js",
+    "server": "node lib/server/core/index.js",
     "migrate": "node scripts/space-migrate.mjs"
   },
   "engines": {
@@ -83,7 +83,7 @@
     "vitest": "5.0.4"
   },
   "bin": {
-    "alter-dsh-space-server": "./lib/server/index.js"
+    "alter-dsh-space-server": "./lib/server/core/index.js"
   },
   "packageManager": "pnpm@12.1.0"
 }

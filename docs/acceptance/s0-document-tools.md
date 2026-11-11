@@ -26,7 +26,7 @@ legacy adapter 接 AST，前端验收见 [editor-experience-p0-p6.md](editor-exp
 | 检索 | `space_doc_search` 命中被编辑的 paragraph 块 id。 |
 | 对象 | `space_object_update` 生成新 `obj_…`（revision=3），旧占位对象不存在；`space_object_get` 回读 payload，`provenance.generatedBy=alter`；重读投影中的 `objectId` 已替换。 |
 | 归属 | 工具写入按 `alter` 归属；版本/op log 随事务写入。 |
-| 完整 AST 读取 | `doc.get` 返回 revision/title/doc 块树；`tests/document-service.test.ts` 与 `host-apply` 集成用例覆盖。 |
+| 完整 AST 读取 | `doc.get` 返回 revision/title/doc 块树；`tests/document/service.test.ts` 与 `tests/host/apply.test.ts` 集成用例覆盖。 |
 | 撤销 | `doc.undo` 应用 op log 的 inverseOps：revision+1、旧内容恢复；过期 base 报 `doc/conflict`，未知 token 报 `op/invalid`。 |
 | 撤销工具 | `space_doc_undo`：按 `undo_token` 或最近一次 batch 应用 `inverseOps`，生成新 revision 与 op log；冲突/未知 token 错误码覆盖。 |
 | 资产 | `space_asset_import` + 内容寻址资产表/文件：去重、mime/大小校验、`GET /api/alter-space/asset` 读取；客户端图片块用该 URL 渲染，失败回退占位。 |

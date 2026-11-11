@@ -55,7 +55,7 @@ const dataDir = resolve(
     join(process.env.DSH_HOME?.trim() || join(homedir(), '.dsh'), 'data', 'space'),
 );
 
-const modulePath = new URL('../lib/host/migration/transfer.js', import.meta.url);
+const modulePath = new URL('../lib/host/control/migration/transfer.js', import.meta.url);
 let module;
 try {
   module = await import(pathToFileURL(modulePath.pathname).href);

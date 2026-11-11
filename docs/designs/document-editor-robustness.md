@@ -14,7 +14,7 @@ updated: 2026-11-11
 ## 1. 判断
 
 - **前端按产品要求冻结**：文档页是重构前旧 UI 的 1:1 还原（DOM/CSS/既有 JSX 结构不改），
-  编辑器内部输入、撤销与渲染由旧 contentEditable 实现承担；数据层经 `src/document/legacy` 适配
+  编辑器内部输入、撤销与渲染由旧 contentEditable 实现承担；数据层经 `src/document/editors/legacy` 适配
   `alter-doc/1` AST 与 Document Operations。
 - **已落地并有自动化证据**：自动保存（约 700ms 防抖、成功静默、失败显示「保存失败，重试」）、
   标题经 `saveNode` 落库、版本恢复带 CAS、评论 quote→anchor 生成、data URL 图片/文件保存前物化为
@@ -64,7 +64,7 @@ updated: 2026-11-11
 
 ## 4. 关键决策
 
-- **数据层先行**：健壮性逻辑默认放在 `src/document/legacy` 与外围壳层；编辑面改动须产品明确批准。
+- **数据层先行**：健壮性逻辑默认放在 `src/document/editors/legacy` 与外围壳层；编辑面改动须产品明确批准。
   2026-11-11《编辑器专题优化》第 1–11 项与后续第 12–14 项获批后，编辑面只做行为级修复与最小 CSS 增量（选中态、表格操作条、
   附件态、placeholder 定位、整行输入 `---` 即时转分割线、slash 菜单方向随实例固定、引用标记 `>`/`》`+空格
   输入、引用行首退格只删标记），不重排 DOM/JSX，新增选中态不进 AST。

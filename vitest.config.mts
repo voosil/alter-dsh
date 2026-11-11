@@ -51,7 +51,7 @@ export default defineConfig({
       {
         // Legacy document adapter seam (restored pre-rebuild UI keeps DOM/CSS).
         find: /^@alter-space\/legacy-adapter$/,
-        replacement: path.join(root, 'src/document/legacy/index.ts'),
+        replacement: path.join(root, 'src/document/editors/legacy/index.ts'),
       },
     ],
   },
