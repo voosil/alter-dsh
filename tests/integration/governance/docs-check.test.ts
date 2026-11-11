@@ -1,7 +1,9 @@
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   appendFileSync,
   cpSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -14,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 /**
- * Self-test for the documentation governance checker (scripts/docs-check.mjs).
+ * Self-test for the documentation governance checker (scripts/docs/check.mjs).
  *
  * Each case copies the real knowledge base into a temporary directory, injects
  * one violation (or one legitimate pattern), runs the checker there, and asserts
@@ -22,7 +24,7 @@ import { describe, expect, it } from 'vitest';
  * silently regressing when the checker changes.
  */
 const repoRoot = dirname(dirname(dirname(dirname(fileURLToPath(import.meta.url)))));
-const checker = join(repoRoot, 'scripts', 'docs-check.mjs');
+const checker = join(repoRoot, 'scripts', 'docs', 'check.mjs');
 
 interface CheckResult {
   status: number | null;
@@ -38,10 +40,15 @@ function withFixture(mutate?: (dir: string) => void): CheckResult {
     cpSync(join(repoRoot, 'docs'), join(dir, 'docs'), { recursive: true });
     mkdirSync(join(dir, 'vendor'));
     cpSync(join(repoRoot, 'vendor', 'README.md'), join(dir, 'vendor', 'README.md'));
-    mkdirSync(join(dir, 'scripts'));
-    cpSync(checker, join(dir, 'scripts', 'docs-check.mjs'));
+    mkdirSync(join(dir, 'scripts', 'docs'), { recursive: true });
+    cpSync(checker, join(dir, 'scripts', 'docs', 'check.mjs'));
+    // The checker loads its budget manifest from next to itself.
+    cpSync(
+      join(repoRoot, 'scripts', 'docs', 'doc-budgets.json'),
+      join(dir, 'scripts', 'docs', 'doc-budgets.json'),
+    );
     mutate?.(dir);
-    const result = spawnSync(process.execPath, [join(dir, 'scripts', 'docs-check.mjs')], {
+    const result = spawnSync(process.execPath, [join(dir, 'scripts', 'docs', 'check.mjs')], {
       cwd: dir,
       encoding: 'utf8',
     });
@@ -82,8 +89,8 @@ function duplicateFrontmatterKey(dir: string, relativePath: string): void {
 
 function addExtraDocuments(dir: string): void {
   const extras = [
-    ['specs', 'spec', 3],
-    ['designs', 'design', 4],
+    ['specs', 'spec', 6],
+    ['designs', 'design', 6],
   ] as const;
   for (const [category, type, count] of extras) {
     const links: string[] = [];
@@ -192,7 +199,7 @@ describe('docs-check governance rules', () => {
     expect(withFixture(addExtraDocuments).status).toBe(1);
     expect(
       withFixture((dir) => {
-        for (let index = 0; index < 4; index += 1) {
+        for (let index = 0; index < 6; index += 1) {
           const name = `overflow-${index}.md`;
           writeFileSync(
             join(dir, 'docs/specs', name),
@@ -210,5 +217,177 @@ describe('docs-check governance rules', () => {
     );
     expect(result.status, result.output).toBe(1);
     expect(result.output).toContain('malformed link fragment');
+  });
+});
+
+/**
+ * One archived research doc in docs/archive/ plus its seal. The archive keeps no
+ * index; `archived:` and the manifest entry are what make the copy frozen.
+ */
+function addArchivedDocument(
+  dir: string,
+  name: string,
+  opts?: { status?: string; seal?: string | null },
+): void {
+  const status = opts?.status ?? 'archived';
+  const text = `---\ntype: research\nstatus: ${status}\narchived: 2026-01-01\nupdated: 2026-01-01\n---\n\n# Retired\n\ntext\n`;
+  mkdirSync(join(dir, 'docs/archive'), { recursive: true });
+  writeFileSync(join(dir, 'docs/archive', name), text);
+  if (opts?.seal === null) return;
+  const sha =
+    opts?.seal ?? createHash('sha256').update(text, 'utf8').digest('hex');
+  const manifestPath = join(dir, 'docs/archive/manifest.json');
+  const manifest = existsSync(manifestPath)
+    ? JSON.parse(readFileSync(manifestPath, 'utf8'))
+    : { version: 1, archived: {} };
+  manifest.archived[name] = { sha256: sha, archivedAt: '2026-01-01' };
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+describe('docs-check lifecycle rules', () => {
+  it('rejects status: archived outside docs/archive/', () => {
+    const result = withFixture((dir) =>
+      replaceOnce(dir, 'docs/research/dsh-agent-creation.md', 'status: active', 'status: archived'),
+    );
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain('archived documents live in docs/archive/');
+  });
+
+  it('accepts a properly archived document without any index', () => {
+    const result = withFixture((dir) => addArchivedDocument(dir, 'retired-study.md'));
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).toContain('archived documents: 1/60');
+  });
+
+  it('rejects archived documents that keep an active status', () => {
+    const result = withFixture((dir) =>
+      addArchivedDocument(dir, 'retired-study.md', { status: 'active' }),
+    );
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain('must carry status: archived');
+  });
+
+  it('rejects any index file in the archive', () => {
+    const result = withFixture((dir) => {
+      mkdirSync(join(dir, 'docs/archive'), { recursive: true });
+      writeFileSync(join(dir, 'docs/archive/README.md'), '# Archive index\n');
+    });
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain('the archive keeps no index files');
+  });
+
+  it('rejects active documents linking archived content', () => {
+    const result = withFixture((dir) => {
+      addArchivedDocument(dir, 'retired-study.md');
+      append(dir, 'README.md', '\n[x](docs/archive/retired-study.md)\n');
+    });
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain('must not link archived content');
+  });
+
+  it('rejects an archived document edited after it was sealed', () => {
+    const result = withFixture((dir) => {
+      addArchivedDocument(dir, 'retired-study.md');
+      append(dir, 'docs/archive/retired-study.md', '\n加一句不该有的补充。\n');
+    });
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain('archived content changed since it was sealed');
+  });
+
+  it('rejects an archived document with no seal', () => {
+    const result = withFixture((dir) =>
+      addArchivedDocument(dir, 'retired-study.md', { seal: null }),
+    );
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain('not sealed in docs/archive/manifest.json');
+  });
+
+  it('rejects an archived document missing its archived date', () => {
+    const result = withFixture((dir) => {
+      addArchivedDocument(dir, 'retired-study.md');
+      replaceOnce(dir, 'docs/archive/retired-study.md', 'archived: 2026-01-01\n', '');
+    });
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain('need an "archived: YYYY-MM-DD" frontmatter line');
+  });
+
+  it('rejects a stale seal for a document that is gone', () => {
+    const result = withFixture((dir) => {
+      addArchivedDocument(dir, 'retired-study.md');
+      writeFileSync(
+        join(dir, 'docs/archive/manifest.json'),
+        `${JSON.stringify(
+          {
+            version: 1,
+            archived: {
+              'retired-study.md': { sha256: 'c'.repeat(64), archivedAt: '2026-01-01' },
+              'ghost.md': { sha256: 'd'.repeat(64), archivedAt: '2026-01-01' },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+    });
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain('seals ghost.md but no such archived document exists');
+  });
+
+  it('reports aged research as due for archiving', () => {
+    const result = withFixture((dir) =>
+      setUpdated(dir, 'docs/research/dsh-agent-creation.md', '2026-01-01'),
+    );
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).toContain('retirement due (run pnpm docs:archive)');
+    expect(result.output).toContain('archive docs/research/dsh-agent-creation.md');
+  });
+
+  it('reports settled aged acceptance as due for deletion, not archiving', () => {
+    const result = withFixture((dir) => {
+      writeFileSync(
+        join(dir, 'docs/acceptance/settled-record.md'),
+        '---\ntype: acceptance\nstatus: active\nupdated: 2026-01-01\n---\n\n# Settled\n\n- [x] done\n',
+      );
+      append(dir, 'docs/acceptance/README.md', '\n| [settled-record.md](settled-record.md) | x | 已验收 |\n');
+      writeFileSync(
+        join(dir, 'docs/acceptance/open-record.md'),
+        '---\ntype: acceptance\nstatus: active\nupdated: 2026-01-01\n---\n\n# Open\n\n- [~] pending\n',
+      );
+      append(dir, 'docs/acceptance/README.md', '\n| [open-record.md](open-record.md) | x | 进行中 |\n');
+    });
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).toContain('delete docs/acceptance/settled-record.md');
+    expect(result.output).not.toContain('archive docs/acceptance/settled-record.md');
+    expect(result.output).not.toContain('open-record.md (acceptance settled');
+  });
+
+  it('never retires specs or designs by age', () => {
+    const result = withFixture((dir) => {
+      setUpdated(dir, 'docs/specs/document-model-v0.md', '2026-01-01');
+      setUpdated(dir, 'docs/designs/agent-doc-tools.md', '2026-01-01');
+    });
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).not.toContain('retirement due (run pnpm docs:archive)');
+    expect(result.output).toContain('review for staleness');
+  });
+
+  it('tells a stale draft spec to reject or promote, never archive', () => {
+    const result = withFixture((dir) => {
+      replaceOnce(dir, 'docs/specs/document-model-v0.md', 'status: active', 'status: draft');
+      setUpdated(dir, 'docs/specs/document-model-v0.md', '2026-01-01');
+    });
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).toContain('reject or promote, never archive');
+    expect(result.output).not.toContain('archive docs/specs/document-model-v0.md');
+  });
+
+  it('rejects an overfull archive', () => {
+    const result = withFixture((dir) => {
+      for (let index = 0; index < 61; index += 1) {
+        addArchivedDocument(dir, `retired-${index}.md`);
+      }
+    });
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain('exceed the 60-document budget');
   });
 });

@@ -1,6 +1,6 @@
 # 文档知识库
 
-本目录是 Alter-dsh 的工程知识库。文档的**分类、体量、数量与写作规则**以本文件为唯一事实源；
+本目录是 Alter-dsh 的工程知识库。文档的**分类、生命周期、体量、数量与写作规则**以本文件为唯一事实源；
 `AGENTS.md` 只保留入口与硬性约束，不复制这里的规则。其中可机械校验的规则由 `pnpm docs:check` 自动
 校验，并在 `pnpm check` 中强制执行；语义规则由评审负责（见「校验边界」）。
 
@@ -13,36 +13,69 @@
 | `research/` | 调研 | 外部事实、候选方案对比与证据 | 有时效：允许过时；结论被采纳后压缩为摘要并链接 spec/design |
 | `acceptance/` | 验收 | 可执行的检查清单与一次性验证记录（含状态） | 记录性：只回答「是否验收、怎么验收」，不描述实现 |
 
-不设 `archive/`：被取代的文档直接删除（git 保留历史），或把结论并入现有文档。
+文档分**活跃**、**归档**、**删除**三种归宿：活跃文档是当前开发的约束与依据；还有长期决策价值的
+移入 `docs/archive/`（仍可读，退出活跃索引与预算）；一次性的记录直接删除，git 是最终历史。
+
+## 生命周期与自动归档
+
+`status: active | draft | archived`。退场由 `pnpm docs:archive` 按规则执行（归档或删除、改
+`status`、从分类索引移除、更新封印），**无需人工触发**：`pnpm check` 在校验前自动执行一遍；
+单独的 `pnpm docs:check` 保持只读，只校验并提示退场候选。
+
+| 分类 | 保留条件 | 退场触发 |
+| --- | --- | --- |
+| specs | 契约仍在生效 | 仅显式：被新版取代（迁移完成）或 feature 废弃；**不按年龄退场** |
+| designs | 理由仍解释现行决策 | 仅显式：主题被移除或取代；180 天未更新只提示复核 |
+| research | 证据仍影响未决决策 | `updated` 起 90 天无实质更新 → **归档**（结论应先压缩进 design/spec） |
+| acceptance | 清单仍有未完成项或是回归依据 | 清单全部落定（无 `[ ]` 与 `[~]`）且 60 天无实质更新 → **删除** |
+
+规矩：
+
+- **该删就删。** acceptance 是一次性验证记录，落定后不再有约束力，删除而不是堆进归档区；
+  只有仍有长期证据价值时（例如被 spec 引用）才显式标 `status: archived` 转为归档。
+- **归档即冻结。** 归档文档不可再编辑：`docs/archive/manifest.json` 记录每篇的 sha256 封印，
+  内容一变 `docs:check` 就失败。需要改就移回活跃区（改 `status`、同步分类索引）。
+- **归档区不设索引**：目录 listing 就是清单，文档自带 `type`/`updated`/`archived` 元数据。
+- 归档文档保留原 `type`，`status` 改 `archived` 并插入 `archived: YYYY-MM-DD`，只放在
+  `docs/archive/`（扁平，不嵌套）。
+- 活跃文档不得链接归档文档；归档文档可链接任何文档。
+- 实质修改更新 `updated` 即续期；draft spec 90 天未更新只提示——**过时的草案要拒绝并删除，
+  或推进后转 active，不得归档养老**。
+- `docs:archive` 退场前检查活跃引用：仍被活跃文档引用的，先改引用再退场。
+- 归档区超过上限时按 `updated` 最旧优先删除（同时删封印条目），git 保留历史。
 
 ## 体量预算（硬上限，自动校验）
 
-| 角色 | 路径 | 行数上限 | 字节上限 |
-| --- | --- | --- | --- |
-| Agent 入口 | `AGENTS.md` | 90 | 8 KiB |
-| 产品入口 | `README.md` | 120 | 12 KiB |
-| 文档总索引 + 规则 | `docs/README.md` | 140 | 10 KiB |
-| 分类索引 | `docs/*/README.md` | 60 | 5 KiB |
-| 内容文档 | `docs/*/*.md`（非 README） | 300 | 24 KiB |
-| 源码目录说明 | `vendor/README.md` | 100 | 12 KiB |
+上限集中定义在 [scripts/docs/doc-budgets.json](../scripts/docs/doc-budgets.json)，`docs:check` 启动时载入；
+关键文档、分类索引与内容文档各有行数与字节上限。改上限必须改清单，diff 里一眼可见。
+
+**超预算时按固定顺序处理**，不得直接调高上限：
+
+1. **搬迁**——把内容移到真正拥有它的层级，这里只留一行链接。
+2. **压缩**——内容确实属于这里但可以更短时精简措辞。
+3. **提上限**——只有信息量确实需要才改 `doc-budgets.json`，并在提交说明里给出理由；
+   上限太低是预算 bug，上限长期没用满则应回调。
+4. 想留余量：使用率到 75% 就该搬迁（`docs:check` 会列出 `near budget`），不要贴着上限写。
 
 ## 数量预算（硬上限，自动校验）
 
-- markdown 只允许出现在 `AGENTS.md`、`README.md`、`docs/**`、`vendor/README.md` 与 `.agents/**`
-  （项目级 Agent 技能等工具文件，不属于知识库、不计入预算）这几处；仓库根目录只允许
-  `AGENTS.md`、`README.md` 两个 markdown 文件，其他位置新增 markdown 校验会失败。
-- `docs/` 最多 6 个分类目录；当前固定 4 个，新增分类须先改本文件与校验脚本。
-- 单个分类目录最多 8 个 markdown 文件（含该目录的 `README.md`）。
-- 知识文档（根目录 2 个 + `docs/**/*.md` + `vendor/README.md`）总数最多 24 个。
-- 层级固定为 `docs/<分类>/<文档>.md`，不再向下嵌套。
+数量上限（分类目录、单目录文件数、活跃总数与预警线、归档区）同在上表清单的 `counts` 段。
+结构约束：
+
+- markdown 只允许出现在 `AGENTS.md`、`README.md`、`docs/**`（含 `docs/archive/`）、`vendor/README.md`
+  与 `.agents/**`（项目级 Agent 技能等工具文件，不属于知识库、不计入预算）。
+- 层级固定为 `docs/<分类>/<文档>.md` 与 `docs/archive/<文档>.md`，不再向下嵌套；`docs/archive/`
+  是生命周期区，不算分类。
+- 新增分类须先改本文件与校验脚本。
 
 ## 校验边界
 
-`pnpm docs:check` **自动校验**的是可机械判定的规则：目录与分类、体量/数量预算、frontmatter、单一 H1、
-变更记录式标题、关键文档的代码/缩进代码、全仓 markdown 范围、kebab-case 命名、索引完整性与相对链接/
-锚点可解析。写作规则中的语义部分（单一事实源、只写当前有效内容、不写实现与源码说明、时效与合并
-判断）**由评审负责**，脚本只能辅助，不能替代。校验脚本自身的回归用例在
-`tests/integration/governance/docs-check.test.ts`（`pnpm exec vitest run tests/integration/governance/docs-check.test.ts`）；改动校验规则时同步更新用例。
+`pnpm docs:check` **自动校验**的是可机械判定的规则：目录与分类、体量/数量预算、frontmatter、生命周期
+状态与归档区位置、活跃→归档链接禁令、单一 H1、变更记录式标题、关键文档的代码/缩进代码、全仓 markdown
+范围、kebab-case 命名、索引完整性与相对链接/锚点可解析。notes 会列出可自动归档与待复核文档；执行归档
+用 `pnpm docs:archive`（`--dry-run` 预览）。写作规则中的语义部分（单一事实源、只写当前有效内容、不写
+实现与源码说明、时效与合并判断）**由评审负责**，脚本只能辅助，不能替代。校验与归档脚本的回归用例在
+`tests/integration/governance/`（`docs-check.test.ts`、`docs-archive.test.ts`）；改动规则时同步更新用例。
 
 入口文档还必须满足：`AGENTS.md` 含 `docs/README.md` 引用与 `pnpm docs:check` 命令，`README.md` 链到
 `docs/README.md`；frontmatter 的键不得重复。
@@ -58,18 +91,21 @@
 4. **不写源码说明。** 文档不逐文件/逐函数解释实现，不贴大段源码，不写调试过程；
    规范可含最小契约片段（类型、JSON 信封、表格）。
 5. **一个文档一个主题。** 标题即主题；接近预算先拆分，拆分后同步更新索引。
-6. **记录性内容有界。** `acceptance/` 记录被再次验收取代或过期时删除或合并；
-   `research/` 结论被采纳后压缩为摘要，只保留仍影响决策的证据。
+6. **记录性内容有界。** `acceptance/` 与 `research/` 按生命周期规则自动归档；结论被采纳后压缩为
+   摘要，只保留仍影响决策的证据；被取代的规范与方案显式归档或并入现有文档。
 7. **时效性用元数据表达。** 正文不写「最近更新 / 本次调整」；实质修改时更新 frontmatter `updated`。
 8. **链接可解析。** 文档间引用用相对路径，不引用已删除的文档或旧文件名。
-9. **索引同步。** 新增/删除/重命名文档时，必须在同一变更里更新本文件与该分类的 `README.md`。
+9. **索引同步。** 新增/删除/重命名文档时，必须在同一变更里更新本文件与该分类的 `README.md`；
+   归档移动由 `pnpm docs:archive` 自动从分类索引移除。
 10. **命名。** 文件名为 kebab-case 语义化全名，不加日期、序号、状态前缀（版本号属于主题的一部分，如 `-v0`）；
     命名规则由 `pnpm docs:check` 校验。
+11. **有界性。** 任何文档不得随时间无限增长：禁止逐条枚举归档/历史/日志的索引与流水账；
+    清单类内容必须有界，或由目录 listing 代替。
 
 ## 元数据
 
-`docs/**/*.md`（含分类 README，不含本文件）必须以 frontmatter 开头，且**只允许**以下三个键，
-顺序不限（示例无注释；照抄示例即可）：
+`docs/**/*.md`（含分类 README，不含本文件）必须以 frontmatter 开头，**只允许**以下三个键（归档文档
+另加 `archived`），顺序不限：
 
 ```yaml
 ---
@@ -79,16 +115,16 @@ updated: 2026-11-09
 ---
 ```
 
-- `type`：`spec | design | research | acceptance`，必须与所在目录一致。
-- `status`：`active | draft`；被取代的文档不允许保留 `superseded`，应删除或并入现有文档。
+- `type`：`spec | design | research | acceptance`，必须与来源目录一致。
+- `status`：`active | draft | archived`；`archived` 只允许出现在 `docs/archive/`。不设 `superseded`。
 - `updated`：真实 `YYYY-MM-DD` 日期，仅在实质修改时更新。
 
 ## 变更流程
 
-1. 先按上表选分类；一个事实有多个读者时，写进权威分类，其他位置只链接。
+1. 先选分类；一个事实有多个读者时，写进权威分类，其他位置只链接。
 2. 新增/删除/重命名 → 更新本文件索引与该分类 `README.md`。
-3. 运行 `pnpm docs:check`（只校验文档）与 `pnpm check`（全量）。
-4. 关键文档接近预算时，先精简或下沉细节到内容文档，再更新。
+3. 运行 `pnpm docs:check`（只校验）与 `pnpm check`（全量，含自动退场）。
+4. 关键文档接近预算时，先精简或下沉细节，再更新。
 5. 行为/契约变化与文档不一致时，同一变更里同时修改代码、测试与 spec。
 
 ## 索引
@@ -96,6 +132,6 @@ updated: 2026-11-09
 | 分类 | 入口 | 内容 |
 | --- | --- | --- |
 | 规范 | [specs/README.md](specs/README.md) | 文档模型、Operations、Agent 工具契约、系统架构与持久化边界 |
-| 方案 | [designs/README.md](designs/README.md) | 文档内容架构、Agent 文档工具与能力对齐方向、编辑器健壮性方向与决策 |
+| 方案 | [designs/README.md](designs/README.md) | 文档内容架构、Agent 文档工具与能力对齐方向、编辑器健壮性与内核替换方向 |
 | 调研 | [research/README.md](research/README.md) | 文档存储格式调研、DSH Agent 创建调研 |
 | 验收 | [acceptance/README.md](acceptance/README.md) | 双模式服务端/迁移、空间↔工作区映射、协作者创建、文档工具与编辑器健壮性验收 |

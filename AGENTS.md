@@ -26,8 +26,8 @@ Host 半侧（`host/` → `lib/`）是 Cordis 插件，持有 SQLite 与业务�
 - **文档编辑面冻结**：产品文档页是 `vendor/ui-space` 的旧 UI 1:1 还原（CSS、编辑器 DOM 与既有
   JSX 结构不得改动）；AST 适配层在 `src/document/editors/legacy`（别名 `@alter-space/legacy-adapter`），
   正文只经 Document Operations；组件目录在 `vendor/protocol`，声明式组件暂以对象占位卡呈现。
-- **文档有预算**：单文档、单目录数量、关键文档体量都有硬上限（见 docs/README.md），
-  由 `pnpm docs:check` 强制；关键文档只放导航、规则与约束，不写实现细节、源码说明、变更历史。
+- **文档有预算与生命周期**：上限在 `scripts/docs/doc-budgets.json`；过期文档自动退场（归档即冻结，
+  一次性记录直接删），见 docs/README.md。超预算先搬迁再压缩，最后才调上限。
 - **版本历史与快照**是恢复底线：改动写入路径时必须保留归属（`me` / `alter`）、事务与裁剪语义。
 
 ## 常用命令
@@ -36,13 +36,14 @@ Host 半侧（`host/` → `lib/`）是 Cordis 插件，持有 SQLite 与业务�
 pnpm install       # 首次或依赖变化后
 pnpm build         # client.js + lib/（生成产物，不入库）
 pnpm verify        # 插件包静态校验
-pnpm docs:check    # 文档体系校验（分类/体量/索引/链接）
+pnpm docs:check    # 文档体系校验（分类/体量/索引/链接/生命周期/归档封印）
+pnpm docs:archive  # 按生命周期规则退场：归档冻结或删除一次性记录
 pnpm typecheck     # 客户端与 Host 两套 tsconfig
 pnpm lint          # oxlint（测试层边界与测试互引在此强制）
 pnpm test          # vitest 分层门禁（unit + integration + ui，不含 fuzz 全量）
 pnpm test:unit     # 秒级快循环
 pnpm test:nightly  # 夜间：严格 lint + 全量 fuzz + 覆盖率下限
-pnpm check         # lint + build + verify + docs:check + typecheck + test（提交前全绿）
+pnpm check         # lint + build + verify + 自动归档 + docs:check + typecheck + test（提交前全绿）
 ```
 
 ## 安装、更新与生效
@@ -60,6 +61,7 @@ pnpm check         # lint + build + verify + docs:check + typecheck + test（提
 | 为什么这样设计、方向与已做决策 | [docs/designs/README.md](docs/designs/README.md) |
 | 外部调研证据与候选方案 | [docs/research/README.md](docs/research/README.md) |
 | 验收清单与验证记录 | [docs/acceptance/README.md](docs/acceptance/README.md) |
+| 已完结 feature 的归档文档 | `docs/archive/`（无索引，目录 listing 即清单） |
 | 文档分类、体量预算、写作与变更规则 | [docs/README.md](docs/README.md) |
 
 ## 交付要求

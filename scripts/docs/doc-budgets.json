@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "documents": {
+    "AGENTS.md": { "lines": 90, "bytes": 8192 },
+    "README.md": { "lines": 120, "bytes": 12288 },
+    "docs/README.md": { "lines": 150, "bytes": 11264 },
+    "vendor/README.md": { "lines": 100, "bytes": 12288 }
+  },
+  "byRole": {
+    "categoryIndex": { "lines": 60, "bytes": 5120 },
+    "contentDoc": { "lines": 300, "bytes": 24576 }
+  },
+  "counts": {
+    "maxCategories": 6,
+    "maxDocsPerFolder": 10,
+    "maxActiveDocs": 32,
+    "warnActiveDocs": 24,
+    "maxArchiveDocs": 60
+  },
+  "lifecycleDays": {
+    "research": 90,
+    "acceptance": 60,
+    "designReview": 180,
+    "draftSpecReview": 90
+  }
+}

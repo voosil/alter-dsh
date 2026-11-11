@@ -35,23 +35,24 @@
   },
   "scripts": {
     "build:client": "node build/build.mjs",
-    "build:host": "node scripts/clean-lib.mjs && tsc -p tsconfig.host.json",
+    "build:host": "node scripts/build/clean-lib.mjs && tsc -p tsconfig.host.json",
     "build": "node build/build.mjs && tsc -p tsconfig.host.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.host.json --noEmit",
-    "lint": "node scripts/lint.mjs",
+    "lint": "node scripts/gate/lint.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:unit": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
     "test:ui": "vitest run --project ui",
-    "test:nightly": "node scripts/test-nightly.mjs",
+    "test:nightly": "node scripts/gate/test-nightly.mjs",
     "test:coverage": "vitest run --coverage",
-    "coverage:report": "node scripts/coverage-report.mjs",
-    "verify": "node scripts/verify.mjs",
-    "docs:check": "node scripts/docs-check.mjs",
-    "check": "node scripts/lint.mjs && node build/build.mjs && node scripts/clean-lib.mjs && tsc -p tsconfig.host.json && node scripts/verify.mjs && node scripts/docs-check.mjs && tsc -p tsconfig.json --noEmit && tsc -p tsconfig.host.json --noEmit && vitest run",
+    "coverage:report": "node scripts/coverage/report.mjs",
+    "verify": "node scripts/gate/verify.mjs",
+    "docs:check": "node scripts/docs/check.mjs",
+    "docs:archive": "node scripts/docs/archive.mjs",
+    "check": "node scripts/gate/lint.mjs && node build/build.mjs && node scripts/build/clean-lib.mjs && tsc -p tsconfig.host.json && node scripts/gate/verify.mjs && node scripts/docs/archive.mjs && node scripts/docs/check.mjs && tsc -p tsconfig.json --noEmit && tsc -p tsconfig.host.json --noEmit && vitest run",
     "server": "node lib/server/core/index.js",
-    "migrate": "node scripts/space-migrate.mjs"
+    "migrate": "node scripts/ops/space-migrate.mjs"
   },
   "engines": {
     "node": ">=24.0.0"
