@@ -39,8 +39,8 @@
 ```sh
 pnpm install
 pnpm build      # client.js（浏览器）+ lib/（Host 半侧）
-pnpm check      # 构建 + 静态校验 + 文档校验 + 类型 + 测试
-pnpm test       # 仅 vitest
+pnpm check      # lint + 构建 + 静态校验 + 文档校验 + 类型 + 分层测试
+pnpm test       # 分层测试（unit + integration + ui）
 ```
 
 `client.js` 与 `lib/` 是生成产物，不入版本库；安装或更新前必须先构建。
@@ -66,14 +66,11 @@ curl http://127.0.0.1:8787/healthz
 
 ## 安装到当前 DSH profile
 
-用 Harness 的 `plugin_manager` 安装本目录（绝对路径）。若 profile 里还装着旧的 `@alter/dsh-space`，先移除：
+用 Harness 的 `plugin_manager` 安装本仓库绝对路径（若 profile 里还装着旧的 `@alter/dsh-space`，
+先用 `remove_bundle` 移除）：
 
 ```json
-{ "action": "remove_bundle", "target": "@alter/dsh-space" }
-```
-
-```json
-{ "action": "install_bundle", "target": "/Users/yifan/workspace/indie/Alter-dsh" }
+{ "action": "install_bundle", "target": "<本仓库绝对路径>" }
 ```
 
 安装后左侧栏出现「空间」图标；设置 → 插件中显示「空间」及说明。移除时 `remove_bundle` 的 target 为
@@ -88,7 +85,7 @@ client-HMR 自动替换。
 | `src/` | 客户端装配缝：面板注册、`#/settings` 外壳、宿主目录选择器适配、SpaceService RPC、样式 |
 | `vendor/` | Space 的协议、业务服务与 UI 源码（项目自有），说明见 [vendor/README.md](vendor/README.md) |
 | `docs/` | 工程知识库，入口 [docs/README.md](docs/README.md) |
-| `tests/` | vitest 测试 |
+| `tests/` | 分层测试：`unit` / `integration` / `ui` / `nightly` + 共享 `support/` |
 | `client.js`、`lib/` | 构建产物（不入库） |
 
 ## 已知边界

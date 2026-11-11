@@ -1,0 +1,146 @@
+{
+  "$schema": "../node_modules/oxlint/configuration_schema.json",
+  "plugins": ["import", "vitest", "typescript", "unicorn", "oxc"],
+  "categories": {
+    "correctness": "warn"
+  },
+  "ignorePatterns": [
+    "node_modules/**",
+    "lib/**",
+    "dist/**",
+    "coverage/**",
+    "client.js",
+    ".agents/**"
+  ],
+  "rules": {
+    "no-console": "warn",
+    "eqeqeq": "warn",
+    "import/no-cycle": "warn",
+    "vitest/require-mock-type-parameters": "off",
+    "unicorn/no-useless-spread": "off",
+    "vitest/expect-expect": "off",
+    "vitest/no-conditional-expect": "off",
+    "vitest/require-to-throw-message": "off",
+    "vitest/valid-expect": "off"
+  },
+  "overrides": [
+    {
+      "files": [
+        "**/scripts/**",
+        "**/build/**",
+        "**/server/**",
+        "**/*.mjs",
+        "**/src/document/editors/legacy/errors.ts",
+        "**/vendor/ui-space/src/**",
+        "**/tests/**/adapter.test.ts"
+      ],
+      "rules": {
+        "no-console": "off"
+      }
+    },
+    {
+      "files": ["**/tests/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**/*.test", "**/*.test.js", "**/tests/workspace/fixtures**"],
+                "message": "测试之间禁止互相引用；共享代码放 tests/support/。"
+              },
+              {
+                "group": ["**/tests/fixtures/**"],
+                "message": "旧 fixtures 位置已废弃；共享代码放 tests/support/。"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["**/tests/ui/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**/*.test", "**/*.test.js", "**/tests/workspace/fixtures**"],
+                "message": "测试之间禁止互相引用；共享代码放 tests/support/。"
+              },
+              {
+                "group": [
+                  "**/host/persistence/**",
+                  "**/host/core/**",
+                  "**/host/authority/**",
+                  "**/host/remote/**",
+                  "**/host/control/**",
+                  "**/host/workspace/**",
+                  "**/server/**"
+                ],
+                "message": "ui 层只验证浏览器行为，不得触达 Host 服务/数据库/路由（纯 AST 契约模块与 type-only 导入除外）；需要真 Host 的用例放 tests/fullstack/。"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["**/tests/unit/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**/*.test", "**/*.test.js", "**/tests/workspace/fixtures**"],
+                "message": "测试之间禁止互相引用；共享代码放 tests/support/。"
+              },
+              {
+                "group": [
+                  "**/host/persistence/**",
+                  "**/host/core/runtime*",
+                  "**/server/**"
+                ],
+                "message": "unit 层不得触达 SQLite 与运行时；需要它们的用例放 tests/integration/。"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/**", "tests/**", "build/**"],
+      "rules": {
+        "unicorn/no-useless-spread": "off"
+      }
+    },
+    {
+      "files": ["tests/support/**"],
+      "rules": {
+        "no-console": "off"
+      }
+    },
+    {
+      "files": ["vendor/**"],
+      "rules": {
+        "unicorn/no-useless-spread": "off"
+      }
+    },
+    {
+      "files": [
+        "server/**",
+        "scripts/**",
+        "build/**",
+        "host/**",
+        "src/**",
+        "vendor/**",
+        "tests/**"
+      ],
+      "rules": {
+        "no-console": "off"
+      }
+    }
+  ]
+}

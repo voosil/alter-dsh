@@ -1,7 +1,7 @@
 ---
 type: design
 status: active
-updated: 2026-11-10
+updated: 2026-11-11
 ---
 
 # 文档内容架构：JSON AST 权威 + Markdown 投影 + Document Operations
@@ -128,7 +128,7 @@ Operations 把一次修改收敛为可校验的意图，才谈得上可审计与
 - 先 `outline`：块树 + id/type/预览/块数，建立全局认知。
 - 再 `read`：按 `blocks`/`after`/`limit` 只投影请求范围（Markdown 视图）。
 - `search`：按文档或空间检索，返回块 id，用于定位。
-- 上下文预算：outline ≤ 2k tokens，单次读投影 ≤ 12k tokens / ≤ 40k 字符（见 spec）；ops 回执
+- 上下文预算：outline 为结构摘要，单次读投影默认 12k / 最大 40k 字符（见 spec）；ops 回执
   不回传整篇文档。
 - 所有 target 使用稳定 block id，不靠「第 3 段」这类位置描述，位置会随编辑漂移。
 

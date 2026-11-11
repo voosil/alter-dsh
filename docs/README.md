@@ -42,7 +42,7 @@
 变更记录式标题、关键文档的代码/缩进代码、全仓 markdown 范围、kebab-case 命名、索引完整性与相对链接/
 锚点可解析。写作规则中的语义部分（单一事实源、只写当前有效内容、不写实现与源码说明、时效与合并
 判断）**由评审负责**，脚本只能辅助，不能替代。校验脚本自身的回归用例在
-`tests/docs-check.test.ts`（`pnpm exec vitest run tests/docs-check.test.ts`）；改动校验规则时同步更新用例。
+`tests/integration/governance/docs-check.test.ts`（`pnpm exec vitest run tests/integration/governance/docs-check.test.ts`）；改动校验规则时同步更新用例。
 
 入口文档还必须满足：`AGENTS.md` 含 `docs/README.md` 引用与 `pnpm docs:check` 命令，`README.md` 链到
 `docs/README.md`；frontmatter 的键不得重复。

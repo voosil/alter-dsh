@@ -59,9 +59,9 @@ Document Operations。
 | 输入法 | 中文/日文组合输入不误保存、不丢字 | 人工（未专项覆盖） |
 | 归档状态 | 已归档徽标与恢复入口；空文档/无标题语义 | 人工 |
 
-自动证据以 `tests/document/editors/legacy/*.test.ts`（adapter/view/save/recovery/input/resilience/anchors）、
-`tests/document/fuzz.test.ts`、`tests/document/editors/legacy/{blocks,caret,convert,slash}.test.ts`（编辑器专题优化）与
-`tests/app/navigation.test.ts`（新建文档的路由落点）为准；真实浏览器
+自动证据以 `tests/ui/document/editors/legacy/*.test.ts`（adapter/view/save/recovery/input/resilience/anchors）、
+`tests/ui/document/editors/legacy/{blocks,caret,convert,slash}.test.ts`（编辑器专题优化）与
+`tests/nightly/document/fuzz.test.ts`（G2 种子随机走查）为准；新建文档的路由落点由 `tests/ui/app/navigation.test.ts`（内存服务替身 + 真 SpaceApp）约束。真实浏览器
 验收已执行（编辑/保存/刷新拼接、slash、撤销、崩溃草稿、版本恢复脏状态、粘贴安全、导出/历史/评论、
 样式冻结对照），替代项与限制见第 4 节。
 

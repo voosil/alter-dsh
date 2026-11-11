@@ -1,12 +1,12 @@
 ---
 type: spec
-status: draft
-updated: 2026-11-10
+status: active
+updated: 2026-11-11
 ---
 
 # Agent 文档工具 v0
 
-本篇规范约束模型可调用的文档工具与控制面工具契约（`space_*`）、投影预算与裁剪、spike 验收标准，
+本篇规范约束模型可调用的文档工具与控制面工具契约（`space_*`）、投影预算与裁剪、质量验收基线，
 是 Agent 文档能力的实施基准。工具读写的底层语义由 [document-model-v0.md](document-model-v0.md)
 与 [document-operations-v0.md](document-operations-v0.md) 定义，本篇不重复。
 
@@ -26,6 +26,12 @@ updated: 2026-11-10
 - 未知/不可写节点在结果中以占位出现，并附 `unsupported` 说明。
 - 工具错误使用 [document-operations-v0.md](document-operations-v0.md) §5 的错误码；对象读取的
   `object/not-found` 是工具层补充码。写工具能力受 registry `ai.ops` 与全局写策略约束。
+- 工具对所有 Agent（含子 Agent）可见，插件配置门禁（`agentTools.enabled`、写策略与只读开关）
+  是唯一范围控制；后续按 preset 或插件作用域收窄。
+- DSH 工具框架只做 JSON 解析，参数校验与错误映射必须在工具实现内手写，错误用稳定错误码字符串返回。
+- 文档写入必须在 store 的单写者事务回调（`transactDocument`）内完成；不要在该回调内 await 同一个
+  store 的其他更新（单写者队列会自锁）。
+- 失败要可操作：冲突时返回当前 revision，让模型重读后重试；不允许部分成功却不报错。
 
 ## 2. 工具契约
 
@@ -70,7 +76,7 @@ updated: 2026-11-10
 ```
 
 - 与 [document-operations-v0.md](document-operations-v0.md) §1–§3 一一对应；批量 op 整批全有或全无，
-  任一 op 校验失败时工具报错（错误码见 §5），不返回部分变更。
+  任一 op 校验失败时工具报错（错误码见 [document-operations-v0.md](document-operations-v0.md) §5），不返回部分变更。
 - 同一 `idempotency_key` 重放返回原结果（当前实现不做过期裁剪）。
 - `update_text` 的 `oldText` 使用 textblock 的**纯文本**（不含 `**`、`==` 等 Markdown marks），
   从 `space_doc_read` 的投影正文去掉行内标记即可得到。
@@ -146,11 +152,11 @@ updated: 2026-11-10
   `GET /api/alter-space/asset?id=…`。
 - 浏览器上传走同源 RPC `doc.importAsset` / `doc.importFile`，与本工具共用同一内容寻址资产存储。
 
-### 2.9 `space_settings`
+### 2.10 `space_settings`
 
 ```
 输入：{ action: 'get'|'set'|'test'|'flush', mode?, server_url?, token?, clear_token?, history_limit?, snapshot_keep? }
-输出：{ mode, serverUrl, tokenConfigured, connection, capabilities, storage: { historyLimit, snapshotKeep } | null }
+输出：{ mode, serverUrl, tokenConfigured, updatedAt, connection, capabilities, storage: { historyLimit, snapshotKeep } | null }
 ```
 
 - 控制面工具：字段沿用 Host 控制面（`settings.*` / `sync.*`）的 camelCase 命名，不混入文档工具
@@ -158,7 +164,7 @@ updated: 2026-11-10
 - `set` 中涉及服务器地址/token/切到服务端的写入必须经审批（无审批服务即失败关闭），并写入
   `connection-audit.jsonl`；`test` 探测非当前配置地址同样需要审批，且不隐式携带已存 token。
 
-### 2.10 `space_migrate`
+### 2.11 `space_migrate`
 
 ```
 输入：{ action: 'preflight'|'start'|'status'|'cancel', direction: 'to-server'|'from-server', overwrite?, trim_history? }
@@ -170,12 +176,13 @@ updated: 2026-11-10
 
 ## 3. 预算与裁剪
 
-- 11 个文档工具 schema 约 +2.2–2.6k tokens；两个控制面工具见 §2.9/§2.10。读投影单次 ≤ 12k tokens / ≤ 40k 字符。
+- 11 个文档工具 schema 约 +2.2–2.6k tokens；两个控制面工具见 §2.10/§2.11。读投影按字符预算：
+  单次默认 12k 字符、最大 40k 字符。
 - 每个工具的输出 schema 只列模型真正需要消费的字段，不回传整篇文档或未变更内容。
 - 读工具超限必须截断并在 `next` 给出续读锚点；写工具不因预算裁剪而改变语义。
 - 结构摘要与检索结果有独立上限：outline ≤ 2k tokens，search 默认 20 条且 preview ≤ 60 字。
 
-## 4. Spike 验收标准
+## 4. 质量验收基线
 
 用 10 篇真实文档（长文/代码/表格/图片/callout/mindmap 占位/component 占位）与 6 类 Agent 任务
 （总结、精确改段、插 callout、生成新章节、改表格单元格、整理 mindmap）验收：
@@ -184,14 +191,14 @@ updated: 2026-11-10
 | --- | --- |
 | 核心任务成功率 | ≥ 90% |
 | 单任务工具调用 | ≤ 4 次（读 outline + 定向 read + patch 为主） |
-| 单次读投影 | ≤ 12k tokens / ≤ 40k 字符 |
+| 单次读投影 | 默认 12k / 最大 40k 字符 |
 | 投影保真 | 文本/列表/表格/图片/callout 可读可定位；占位不丢失 |
 | op 原子性 | 无效 op 整批回滚；冲突 `doc/conflict` 不落盘 |
 | 撤销/审计 | 任意一次 apply 可撤销；op log 可还原 |
 | 版本/资产 | 恢复旧版本后对象/资产仍可渲染 |
 | 性能 | 单次 op apply（1 万块级文档）≤ 200ms（本机） |
 
-Spike 不做：组件沙箱、实时协作。
+基线不含：组件沙箱、实时协作。
 
 ## 5. 开放决策项
 

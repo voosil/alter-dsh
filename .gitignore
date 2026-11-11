@@ -12,3 +12,6 @@ client.js
 .vitest-cache
 # Local deployment secrets
 .env
+
+# coverage output (pnpm test:coverage)
+coverage/

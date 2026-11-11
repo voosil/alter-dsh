@@ -1,7 +1,7 @@
 ---
 type: spec
-status: draft
-updated: 2026-11-10
+status: active
+updated: 2026-11-11
 ---
 
 # 文档模型 v0
@@ -189,7 +189,7 @@ interface NodeTypeDefinition {
 
 - 投影是**只读视图**，用于 AI 阅读与人工导出；**不是第二真源**。
 - 默认开启块锚点（AI 视图）：每个顶层块前加 HTML 注释 `<!-- blk:blk_xxx -->`；导出/人类视图剥离。
-- 投影必须有界：工具层按块/范围裁剪，单次 ≤ 12k tokens（见 [agent-doc-tools-v0.md](agent-doc-tools-v0.md)）。
+- 投影必须有界：工具层按块/范围裁剪，单次读默认 12k 字符、最大 40k 字符（见 [agent-doc-tools-v0.md](agent-doc-tools-v0.md)）。
 - 无法投影的 mark/节点降级为可见占位，并在工具结果 `capabilities` 中说明；**不静默丢失**。
 
 ### 7.2 语法映射
@@ -234,7 +234,7 @@ interface NodeTypeDefinition {
 ## 相关文档
 
 - [document-operations-v0.md](document-operations-v0.md) — 写入契约：信封、Operation 集、错误码、对象/资产
-- [agent-doc-tools-v0.md](agent-doc-tools-v0.md) — 模型可调用工具、投影预算与 spike 验收
+- [agent-doc-tools-v0.md](agent-doc-tools-v0.md) — 模型可调用工具、投影预算与质量验收基线
 - [system-architecture.md](system-architecture.md) — 分层、持久化与传输约束
 - [文档内容架构](../designs/document-content-architecture.md) — 为什么选择 JSON AST + Markdown 投影
 - [文档存储格式调研](../research/document-storage-options.md) — 候选方案对比与证据

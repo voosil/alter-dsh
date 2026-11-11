@@ -52,6 +52,8 @@ updated: 2026-11-11
 | `settings.update` | `{ mode?, serverUrl?, token?: string \| null }` | 同上；落盘后后端切换失败时回滚已保存配置并保留旧后端 |
 | `settings.test` | `{ serverUrl?, token? }` | `{ ok, serverVersion?, protocolVersion?, authenticated?, message? }`；未配置的地址不得隐式使用已存 token |
 | `sync.flush` | 无 | 触发一次队列重放并返回状态 |
+| `sync.queue` | 无 | 每个存在未确认写入的文档一行：`{ docId, state: 'pending' \| 'conflict' \| 'failed', entries, baseRevision, lastError?, updatedAt }` |
+| `sync.resolve` | `{ docId, action: 'retry' \| 'discard' }` | `{ resolved, state }`；`retry` 按服务端当前 revision 重新武装该文档的队列并重放（离线时返回 `remote/unavailable`），`discard` 丢弃该文档的本地写入与影子，内容和版本以服务端为准 |
 | `migration.preflight/start/status/cancel` | `{ direction: 'to-server' \| 'from-server', overwrite?, trimHistory? }` | 预检或任务状态（`status`、`phase`、`counts`、`backup` 等） |
 
   迁移进行中拒绝修改服务器配置、切换模式与重放队列（`migration/busy`）。浏览器写入归属 `user`、
@@ -61,9 +63,10 @@ updated: 2026-11-11
   `{ type: 'server-response', rpcId, result: { ok: true, value } }`。业务结果在 `value` 内为
   `{ value }` 或 `{ error: { code, message } }`；HTTP 层只处理信封错误（405/400/500），
   业务失败留在成功响应的 `value` 内。
-- **端点白名单**：Host 维护 Space 与 hub 方法白名单；新增端点必须同时加入 Host 白名单与浏览器
-  客户端映射（`host/authority/rpc.ts`、`src/client/rpc.ts`，`storage.*` 在 `src/client/storage.ts`），
-  缺一视为未完成。
+- **端点白名单**：Host 维护 `space.*` / `hub.*` / `doc.*` / `object.*` / `storage.*` 方法白名单，并
+  逐条标注只读或写入；新增端点必须同时加入 Host 白名单与浏览器客户端映射（`host/authority/rpc.ts`、
+  `src/client/rpc.ts`，`storage.*` 在 `src/client/storage.ts`），缺一视为未完成。白名单、读写分类与
+  浏览器映射三处一致性由 `tests/integration/contract/` 检查，未知端点不得被判为只读。
 - 参数与结果校验在 Host 侧执行；错误以稳定 `code` 返回，不在信封层抛裸异常。
 - 浏览器不得把业务数据持久化到 localStorage、IndexedDB 等本地存储。
 - **文档资产通道**：上传走同一 RPC 通道的 `doc.importAsset` / `doc.importFile`；读取由 Host 另注册
@@ -130,20 +133,32 @@ updated: 2026-11-11
 - **恢复目标**：文档内容 RPO ≤ 1 次编辑（版本历史，最多 5 分钟粒度）；其余业务数据 RPO ≤ 24 小时
   （每日快照）；RTO 手动恢复约 5–10 分钟。
 
-## 5. 构建与自包含
+## 5. 构建、测试体系与门禁
 
 - 要求 Node.js ≥ 24 与 pnpm；`client.js`、`lib/` 是生成产物，不入库，安装或更新前必须先构建。
 - 构建期适配集中在 `build/build.mjs`（CSS 适配 + 模块级覆盖）：当前生效的模块覆盖只有
   `DirectoryField → src/app/native-directory-field.tsx`（宿主目录选择）；`@alter-space/legacy-adapter`
   别名指向 `src/document/editors/legacy/index.ts`，在 `build/build.mjs`、`tsconfig.json` paths 与
-  `vitest.config.mts` 三处声明，必须保持同步。新增覆盖或别名须在 `vendor/README.md` 登记。
+  `vitest.config.mts` 三处声明，必须保持同步（由 `tests/integration/contract/` 校验）。新增覆盖或
+  别名须在 `vendor/README.md` 登记。
 - 客户端 bundle 自包含：外置依赖仅限 react 族，新增第三方库必须打进 bundle；
   Host 侧新增依赖不得引入 `@deepseek-ai/*` 运行时依赖。
-- 服务端入口编译到 `lib/server/index.js`，Docker 镜像只构建 Host 面（`pnpm build:host`），运行阶段
+- 服务端入口编译到 `lib/server/core/index.js`，Docker 镜像只构建 Host 面（`pnpm build:host`），运行阶段
   不带构建工具；配置经 `SPACE_DATA_DIR` / `SPACE_HOST` / `SPACE_PORT` / `SPACE_TOKENS`（必填，命名
   token 列表）/ `SPACE_SNAPSHOTS` 提供，数据目录必须挂持久卷。
-- 交付前 `pnpm check`（build + verify + docs:check + typecheck + test）必须全绿；
-  Host 改动后需重启 Loader 行，客户端改动由 client-HMR 原地替换。客户端 bundle 被原地替换时，
+- **测试分层**：`tests/<layer>/` 目录即分层，环境与包含范围只在 `tests/layers.mjs` 声明，由
+  `vitest.config.mts` 生成项目。`unit`（纯函数，node，无 I/O，秒级）、`integration`（Host、持久化、
+  控制面、远程队列，真 SQLite 与真 HTTP 服务端）、`ui`（冻结旧编辑器 DOM/CSS，jsdom）、
+  `nightly`（长跑种子 fuzz，不在门禁内）。不设浏览器 e2e：`dsh web` 登录态与 `__DSH_BOOT__` 注入
+  无法在无人值守环境重建，真浏览器验收保留为人工清单。
+- **测试复用**：测试之间禁止互相引用；共享代码只放 `tests/support/`（生命周期、构建器、DSH 服务替身、
+  真服务端/运行时启动器、AST 断言、fuzz runner）。共享层只统一生命周期与替身，不降级保真度。
+- **门禁**：`pnpm check` = lint + build + verify + docs:check + typecheck + 分层测试（不含 fuzz 全量），
+  任何红灯不得合并；重构提交必须行为中性。`pnpm test:nightly` = 严格 lint + 全量 fuzz + 覆盖率下限。
+  不稳定用例按缺陷处理（并发、端口、时序），不用重试掩盖。
+- **覆盖率**：`pnpm test:coverage` 产出 JSON 摘要，`pnpm coverage:report` 按 `tests/layers.mjs` 的
+  目录下限（行/语句双指标）校验，只升不降；冻结 UI 与薄接线不设硬指标，写入路径才是棘轮对象。
+- Host 改动后需重启 Loader 行，客户端改动由 client-HMR 原地替换。客户端 bundle 被原地替换时，
   Space 面板选择与面板内路由在页面内续接；页面刷新仍按 DSH 默认重置。
 
 ## 6. 空间 ↔ DSH 工作区映射不变量

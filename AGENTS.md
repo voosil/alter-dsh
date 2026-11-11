@@ -12,8 +12,9 @@ Host 半侧（`host/` → `lib/`）是 Cordis 插件，持有 SQLite 与业务�
 
 - **数据权威在 Host**：业务数据只写 SQLite（`${DSH_HOME:-~/.dsh}/data/space/space.db`）；
   localStorage 只存 UI 偏好。不要手工编辑/移动运行中的数据库；备份用每日快照（含资产归档）或 `sqlite3 .backup`。
-- **新增 RPC 端点**必须同时改 `host/authority/rpc.ts` 白名单与 `src/client/rpc.ts` 映射；通道常量
-  `('/api', 'alter-space')` 两处保持同步。传输信封与端点语义以 spec 为准。
+- **新增 RPC 端点**必须同时改 `host/authority/rpc.ts` 白名单与 `src/client/rpc.ts` 映射
+  （`storage.*` 映射在 `src/client/storage.ts`）；通道常量 `('/api', 'alter-space')` 两处保持同步。
+  传输信封与端点语义以 spec 为准。
 - **`vendor/` 可改但克制**：新增逻辑优先放 `host/`、`src/`；确实要改 `vendor/` 时保持行为与
   既有约定一致。构建期覆盖与别名集中在 `build/build.mjs`，当前生效的清单写在 `vendor/README.md`。
 - **客户端 bundle 自包含**：外置依赖仅限 react 族；新增第三方库必须打进 bundle。
@@ -37,8 +38,11 @@ pnpm build         # client.js + lib/（生成产物，不入库）
 pnpm verify        # 插件包静态校验
 pnpm docs:check    # 文档体系校验（分类/体量/索引/链接）
 pnpm typecheck     # 客户端与 Host 两套 tsconfig
-pnpm test          # vitest
-pnpm check         # build + verify + docs:check + typecheck + test（提交前全绿）
+pnpm lint          # oxlint（测试层边界与测试互引在此强制）
+pnpm test          # vitest 分层门禁（unit + integration + ui，不含 fuzz 全量）
+pnpm test:unit     # 秒级快循环
+pnpm test:nightly  # 夜间：严格 lint + 全量 fuzz + 覆盖率下限
+pnpm check         # lint + build + verify + docs:check + typecheck + test（提交前全绿）
 ```
 
 ## 安装、更新与生效
@@ -65,4 +69,4 @@ pnpm check         # build + verify + docs:check + typecheck + test（提交前�
 - 提交信息用 Conventional Commits：`<type>(<scope>): <一句话说明>`，scope 写具体模块或范畴
   （如 `host`、`document`、`editor`、`workspace`、`settings`、`build`、`docs`）改动横跨多层时按主变更面取一个 scope，其余改动在提交正文说明。
 - 文档只写当前有效内容；变更历史交给 git，不写流水账、不贴源码、不写逐文件实现说明。
-- 大量涉及样式、UX这类花费时间非常长但人做起来很简单的验证不需要自己做，条理清晰地总结出来让用户Review。
+- 样式/UX 类验证对 Agent 耗时很长、对人却很简单：这类验证不要自己做，输出条理清晰的验证清单交用户 Review。

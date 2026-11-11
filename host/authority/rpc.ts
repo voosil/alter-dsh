@@ -32,7 +32,8 @@ export const RPC_ROUTE_PATH = '/api/alter-space';
 /** Endpoint name the browser puts in the Connection RPC envelope. */
 export const RPC_ENDPOINT = 'alter-space';
 
-const SPACE_METHODS = [
+/** space.* business methods on the browser whitelist. */
+export const SPACE_METHODS = [
   'listSpaces',
   'getSpace',
   'createSpace',
@@ -77,7 +78,8 @@ const SPACE_METHODS = [
   'listDirectories',
 ] as const;
 
-const HUB_METHODS = [
+/** hub.* business methods on the browser whitelist. */
+export const HUB_METHODS = [
   'get',
   'createMatter',
   'setMatterStatus',
@@ -96,9 +98,11 @@ const HUB_METHODS = [
   'remove',
 ] as const;
 
-const STORAGE_METHODS = ['get', 'estimate', 'set'] as const;
+/** storage.* methods on the browser whitelist. */
+export const STORAGE_METHODS = ['get', 'estimate', 'set'] as const;
 
-const DOCUMENT_METHODS = [
+/** doc.* methods on the browser whitelist. */
+export const DOCUMENT_METHODS = [
   'get',
   'outline',
   'read',
@@ -111,7 +115,8 @@ const DOCUMENT_METHODS = [
   'importFile',
   'updateObject',
 ] as const;
-const OBJECT_METHODS = ['get'] as const;
+/** object.* methods on the browser whitelist. */
+export const OBJECT_METHODS = ['get'] as const;
 
 const SPACE_METHOD_SET: ReadonlySet<string> = new Set(SPACE_METHODS);
 const HUB_METHOD_SET: ReadonlySet<string> = new Set(HUB_METHODS);
@@ -594,7 +599,7 @@ export function createConnectionFetchRoute(
     let result: unknown;
     try {
       result = await handler(op, payload, request.signal, undefined);
-    } catch (error) {
+    } catch {
       return jsonResponse(500, { error: 'handler_failure' });
     }
     // Business failures stay inside the success value: the browser unwraps

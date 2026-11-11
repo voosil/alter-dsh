@@ -1,7 +1,7 @@
 ---
 type: spec
-status: draft
-updated: 2026-11-10
+status: active
+updated: 2026-11-11
 ---
 
 # 文档操作 v0
@@ -193,8 +193,8 @@ v0 限制：
 
 ## 8. RPC 暴露
 
-- 对应端点：`doc.get` / `doc.outline` / `doc.read` / `doc.search` / `doc.applyOps` / `doc.undo` / `doc.restoreVersion` / `doc.generate` / `doc.importAsset` / `doc.importFile` / `object.get`；
-  其中 `doc.applyOps` / `doc.generate` / `doc.undo` / `doc.restoreVersion` 是正文写入入口，
+- 对应端点：`doc.get` / `doc.outline` / `doc.read` / `doc.search` / `doc.applyOps` / `doc.undo` / `doc.restoreVersion` / `doc.generate` / `doc.importAsset` / `doc.importFile` / `doc.updateObject` / `object.get`；
+  其中 `doc.applyOps` / `doc.generate` / `doc.undo` / `doc.restoreVersion` / `doc.updateObject` 是正文写入入口，
   `doc.importAsset` / `doc.importFile` 是资产上传入口，其余端点只读；
   `doc.get` 返回完整 AST（编辑器加载用），`doc.undo` 应用一次 op log 的 `inverseOps`；
   浏览器编辑器（旧 UI 经适配层）加载 AST、编辑后在客户端做 block 级 diff 生成 Operation 批次再提交，
