@@ -493,7 +493,9 @@ describe('D1 IME composition', () => {
 // ---------------------------------------------------------------------------
 
 describe('D3 empty list item deletion', () => {
-  it('removes a middle empty list item and keeps the list continuous', () => {
+  it('deletes an empty middle list item and keeps the caret on the current line', () => {
+    // 2026-11-11《编辑器专题优化》第 2 项：空列表项退格后该行退化为空段落，
+    // 光标停在当前行行首，不再跳回上一列表项行尾；列表由此断成前后两段。
     const props = renderEditor({
       initialHtml: '<ul><li>第一项</li><li><br></li><li>第三项</li></ul>',
     });
@@ -501,24 +503,41 @@ describe('D3 empty list item deletion', () => {
     caretAt(list.children[1]!, 0);
     const notPrevented = fireEvent.keyDown(surface(), { key: 'Backspace' });
     expect(notPrevented).toBe(false);
-    const items = [...surface().querySelectorAll('ul > li')];
-    expect(items).toHaveLength(2);
-    expect(items[0]!.textContent).toBe('第一项');
-    expect(items[1]!.textContent).toBe('第三项');
+    const lists = [...surface().querySelectorAll('ul')];
+    expect(lists).toHaveLength(2);
+    expect([...lists[0]!.querySelectorAll('li')].map((item) => item.textContent)).toEqual([
+      '第一项',
+    ]);
+    expect([...lists[1]!.querySelectorAll('li')].map((item) => item.textContent)).toEqual([
+      '第三项',
+    ]);
+    const paragraph = surface().querySelector('p')!;
     const selection = window.getSelection();
     expect(selection?.rangeCount).toBe(1);
-    expect(items[0]!.contains(selection!.anchorNode)).toBe(true);
+    expect(paragraph.contains(selection!.anchorNode)).toBe(true);
+    const before = document.createRange();
+    before.selectNodeContents(paragraph);
+    before.setEnd(selection!.anchorNode!, selection!.anchorOffset);
+    expect(before.toString()).toBe('');
     expect(props.onChange).toHaveBeenCalled();
   });
 
-  it('removes a leading empty item and puts the caret in the next item', () => {
+  it('deletes a leading empty item and keeps the caret on the current line', () => {
+    // 2026-11-11《编辑器专题优化》第 2 项：同 middle，空段落留在列表之前。
     renderEditor({ initialHtml: '<ul><li><br></li><li>第二项</li></ul>' });
     caretAt(surface().querySelector('ul > li')!, 0);
     fireEvent.keyDown(surface(), { key: 'Backspace' });
+    const paragraph = surface().querySelector('p')!;
+    expect(surface().firstElementChild).toBe(paragraph);
     const items = [...surface().querySelectorAll('ul > li')];
     expect(items).toHaveLength(1);
     expect(items[0]!.textContent).toBe('第二项');
-    expect(items[0]!.contains(window.getSelection()!.anchorNode)).toBe(true);
+    const selection = window.getSelection();
+    expect(paragraph.contains(selection!.anchorNode)).toBe(true);
+    const before = document.createRange();
+    before.selectNodeContents(paragraph);
+    before.setEnd(selection!.anchorNode!, selection!.anchorOffset);
+    expect(before.toString()).toBe('');
   });
 
   it('replaces a single empty list with a paragraph', () => {
@@ -531,16 +550,22 @@ describe('D3 empty list item deletion', () => {
     expect(paragraph!.contains(window.getSelection()!.anchorNode)).toBe(true);
   });
 
-  it('keeps ordered list numbering after deleting an empty middle item', () => {
+  it('keeps ordered list numbering after splitting an empty middle item', () => {
+    // 2026-11-11《编辑器专题优化》第 2 项：空列表项删除后列表断成两段，
+    // 后段用 start 维持原序号（一 / 空 / 三 → 一 + 空段落 + start=3 的三）。
     renderEditor({ initialHtml: '<ol><li>一</li><li><br></li><li>三</li></ol>' });
     caretAt(surface().querySelectorAll('ol > li')[1]!, 0);
     fireEvent.keyDown(surface(), { key: 'Delete' });
-    const list = surface().querySelector('ol');
-    expect(list).toBeTruthy();
-    expect([...list!.querySelectorAll('li')].map((item) => item.textContent)).toEqual([
+    const lists = [...surface().querySelectorAll('ol')];
+    expect(lists).toHaveLength(2);
+    expect([...lists[0]!.querySelectorAll('li')].map((item) => item.textContent)).toEqual([
       '一',
+    ]);
+    expect([...lists[1]!.querySelectorAll('li')].map((item) => item.textContent)).toEqual([
       '三',
     ]);
+    expect(lists[1]!.getAttribute('start')).toBe('3');
+    expect(surface().querySelector('p')).toBeTruthy();
   });
 
   it('leaves non-empty list items to the browser default behavior', () => {

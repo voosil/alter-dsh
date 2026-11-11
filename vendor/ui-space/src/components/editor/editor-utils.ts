@@ -171,8 +171,15 @@ export function convertLineTo(
   return element;
 }
 
-export function convertLineToList(line: HTMLElement, ordered: boolean) {
+export function convertLineToList(
+  line: HTMLElement,
+  ordered: boolean,
+  start?: number,
+) {
   const list = document.createElement(ordered ? 'ol' : 'ul');
+  // A typed marker like `3. ` keeps its number instead of restarting at 1.
+  if (ordered && start !== undefined && start > 1 && start <= 9_999_999)
+    list.setAttribute('start', String(start));
   const item = document.createElement('li');
   while (line.firstChild) item.append(line.firstChild);
   if (!item.firstChild) item.append(document.createElement('br'));
