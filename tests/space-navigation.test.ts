@@ -7,7 +7,8 @@
  * 空间为空时是空间概览），因此新建流程必须先把新文档发布到列表，再导航。
  *
  * 这里在 `router.navigate` 回调里断言调用瞬间侧栏已经列出新文档——正是浏览器里
- * 触发「新建后跳概览」的时序；同时断言最终停在新建文档的编辑器上。
+ * 触发「新建后跳概览」的时序；同时断言最终停在新建文档的编辑器、光标落在标题上，
+ * 且重新打开已有文档不会再次抢焦点。
  */
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -143,8 +144,13 @@ async function renderApp() {
   return { router, store };
 }
 
+/** 标题 textarea；新建后光标应当已经落在里面。 */
+function titleInput(): HTMLTextAreaElement {
+  return screen.getByLabelText('文档标题') as HTMLTextAreaElement;
+}
+
 describe('新建文档后的路由落点', () => {
-  it('空空间新建文档时直接打开该文档，而不是空间概览', async () => {
+  it('空空间新建文档时直接打开该文档并把光标放进标题', async () => {
     const { router, store } = await renderApp();
     fireEvent.click(await screen.findByText('新建文档'));
     await waitFor(() => {
@@ -154,6 +160,7 @@ describe('新建文档后的路由落点', () => {
     expect(navigation?.listedDocs).toBe(1);
     expect(router.getPath()).toMatch(/\/doc\/doc-[^/]+$/);
     expect(screen.queryByText('空间详情')).toBeNull();
+    expect(document.activeElement).toBe(titleInput());
     await store.close();
   });
 
@@ -180,6 +187,45 @@ describe('新建文档后的路由落点', () => {
     const last = router.docNavigations.at(-1);
     expect(last?.listedDocs).toBe(2);
     expect(router.getPath()).toBe(last?.to);
+    expect(document.activeElement).toBe(titleInput());
+    await store.close();
+  });
+
+  it('重新打开已有文档不抢焦点', async () => {
+    const { router, store } = await renderApp();
+    fireEvent.click(await screen.findByText('新建文档'));
+    await waitFor(() => {
+      expect(document.activeElement).toBe(titleInput());
+    });
+    const firstDocPath = router.getPath();
+
+    await act(async () => {
+      fireEvent.click(
+        document.querySelector(
+          'button[aria-label="新建"]',
+        ) as HTMLButtonElement,
+      );
+    });
+    fireEvent.click(await screen.findByText('新建文档'));
+    await waitFor(() => {
+      expect(document.activeElement).toBe(titleInput());
+      expect(router.getPath()).not.toBe(firstDocPath);
+    });
+
+    const secondDocPath = router.getPath();
+    await act(async () => {
+      router.navigate(firstDocPath);
+    });
+    await waitFor(() => {
+      expect(router.getPath()).toBe(firstDocPath);
+    });
+    await act(async () => {
+      router.navigate(secondDocPath);
+    });
+    await waitFor(() => {
+      expect(router.getPath()).toBe(secondDocPath);
+    });
+    expect(document.activeElement).not.toBe(titleInput());
     await store.close();
   });
 });

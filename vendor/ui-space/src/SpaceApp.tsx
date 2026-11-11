@@ -98,6 +98,8 @@ export function SpaceApp({
   const [directoryOpen, setDirectoryOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const sidebarRef = useRef<HTMLElement>(null);
+  /** 刚新建、还没打开过的文档 id：打开时把光标放进标题，一次性消费。 */
+  const newDocFocusRef = useRef<string | null>(null);
   const {
     width: sidebarWidth,
     resize: resizeSidebar,
@@ -199,6 +201,13 @@ export function SpaceApp({
     writeLastDoc(activeSpace.id, route.id);
   }, [activeSpace, path, route.id, route.spaceId, route.view, visibleNodes]);
 
+  // 文档页挂载时已经消费掉聚焦请求（子组件的 effect 先于父组件执行）；这里清掉标记，
+  // 之后重新打开同一篇文档不会再抢焦点。
+  useEffect(() => {
+    if (route.view !== 'doc' || route.id === undefined) return;
+    if (newDocFocusRef.current === route.id) newDocFocusRef.current = null;
+  }, [route.id, route.view]);
+
   useEffect(() => {
     if (!isSpaceRoutePath(path)) return;
     if (!activeSpace || loadedSpaceId !== activeSpace.id) return;
@@ -261,6 +270,7 @@ export function SpaceApp({
       // 误判为不存在，跳回上一篇文档；空间为空时则跳回空间概览。因此先把新节点同步
       // 提交到列表，再允许调用方导航。
       addNodeToState: (node: SpaceNode) => {
+        newDocFocusRef.current = node.id;
         flushSync(() => {
           setNodes((items) => [
             node,
@@ -326,7 +336,14 @@ export function SpaceApp({
     const node = route.id
       ? visibleNodes.find((item) => item.id === route.id)
       : undefined;
-    if (node) return <DocumentView key={node.id} node={node} />;
+    if (node)
+      return (
+        <DocumentView
+          key={node.id}
+          node={node}
+          autoFocusTitle={newDocFocusRef.current === node.id}
+        />
+      );
     if (loadedSpaceId === activeSpace.id && !defaultDocId(visibleNodes))
       return <SpaceHome />;
     return <div className={styles.pending} aria-live="polite" />;

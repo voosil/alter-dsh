@@ -150,9 +150,12 @@ function readMountDocument(
 export function DocumentView({
   node,
   embedded = false,
+  autoFocusTitle = false,
 }: {
   node: SpaceNode;
   embedded?: boolean;
+  /** 新建文档首次打开：挂载后把光标放进标题；重新打开已有文档不抢焦点。 */
+  autoFocusTitle?: boolean;
 }) {
   const {
     service,
@@ -363,6 +366,16 @@ export function DocumentView({
     setNarrow(element.clientWidth < 720);
     return () => observer.disconnect();
   }, []);
+
+  // 新建文档挂载后把光标放进标题，用户可以直接开始输入；重新打开已有文档不抢焦点
+  // （`autoFocusTitle` 只由新建流程一次性传入，见 `SpaceApp` 的聚焦请求）。
+  useEffect(() => {
+    if (!autoFocusTitle) return;
+    const element = titleRef.current;
+    if (element === null) return;
+    element.focus();
+    element.setSelectionRange(element.value.length, element.value.length);
+  }, [autoFocusTitle]);
 
   useLayoutEffect(() => {
     const element = titleRef.current;
