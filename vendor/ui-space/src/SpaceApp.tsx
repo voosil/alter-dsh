@@ -7,6 +7,7 @@ import {
   useSyncExternalStore,
   type CSSProperties,
 } from 'react';
+import { flushSync } from 'react-dom';
 import type { Agent, Space, SpaceNode, Thought } from '@alter/protocol';
 import { SpaceContext } from './runtime';
 import type { SpaceCapabilities } from './types';
@@ -255,12 +256,18 @@ export function SpaceApp({
         setSpaces((items) => items.filter((space) => space.id !== id)),
       addSpaceToState: (space: Space) =>
         setSpaces((items) => [...items, space]),
+      // 新建路径紧接着跳转到这篇文档，而路由是外部 store：它的通知会先于同一批
+      // `setNodes` 更新渲染。若文档列表此刻仍没有该 id，下面的路由校正会把新建文档
+      // 误判为不存在，跳回上一篇文档；空间为空时则跳回空间概览。因此先把新节点同步
+      // 提交到列表，再允许调用方导航。
       addNodeToState: (node: SpaceNode) => {
-        setNodes((items) => [
-          node,
-          ...items.filter((item) => item.id !== node.id),
-        ]);
-        setLoadedSpaceId((current) => current ?? node.spaceId);
+        flushSync(() => {
+          setNodes((items) => [
+            node,
+            ...items.filter((item) => item.id !== node.id),
+          ]);
+          setLoadedSpaceId((current) => current ?? node.spaceId);
+        });
       },
       updateNodeInState: (node: SpaceNode) =>
         setNodes((items) =>
