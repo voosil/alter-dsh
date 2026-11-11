@@ -106,6 +106,14 @@ const inlineSelectors: Record<InlineKind, string> = {
   highlight: 'mark',
 };
 
+/**
+ * Lines whose whole text may complete into a divider while typing `---`.
+ * Code blocks, list items and todos are excluded: there `---` is legitimate
+ * content (YAML frontmatter, separators) and replacing the host block would
+ * destroy its structure.
+ */
+const typedDividerHosts = new Set(['P', 'H1', 'H2', 'H3', 'BLOCKQUOTE']);
+
 const emptyInlineFormats: InlineFormats = {
   bold: 'none',
   underline: 'none',
@@ -990,6 +998,32 @@ export function Editor({
     return false;
   }
 
+  /**
+   * Complete a typed `---` into a divider as soon as the third dash lands.
+   *
+   * The legacy editor waited for Enter; the product requires the divider to
+   * appear without that extra keystroke. Only a line whose whole content is
+   * `---`, with the caret at its end, converts — anything else stays text.
+   * An open IME composition is never converted early, and `input` must be an
+   * insertion (a delete that happens to leave `---` must not morph the line).
+   */
+  function convertTypedDivider(input?: InputEvent): boolean {
+    const editor = editorRef.current;
+    if (!editor || composingRef.current) return false;
+    const selection = window.getSelection();
+    if (!selection?.rangeCount || !selection.isCollapsed) return false;
+    const line = lineElement(selection.anchorNode);
+    if (!line || line.parentElement !== editor) return false;
+    if (!typedDividerHosts.has(line.tagName)) return false;
+    const inputType = input?.inputType ?? '';
+    if (inputType !== '' && !inputType.startsWith('insert')) return false;
+    if ((line.textContent ?? '').trimEnd() !== '---') return false;
+    if (!isCaretAtEnd(line)) return false;
+    line.innerHTML = '';
+    convertLineToDivider(line);
+    return true;
+  }
+
   function handleCompositionEnd() {
     composingRef.current = false;
     onCompositionChangeRef.current?.(false);
@@ -998,6 +1032,7 @@ export function Editor({
     // Some browsers do not emit a trailing non-composing input event; finish
     // the composition with one final change notification.
     convertCompositionShortcut();
+    convertTypedDivider();
     notifyChange();
     if (!slashLine || !slashLine.isConnected) return;
     // The IME committed text without any keydown flowing through the editor,
@@ -1942,6 +1977,7 @@ export function Editor({
         setSlash(null);
       }
     }
+    convertTypedDivider(nativeInput);
     convertCompositionShortcut();
     notifyChange();
   }
