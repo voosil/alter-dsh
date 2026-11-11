@@ -1190,6 +1190,27 @@ export function Editor({
           notifyChange();
           return;
         }
+        // 9: an empty todo is a row of its own: Backspace removes it instead of
+        // leaving the caret parked at the row start.
+        if (
+          item !== null &&
+          item.dataset.todo !== undefined &&
+          item.contains(caret.anchorNode) &&
+          (item.querySelector('[data-todo-text]')?.textContent ?? '').trim() === ''
+        ) {
+          event.preventDefault();
+          removeEmptyTodoLine(item);
+          notifyChange();
+          return;
+        }
+        // 11: a document holding a single empty line must keep that line. Letting
+        // the default delete tear it down drops the caret out of the line box and
+        // brings the placeholder back while the caret sits above it.
+        if (editor !== null && isEmptyDocumentLine(editor, item)) {
+          event.preventDefault();
+          ensureEmptyLineCaret(editor, item);
+          return;
+        }
       }
     }
     if (slash) {
@@ -1432,6 +1453,61 @@ export function Editor({
     placeCaretAtEnd(paragraph);
   }
 
+  /** True when the caret sits on the editor's only line and that line is empty. */
+  function isEmptyDocumentLine(editor: HTMLElement, line: HTMLElement | null) {
+    if ((editor.textContent ?? '') !== '') return false;
+    // The caret can also sit on the host itself once the line was torn down.
+    if (line === null) return true;
+    if (editor.children.length !== 1 || editor.firstElementChild !== line)
+      return false;
+    return line.tagName === 'P';
+  }
+
+  /** Rebuild the single empty line and park the caret at its first position. */
+  function ensureEmptyLineCaret(
+    editor: HTMLElement,
+    line: HTMLElement | null,
+  ) {
+    const target =
+      line ?? editor.querySelector<HTMLElement>('p') ?? createParagraph();
+    if (!target.isConnected) editor.append(target);
+    if (!target.firstChild) target.append(document.createElement('br'));
+    placeCaretAtStart(target);
+  }
+
+  /** Remove an empty todo row and park the caret on the nearest line box. */
+  function removeEmptyTodoLine(todo: HTMLElement) {
+    const previous = todo.previousElementSibling;
+    const next = todo.nextElementSibling;
+    if (previous instanceof HTMLElement) {
+      todo.remove();
+      placeCaretOnLine(previous, 'end');
+      return;
+    }
+    if (next instanceof HTMLElement) {
+      todo.remove();
+      placeCaretOnLine(next, 'start');
+      return;
+    }
+    // The todo was the only line: leave a plain paragraph behind.
+    const paragraph = createParagraph();
+    todo.replaceWith(paragraph);
+    placeCaretAtStart(paragraph);
+  }
+
+  /** Place the caret inside a line, entering the todo text span when needed. */
+  function placeCaretOnLine(line: HTMLElement, edge: 'start' | 'end') {
+    const target =
+      line.dataset.todo !== undefined
+        ? (line.querySelector<HTMLElement>('[data-todo-text]') ?? line)
+        : line;
+    // Empty lines only have a placeholder <br>: collapsing after it would put
+    // the caret on a second, zero-height line.
+    if (edge === 'end' && (target.textContent ?? '') !== '')
+      placeCaretAtEnd(target);
+    else placeCaretAtStart(target);
+  }
+
   function handleFocus(event: FocusEvent<HTMLDivElement>) {
     const target = event.target as HTMLElement;
     const link = target.closest?.<HTMLElement>(
@@ -1443,7 +1519,9 @@ export function Editor({
     if (!hasBlockChild(editor)) {
       editor.innerHTML = '<p><br></p>';
       const paragraph = editor.firstElementChild;
-      if (paragraph instanceof HTMLElement) placeCaretAtEnd(paragraph);
+      // 11: the caret must stay on the first line box (before the placeholder
+      // <br>); collapsing after it would render one line lower.
+      if (paragraph instanceof HTMLElement) placeCaretAtStart(paragraph);
       lastTextRef.current = editor.textContent ?? '';
     }
     updateCaretComment();

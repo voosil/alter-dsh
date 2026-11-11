@@ -3,6 +3,7 @@
   --link-card-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 7h10v10'/%3E%3Cpath d='M7 17 17 7'/%3E%3C/svg%3E");
 }
 .surface {
+  position: relative;
   min-height: 320px;
   outline: none;
   color: var(--alter-text);
@@ -14,7 +15,11 @@
   overflow-wrap: anywhere;
   caret-color: var(--alter-action-background);
 }
-.surface:empty::before {
+/* 空文档聚焦后会补一个 <p><br></p>，占位符也要一直可见；
+   绝对定位让占位符脱离行内流，否则它会占掉空段落的首行、把光标挤到下一行。 */
+.surface:is(:empty, :has(> p:only-child:empty), :has(> p:only-child > br:only-child))::before {
+  position: absolute;
+  inset: 0 0 auto 0;
   content: attr(data-placeholder);
   color: var(--alter-text-muted);
   pointer-events: none;
@@ -248,6 +253,9 @@
   background-color: transparent;
   font-size: var(--alter-font-body-sm);
   cursor: pointer;
+  transition:
+    background-color var(--alter-duration-fast),
+    border-color var(--alter-duration-fast);
 }
 .surface [data-file-icon] {
   display: inline-flex;
@@ -259,8 +267,15 @@
   width: 12px;
   height: 12px;
 }
-.surface [data-file]:hover {
-  border-color: var(--alter-control-border-hover);
+.surface [data-file]:hover,
+.surface [data-file]:focus-visible {
+  /* 悬停/键盘选中时浮起：浅底 + 比默认控制描边更浅的边界。 */
+  border-color: var(--alter-focus-ring);
+  background-color: var(--alter-surface-hover);
+}
+.surface [data-file]:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: 2px;
 }
 .surface [data-todo] {
   display: flex;
