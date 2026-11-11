@@ -1,39 +1,52 @@
 /**
  * Host half of the self-contained Space plugin.
  *
- * Opens the SQLite-backed Space authority, composes the business service
- * over it, and exposes it to the browser through the DSH Connection
- * RPC channel. Data lives in `${dataDir}/space.db` (default
- * `${DSH_HOME:-~/.dsh}/data/space/space.db`) and survives page and Host
- * restarts.
+ * Registers the RPC/asset routes and the Agent document tools once, then routes
+ * every business call through the mode controller: the local SQLite authority
+ * by default, or a self-hosted Space server when the user configures one.
+ * Settings/sync endpoints stay local so the panel can recover a broken link.
  *
  * @module @alter-dsh/space
  */
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { createSpaceAuthority } from './authority.js';
-import { createSnapshotScheduler } from './backup.js';
-import { createDocumentAssetRoute } from './document/asset-route.js';
-import { ASSET_ROUTE_PATH, createDocumentAssets } from './document/assets.js';
-import { gcDocumentArtifacts } from './document/gc.js';
-import { createStructuredSpaceService } from './document/notes.js';
-import { createDocumentService } from './document/service.js';
+import { ASSET_ROUTE_PATH } from './document/assets.js';
 import {
   registerDocumentTools,
+  type DocumentToolApi,
+  type DocumentToolAssetApi,
   type ToolsLike,
 } from './document/tools.js';
-import { withVersionRetention } from './retention.js';
-import { RPC_ROUTE_PATH, createSpaceFetchRoute } from './rpc.js';
-import { createSpaceStorage } from './storage.js';
+import {
+  createConnectionSettingsStore,
+  type CredentialStoreLike,
+} from './connection-settings.js';
+import { createConnectionAudit } from './connection-audit.js';
+import {
+  registerAgentSettingsTool,
+  type ApprovalLike,
+} from './agent-settings-tool.js';
+import { registerAgentMigrationTool } from './agent-migration-tool.js';
+import type { SpaceBackend } from './backend.js';
+import { SpaceModeController } from './mode.js';
+import { createSettingsRpcHandler } from './settings-rpc.js';
+import {
+  createMigrationService,
+} from './migration/service.js';
+import { createMigrationRpcHandler } from './migration/rpc.js';
+import { isReadEndpoint } from './endpoints.js';
+import {
+  RPC_ROUTE_PATH,
+  createConnectionFetchRoute,
+  isMigrationEndpoint,
+  isPluginControlEndpoint,
+} from './rpc.js';
+import type { SpaceStoreLogger } from './store.js';
 import {
   createSpaceWorkspaceSync,
   isWorkspaceRegistryLike,
   type SpaceWorkspaceSync,
 } from './workspace-sync.js';
-import {
-  openSpaceStore,
-  type SpaceStoreLogger,
-} from './store.js';
 
 export const name = 'alter-dsh-space';
 /** Connection provides the RPC registry; webServer is injected per channel. */
@@ -80,12 +93,47 @@ export interface HostContextLike {
   workspaceRegistry?: unknown;
   /** Injected DSH tool registry (present on the `inject` child). */
   tools?: unknown;
+  /** Injected DSH approval service (present on the `inject` child). */
+  approval?: unknown;
 }
 
 function isToolsLike(value: unknown): value is ToolsLike {
   if (typeof value !== 'object' || value === null) return false;
   const candidate = value as Record<string, unknown>;
   return typeof candidate.register === 'function';
+}
+
+function isApprovalLike(value: unknown): value is ApprovalLike {
+  if (typeof value !== 'object' || value === null) return false;
+  return typeof (value as { request?: unknown }).request === 'function';
+}
+
+function isCredentialStoreLike(value: unknown): value is CredentialStoreLike {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.readRecord === 'function' &&
+    typeof candidate.modifyRecord === 'function' &&
+    typeof candidate.deleteRecord === 'function'
+  );
+}
+
+/** Resolve the optional DSH credentials service without a hard dependency. */
+function credentialsOf(ctx: HostContextLike): CredentialStoreLike | undefined {
+  try {
+    const direct = (ctx as { credentials?: unknown }).credentials;
+    if (isCredentialStoreLike(direct)) return direct;
+  } catch {
+    // Cordis throws on service access that was not declared in `inject`.
+  }
+  if (ctx.get === undefined) return undefined;
+  try {
+    const value = ctx.get('credentials');
+    return isCredentialStoreLike(value) ? value : undefined;
+  } catch {
+    // Optional service lookups may throw while the service is unregistered.
+    return undefined;
+  }
 }
 
 /** Describe a caught error for one log line. */
@@ -151,6 +199,39 @@ function adaptLogger(logger: unknown): SpaceStoreLogger {
   return { info: wrap(source?.info), warn: wrap(source?.warn) };
 }
 
+/** Live proxy so Agent tools always call the active authority backend. */
+function createDocumentProxy(
+  source: () => DocumentToolApi,
+  isLocked: () => boolean,
+): DocumentToolApi {
+  const guard = (): void => {
+    if (isLocked())
+      throw new Error('迁移进行中，文档暂时只读；请等待迁移完成');
+  };
+  return {
+    outline: (docId) => source().outline(docId),
+    read: (docId, options) => source().read(docId, options),
+    search: (input) => source().search(input),
+    applyOperations: (input) => {
+      guard();
+      return source().applyOperations(input);
+    },
+    generate: (input) => {
+      guard();
+      return source().generate(input);
+    },
+    undo: (input) => {
+      guard();
+      return source().undo(input);
+    },
+    getObject: (objectId) => source().getObject(objectId),
+    updateObject: (input) => {
+      guard();
+      return source().updateObject(input);
+    },
+  };
+}
+
 /**
  * Open the authority, register the RPC channel, and close everything when the
  * plugin unloads.
@@ -163,42 +244,131 @@ export async function apply(
   const now = () => new Date();
   const logger = adaptLogger(ctx.logger);
   await ctx.effect(async () => {
-    const store = await openSpaceStore({ directory, now, logger });
-    // The business service only sees a store that keeps version history
-    // within the user's policy; the raw store keeps the persistence seams.
-    const retainedStore = withVersionRetention(store, () =>
-      store.getStorageSettings(),
-    );
-    const document = createDocumentService({ store, now });
-    // Notes are AST-backed documents: creation and body writes go through the
-    // document service while every other Space method delegates unchanged.
-    const service = createStructuredSpaceService(
-      createSpaceAuthority(retainedStore, now),
-      document,
-    );
-    const storage = createSpaceStorage({ store, directory });
-    const assets = createDocumentAssets({ store, directory, now });
-    void gcDocumentArtifacts({ store, directory, logger }).catch((error: unknown) => {
-      logger.warn?.(`[alter-dsh-space] 文档对象/资产 GC 失败：${describeError(error)}`);
+    const settings = createConnectionSettingsStore({
+      directory,
+      now,
+      logger,
+      ...(credentialsOf(ctx) === undefined
+        ? {}
+        : { credentials: credentialsOf(ctx) as CredentialStoreLike }),
     });
     let workspaceSync: SpaceWorkspaceSync | undefined;
-    let disposeDocumentTools: (() => void) | undefined;
-    const route = createSpaceFetchRoute({
-      service,
-      storage,
+    const mode = new SpaceModeController({
+      directory,
+      settings,
+      now,
+      logger,
       workspaceSync: () => workspaceSync,
-      document,
-      assets,
     });
+    try {
+      await mode.open();
+    } catch (error) {
+      // A hand-edited or stale server configuration must not brick the
+      // panel: keep the file for inspection, fall back to local authority.
+      logger.warn?.(
+        `[alter-dsh-space] 配置的后端无法启动，回退本地模式：${describeError(error)}`,
+      );
+      await settings.save({ mode: 'local' });
+      await mode.apply(await settings.load());
+    }
+    // Freezing for a migration snapshot must wait for writes that already
+    // passed the lock check; otherwise an acked write could commit after the
+    // snapshot and be lost on the target authority.
+    let inFlight = 0;
+    const drainWaiters = new Set<() => void>();
+    const beginCall = (): void => {
+      inFlight += 1;
+    };
+    const endCall = (): void => {
+      inFlight -= 1;
+      if (inFlight !== 0) return;
+      for (const resolve of [...drainWaiters]) {
+        drainWaiters.delete(resolve);
+        resolve();
+      }
+    };
+    const awaitDrain = (): Promise<void> =>
+      new Promise<void>((resolve) => {
+        if (inFlight === 0) resolve();
+        else drainWaiters.add(resolve);
+      });
+
+    const audit = createConnectionAudit(directory);
+    const migration = createMigrationService({
+      directory,
+      settings,
+      mode,
+      now,
+      logger,
+      awaitDrain: () => awaitDrain(),
+    });
+    const settingsHandler = createSettingsRpcHandler({
+      settings,
+      mode,
+      audit,
+      directory,
+      isMigrationRunning: () => migration.status().status === 'running',
+    });
+    const migrationHandler = createMigrationRpcHandler(migration);
+    let approvalRef: ApprovalLike | undefined;
+    if (typeof ctx.inject === 'function') {
+      ctx.inject(['approval'], (child) => {
+        const candidate = child.approval ?? child.get?.('approval');
+        if (isApprovalLike(candidate)) approvalRef = candidate;
+      });
+    }
+    const documentProxy = createDocumentProxy(
+      () => mode.current().document,
+      () => mode.isMigrationLocked(),
+    );
+    const assetsProxy: DocumentToolAssetApi = {
+      import: (input) => {
+        if (mode.isMigrationLocked())
+          throw new Error('迁移进行中，文档暂时只读；请等待迁移完成');
+        return mode.current().assets.import(input);
+      },
+    };
+    let disposeDocumentTools: (() => void) | undefined;
+    let disposeSettingsTool: (() => void) | undefined;
+    const attachSettingsTool = (child: HostContextLike): void => {
+      const tools = child.tools ?? child.get?.('tools');
+      if (!isToolsLike(tools)) return;
+      const disposeSettings = registerAgentSettingsTool(tools, {
+        settings,
+        mode,
+        audit,
+        approval: () => approvalRef,
+      });
+      const disposeMigration = registerAgentMigrationTool(tools, {
+        migration,
+        audit,
+        approval: () => approvalRef,
+      });
+      const dispose = () => {
+        disposeSettings();
+        disposeMigration();
+      };
+      disposeSettingsTool = dispose;
+      try {
+        void child.effect(() => {
+          if (disposeSettingsTool === dispose) disposeSettingsTool = undefined;
+          dispose();
+        }, 'alter-dsh-space: server settings tool');
+      } catch {
+        // Keep the registration until unload when the child cannot own it.
+      }
+    };
     const attachDocumentTools = (child: HostContextLike): void => {
       const tools = child.tools ?? child.get?.('tools');
       if (!isToolsLike(tools)) {
-        logger.warn?.('[alter-dsh-space] DSH 工具服务不可用：文档模型工具未注册');
+        logger.warn?.(
+          '[alter-dsh-space] DSH 工具服务不可用：文档模型工具未注册',
+        );
         return;
       }
       const dispose = registerDocumentTools(tools, {
-        service: document,
-        assets,
+        service: documentProxy,
+        assets: assetsProxy,
       });
       disposeDocumentTools = dispose;
       const cleanup = () => {
@@ -218,38 +388,75 @@ export async function apply(
         attachDocumentTools(ctx);
       }
     }
-    const attachWorkspaceSync = (child: HostContextLike): void => {
-      const registry =
-        child.workspaceRegistry ?? child.get?.('workspaceRegistry');
+    if (typeof ctx.inject === 'function') {
+      ctx.inject(['tools'], (child) => attachSettingsTool(child));
+    } else if (ctx.get !== undefined) {
+      attachSettingsTool(ctx);
+    }
+    let registry: unknown;
+    let detachWorkspaceSync: (() => void) | undefined;
+    const applyWorkspaceBridge = (backend: SpaceBackend): void => {
+      detachWorkspaceSync?.();
+      detachWorkspaceSync = undefined;
+      workspaceSync = undefined;
+      if (backend.kind !== 'local' || backend.local === undefined) return;
+      if (!isWorkspaceRegistryLike(registry)) return;
+      const sync = createSpaceWorkspaceSync({
+        registry,
+        store: backend.local.store,
+        logger,
+        homeDirectory: homedir(),
+        now,
+      });
+      workspaceSync = sync;
+      detachWorkspaceSync = () => {
+        if (workspaceSync === sync) workspaceSync = undefined;
+      };
+      reconcileWorkspaces(sync, logger, 1);
+    };
+    const unsubscribeWorkspace = mode.onChange((backend) => {
+      applyWorkspaceBridge(backend);
+    });
+    const attachWorkspaceRegistry = (child: HostContextLike): void => {
+      registry = child.workspaceRegistry ?? child.get?.('workspaceRegistry');
       if (!isWorkspaceRegistryLike(registry)) {
         logger.warn?.(
           '[alter-dsh-space] DSH 工作区服务不可用：空间工作区同步未启用',
         );
         return;
       }
-      const sync = createSpaceWorkspaceSync({
-        registry,
-        store,
-        logger,
-        homeDirectory: homedir(),
-        now,
-      });
-      workspaceSync = sync;
-      const dispose = () => {
-        if (workspaceSync === sync) workspaceSync = undefined;
-      };
-      try {
-        void child.effect(() => dispose, 'alter-dsh-space: workspace sync');
-      } catch {
-        // A missing child effect just leaves the bridge attached until unload.
-      }
-      reconcileWorkspaces(sync, logger, 1);
+      applyWorkspaceBridge(mode.current());
     };
     if (typeof ctx.inject === 'function') {
-      ctx.inject(['workspaceRegistry'], (child) => attachWorkspaceSync(child));
+      ctx.inject(['workspaceRegistry'], (child) =>
+        attachWorkspaceRegistry(child),
+      );
     } else if (ctx.get !== undefined) {
-      attachWorkspaceSync(ctx);
+      attachWorkspaceRegistry(ctx);
     }
+    const route = createConnectionFetchRoute(
+      async (endpoint, payload, signal) => {
+        beginCall();
+        try {
+          if (isMigrationEndpoint(endpoint))
+            return migrationHandler(endpoint, payload, signal, undefined);
+          if (isPluginControlEndpoint(endpoint))
+            return settingsHandler(endpoint, payload, signal, undefined);
+          if (mode.isMigrationLocked() && !isReadEndpoint(endpoint))
+            return {
+              error: {
+                code: 'migration/read-only',
+                message: '迁移进行中，空间暂时只读；请等待迁移完成',
+              },
+            };
+          return await mode.current().rpc(endpoint, payload, signal);
+        } finally {
+          endCall();
+        }
+      },
+    );
+    const assetRoute = (request: Request) =>
+      mode.current().fetchAsset(request);
     const disposeRoute = ctx.connection.fetch.register({
       path: RPC_ROUTE_PATH,
       methods: ['POST'],
@@ -260,25 +467,21 @@ export async function apply(
       path: ASSET_ROUTE_PATH,
       methods: ['GET'],
       requestBody: 'buffered',
-      fetch: createDocumentAssetRoute(assets),
+      fetch: assetRoute,
     });
-    const snapshots = createSnapshotScheduler({
-      store,
-      directory,
-      now,
-      logger,
-    });
-    snapshots.start();
     logger.info?.(
-      `[alter-dsh-space] 数据目录 ${directory}（${store.file}）`,
+      `[alter-dsh-space] 本地数据目录 ${directory}；当前 ${mode.status().state === 'local' ? '本地模式' : '服务端模式'}`,
     );
     return async () => {
+      migration.cancel();
+      unsubscribeWorkspace();
+      detachWorkspaceSync?.();
       workspaceSync = undefined;
       disposeDocumentTools?.();
+      disposeSettingsTool?.();
       disposeRoute();
       disposeAssetRoute();
-      await snapshots.dispose();
-      await store.close();
+      await mode.close();
     };
-  }, 'alter-dsh-space: sqlite store + rpc');
+  }, 'alter-dsh-space: authority + rpc');
 }

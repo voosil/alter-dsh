@@ -906,6 +906,15 @@ function applyDeleteOperation(
   };
 }
 
+/** Plain text of one block subtree, children on their own lines. */
+function blockPlainText(block: BlockNode): string {
+  const parts: string[] = [];
+  const inline = plainTextOfInline(block.content ?? []);
+  if (inline !== '') parts.push(inline);
+  for (const child of block.children ?? []) parts.push(blockPlainText(child));
+  return parts.join('\n');
+}
+
 /** Carry the source payload of a transform when the content model matches. */
 function carryTransformPayload(
   fromModel: ContentModel,
@@ -972,6 +981,7 @@ function buildTransformInverse(
 function applyTransformOperation(
   op: TransformOperation,
   index: NodeIndex,
+  usedIds: Set<string>,
   trusted: boolean,
 ): OpEffect {
   const location = index.get(op.target);
@@ -998,13 +1008,46 @@ function applyTransformOperation(
     type: op.to,
     attrs: normalizeAttrs(op.to, op.attrs),
   };
-  if (fromDefinition.contentModel === toDefinition.contentModel)
+  if (fromDefinition.contentModel === toDefinition.contentModel) {
     carryTransformPayload(
       fromDefinition.contentModel,
       block,
       nextBlock,
       toDefinition,
     );
+  } else if (
+    fromDefinition.contentModel === 'inline' &&
+    toDefinition.contentModel === 'blocks'
+  ) {
+    // Cross-model conversion must not silently drop the body (DEC-20261110-04).
+    // Wrap the inline content into a paragraph child so the container keeps the
+    // text and the inverse can restore the original block exactly.
+    // Derive the wrapper id deterministically from the parent id: callers
+    // (and batch simulations) can predict it without another id allocation,
+    // which keeps a multi-operation batch self-consistent and replayable.
+    let childId = `${block.id}.p`;
+    for (let n = 2; usedIds.has(childId); n += 1)
+      childId = `${block.id}.p${String(n)}`;
+    usedIds.add(childId);
+    const child: BlockNode = {
+      id: childId,
+      type: 'paragraph',
+      attrs: {},
+      ...(block.content === undefined
+        ? {}
+        : { content: cloneJson(block.content) }),
+    };
+    nextBlock.children = [child];
+  } else if (
+    (fromDefinition.contentModel === 'blocks' ||
+      fromDefinition.contentModel === 'table') &&
+    toDefinition.contentModel === 'inline'
+  ) {
+    // Flatten descendants into text lines so a container→text transform keeps
+    // the words instead of producing an empty block.
+    const text = blockPlainText(block);
+    if (text !== '') nextBlock.content = [{ type: 'text', text }];
+  }
   validateBlockSubtree([nextBlock]);
   const parentId = location.parentId;
   const at = location.index;
@@ -1097,7 +1140,7 @@ function applyOne(
     case 'delete_block':
       return applyDeleteOperation(op, index, trusted);
     case 'transform_block':
-      return applyTransformOperation(op, index, trusted);
+      return applyTransformOperation(op, index, usedIds, trusted);
     case 'update_object':
       return applyUpdateObjectOperation(op, index, ctx, trusted);
     default:

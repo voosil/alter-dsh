@@ -22,6 +22,10 @@ import {
   type DirectoryPicker,
 } from './native-directory-field';
 import type { SpaceStorageClient } from './storage-client';
+import type {
+  SpaceMigrationClient,
+  SpaceSettingsClient,
+} from './space-client';
 
 /** In-panel route that opens the Space settings page. */
 export const SETTINGS_PATH = '#/settings';
@@ -37,6 +41,10 @@ export interface SpaceShellProps {
   router: SpaceRouter;
   /** Storage policy client; omitted only by tests that do not need it. */
   storage?: SpaceStorageClient;
+  /** Server/mode settings client; omitted only by tests that do not need it. */
+  settings?: SpaceSettingsClient;
+  /** Migration client; omitted only by tests that do not need it. */
+  migration?: SpaceMigrationClient;
   /**
    * Host directory picker used by the working-directory field. Omitted by
    * tests and hosts without a picker (the built-in in-app browser is the
@@ -49,6 +57,8 @@ export function SpaceShell({
   service,
   router,
   storage,
+  settings,
+  migration,
   pickDirectory,
 }: SpaceShellProps) {
   const path = useSyncExternalStore(
@@ -56,14 +66,14 @@ export function SpaceShell({
     router.getPath,
     router.getPath,
   );
-  const settings = isSettingsPath(path);
+  const showSettings = isSettingsPath(path);
   const previousPath = useRef(DEFAULT_SPACE_PATH);
 
   // Remember the last Space route so "返回空间" restores the page the user
   // opened settings from (configuration, a document, …) instead of home.
   useEffect(() => {
-    if (!settings) previousPath.current = path;
-  }, [path, settings]);
+    if (!showSettings) previousPath.current = path;
+  }, [path, showSettings]);
 
   function returnToSpace() {
     const target = previousPath.current;
@@ -71,7 +81,7 @@ export function SpaceShell({
   }
 
   useEffect(() => {
-    if (!settings) return;
+    if (!showSettings) return;
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key !== 'Escape' || event.defaultPrevented) return;
       // Keep Escape for the focused control (e.g. clearing an input) rather
@@ -92,7 +102,7 @@ export function SpaceShell({
     return () => window.removeEventListener('keydown', handleKeyDown);
   });
 
-  if (!settings)
+  if (!showSettings)
     return (
       <DirectoryPickerProvider pickDirectory={pickDirectory}>
         <SpaceApp service={service} router={router} />
@@ -103,6 +113,8 @@ export function SpaceShell({
     <SpaceSettingsPage
       service={service}
       storage={storage}
+      settings={settings}
+      migration={migration}
       onBack={returnToSpace}
     />
   );

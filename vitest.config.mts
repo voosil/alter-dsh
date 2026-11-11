@@ -29,6 +29,10 @@ export default defineConfig({
         replacement: path.join(vendorSrc('ui-system'), 'index.ts'),
       },
       {
+        find: /^@alter\/ui-system\/tokens\.css$/,
+        replacement: path.join(vendorSrc('ui-system'), 'styles', 'tokens.css'),
+      },
+      {
         find: /^@alter\/ui-workbench$/,
         replacement: path.join(vendorSrc('ui-workbench'), 'index.ts'),
       },

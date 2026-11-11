@@ -54,6 +54,7 @@ import {
   insertSanitizedHtml,
   isCaretAtEnd,
   isCaretAtStart,
+  isCaretBeforeLineContent,
   isWebUrl,
   lineElement,
   linkCardElement,
@@ -63,6 +64,7 @@ import {
   offsetAtPoint,
   placeCaretAtEnd,
   placeCaretAtStart,
+  placeSlashMenu,
   pointAtOffset,
   sanitizePastedHtml,
   selectionRects,
@@ -71,6 +73,7 @@ import {
   transformTextAnchor,
   webLinkElement,
   webMetadata,
+  type SlashMenuSide,
   type TextAnchor,
 } from './editor-utils';
 import styles from './Editor.module.css';
@@ -246,6 +249,11 @@ interface SlashState {
   top: number;
   left: number;
   index: number;
+  /**
+   * Side of the command line the menu appeared on when it opened. Kept for the
+   * menu's lifetime so filtering cannot flip it across the line.
+   */
+  side: SlashMenuSide | null;
 }
 
 interface ToolbarState {
@@ -442,7 +450,7 @@ function buildSlashCommands(line: HTMLElement): SlashCommand[] {
     {
       id: 'quote',
       label: '引用',
-      keywords: ['quote', 'blockquote', '引用', '》'],
+      keywords: ['quote', 'blockquote', '引用', '>', '》'],
       icon: <Quote />,
       run: () => {
         clear();
@@ -547,8 +555,10 @@ export function Editor({
   const lastRevisionRef = useRef(externalRevision);
   const composingRef = useRef(false);
   // The command line whose menu was open when an IME composition started, so
-  // the menu can come back once the composition has been committed.
+  // the menu can come back once the composition has been committed. The side it
+  // was pinned to is remembered too: the restored menu must not re-decide it.
   const composingSlashLineRef = useRef<HTMLElement | null>(null);
+  const composingSlashSideRef = useRef<SlashMenuSide | null>(null);
   const [slash, setSlash] = useState<SlashState | null>(null);
   const [toolbar, setToolbar] = useState<ToolbarState | null>(null);
   const [blockAnchor, setBlockAnchor] = useState<HTMLElement | null>(null);
@@ -961,16 +971,22 @@ export function Editor({
     composingRef.current = true;
     onCompositionChangeRef.current?.(true);
     composingSlashLineRef.current = slash?.line ?? null;
+    composingSlashSideRef.current = slash?.side ?? null;
     clearFloatingUi();
   }
 
   /**
-   * Finish a block shortcut whose marker arrived through an IME. Some browsers
-   * do not emit a trailing non-composing input event (and the space that
-   * commits `N. ` can be part of the composition), so the trigger is re-checked
-   * after the composition ends. Never runs while a composition is open.
+   * Finish a block shortcut whose marker arrived as one input instead of the
+   * keydown that usually triggers it: an IME commit (composition end) or a
+   * native input event that carries a marker plus its confirming space.
+   *
+   * `allowBareMarker` is true only for the composition-end path: the space that
+   * confirms a Chinese IME composition is consumed by the IME, so the marker
+   * arrives without its trailing space and still completes the gesture. A plain
+   * input event must keep a bare marker as text — typing `>` or `》` alone is
+   * not the gesture (第 13 项: 引用标记按标准 `>` + 空格输入).
    */
-  function convertCompositionShortcut(): boolean {
+  function convertMarkerShortcut(allowBareMarker: boolean): boolean {
     const editor = editorRef.current;
     if (!editor || composingRef.current) return false;
     const selection = window.getSelection();
@@ -983,16 +999,17 @@ export function Editor({
     )
       return false;
     const text = line.textContent ?? '';
-    if (text === '》') {
-      line.innerHTML = '';
-      convertLineTo(line, 'blockquote');
-      return true;
-    }
-    // `3. ` where the trailing space was committed by the IME as well.
+    // `N. ` where the trailing space was committed by the IME as well.
     const ordered = /^(\d{1,7})\.\s$/.exec(text);
     if (ordered) {
       line.innerHTML = '';
       convertLineToList(line, true, Number.parseInt(ordered[1]!, 10));
+      return true;
+    }
+    const marker = allowBareMarker ? /^(?:>|》)\s?$/ : /^(?:>|》)\s$/;
+    if (marker.test(text)) {
+      line.innerHTML = '';
+      convertLineTo(line, 'blockquote');
       return true;
     }
     return false;
@@ -1028,19 +1045,22 @@ export function Editor({
     composingRef.current = false;
     onCompositionChangeRef.current?.(false);
     const slashLine = composingSlashLineRef.current;
+    const slashSide = composingSlashSideRef.current;
     composingSlashLineRef.current = null;
+    composingSlashSideRef.current = null;
     // Some browsers do not emit a trailing non-composing input event; finish
     // the composition with one final change notification.
-    convertCompositionShortcut();
+    convertMarkerShortcut(true);
     convertTypedDivider();
     notifyChange();
     if (!slashLine || !slashLine.isConnected) return;
     // The IME committed text without any keydown flowing through the editor,
-    // so the suppressed menu has to be restored from the line itself.
+    // so the suppressed menu has to be restored from the line itself, still
+    // pinned to the side it was opened on (第 12 项).
     const caretLine = lineElement(window.getSelection()?.anchorNode ?? null);
     const text = slashLine.textContent ?? '';
     if (caretLine === slashLine && text.startsWith('/'))
-      openSlash(slashLine, text.slice(1));
+      openSlash(slashLine, text.slice(1), slashSide);
   }
 
   useEffect(() => {
@@ -1278,36 +1298,41 @@ export function Editor({
   }, [slash]);
 
   // Pin the rendered menu to its command line: to the line start horizontally,
-  // below when it fits and flipped above otherwise, always 12px inside the
-  // viewport. Runs after every slash change so a filtered (shorter) menu is
-  // re-measured instead of using a fixed-height guess.
+  // 12px inside the viewport, and on the side the menu first appeared on. The
+  // side is decided by the first measurement after opening and reused while the
+  // query filters the list, so a shorter (or empty) menu never flips across the
+  // command line; only the offset is re-measured.
   useLayoutEffect(() => {
     const menu = slashMenuRef.current;
     const line = slash?.line;
     if (!menu || !line || !line.isConnected) return;
     const lineRect = line.getBoundingClientRect();
     const menuRect = menu.getBoundingClientRect();
-    const margin = 12;
-    const gap = 4;
-    const width = menuRect.width || 290;
-    const height = menuRect.height;
-    const left = Math.min(
-      Math.max(margin, lineRect.left),
-      Math.max(margin, window.innerWidth - width - margin),
-    );
-    let top = lineRect.bottom + gap;
-    if (top + height > window.innerHeight - margin) {
-      const flipped = lineRect.top - gap - height;
-      top =
-        flipped >= margin
-          ? flipped
-          : Math.max(margin, window.innerHeight - height - margin);
-    }
-    top = Math.max(margin, top);
-    if (Math.abs(top - slash.top) < 0.5 && Math.abs(left - slash.left) < 0.5)
+    const placement = placeSlashMenu({
+      lineTop: lineRect.top,
+      lineBottom: lineRect.bottom,
+      lineLeft: lineRect.left,
+      menuWidth: menuRect.width,
+      menuHeight: menuRect.height,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      preferredSide: slash.side,
+    });
+    if (
+      placement.side === slash.side &&
+      Math.abs(placement.top - slash.top) < 0.5 &&
+      Math.abs(placement.left - slash.left) < 0.5
+    )
       return;
     setSlash((current) =>
-      current && current.line === line ? { ...current, top, left } : current,
+      current && current.line === line
+        ? {
+            ...current,
+            top: placement.top,
+            left: placement.left,
+            side: placement.side,
+          }
+        : current,
     );
   }, [slash]);
 
@@ -1480,9 +1505,17 @@ export function Editor({
     setSlash(null);
   }
 
-  /** Open the command menu for one line; placement is measured after render. */
-  function openSlash(line: HTMLElement, query: string) {
-    setSlash({ line, query, top: 0, left: 0, index: 0 });
+  /**
+   * Open the command menu for one line; placement is measured after render.
+   * A fresh menu decides its direction from scratch (第 12 项); only the
+   * IME-restored menu passes the side its predecessor was pinned to.
+   */
+  function openSlash(
+    line: HTMLElement,
+    query: string,
+    side: SlashMenuSide | null = null,
+  ) {
+    setSlash({ line, query, top: 0, left: 0, index: 0, side });
   }
 
   function pickFile(kind: 'image' | 'file', line: HTMLElement) {
@@ -1624,6 +1657,33 @@ export function Editor({
           notifyChange();
           return;
         }
+        // 14: Backspace at the very start of a quote line only drops that
+        // line's quote marker (it turns back into a text paragraph in place,
+        // content and caret kept). The browser default would fold the line into
+        // the previous one — carrying the quote there — which reads as "the
+        // quote moved up" instead of "the marker was deleted". A second
+        // Backspace then behaves as a normal backward delete.
+        if (
+          event.key === 'Backspace' &&
+          selectedBlock === null &&
+          item !== null &&
+          item.tagName.toLowerCase() === 'blockquote' &&
+          item.parentElement === editor &&
+          item.contains(caret.anchorNode) &&
+          // A quote holding a nested quote cannot be flattened into a
+          // paragraph; leave that block to the default merge.
+          item.querySelector('blockquote') === null &&
+          // Text-only "at start" would treat a caret right after a leading
+          // inline image as line start and swallow the media instead of
+          // deleting it.
+          isCaretBeforeLineContent(item)
+        ) {
+          event.preventDefault();
+          const paragraph = convertLineTo(item, 'p');
+          placeCaretAtStart(paragraph);
+          notifyChange();
+          return;
+        }
         // 11: a document holding a single empty line must keep that line. Letting
         // the default delete tear it down drops the caret out of the line box and
         // brings the placeholder back while the caret sits above it.
@@ -1715,13 +1775,6 @@ export function Editor({
     const selection = window.getSelection();
     const line = lineElement(selection?.anchorNode ?? null);
 
-    if (line && event.key === '》' && (line.textContent ?? '') === '') {
-      event.preventDefault();
-      convertLineTo(line, 'blockquote');
-      notifyChange();
-      return;
-    }
-
     if (line && (event.key === ' ' || event.key === 'Enter')) {
       const text = (line.textContent ?? '').trimEnd();
       const ordered = /^(\d{1,7})\.$/.exec(text);
@@ -1733,7 +1786,10 @@ export function Editor({
         '*': () => convertLineToList(line, false),
         '[]': () => convertLineToTodo(line),
         '[ ]': () => convertLineToTodo(line),
+        // 第 13 项：引用标记按标准 `>` + 空格输入；中文输入法打出的全角
+        // `》` 是同一个手势，两者都不再「单独出现即转换」。
         '>': () => convertLineTo(line, 'blockquote'),
+        '》': () => convertLineTo(line, 'blockquote'),
       };
       if (event.key === ' ' && (blocks[text] || ordered)) {
         event.preventDefault();
@@ -1978,7 +2034,9 @@ export function Editor({
       }
     }
     convertTypedDivider(nativeInput);
-    convertCompositionShortcut();
+    // A plain input must keep a bare marker as text; only the composition path
+    // may accept one without its space (see convertMarkerShortcut).
+    convertMarkerShortcut(false);
     notifyChange();
   }
 

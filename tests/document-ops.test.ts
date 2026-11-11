@@ -1103,6 +1103,57 @@ describe('transform_block', () => {
     );
   });
 
+  it('wraps inline content into a paragraph child for container transforms', () => {
+    const base = makeDoc([
+      paragraph('blk_p', '会被丢吗'),
+    ]);
+    const result = applyOperations(
+      base,
+      [{ op: 'transform_block', target: 'blk_p', to: 'blockquote' }],
+      makeContext().ctx,
+    );
+    expect(result.doc.blocks[0]).toEqual(
+      createBlockNode('blk_p', 'blockquote', {
+        children: [
+          createBlockNode('blk_p.p', 'paragraph', {
+            content: [inlineText('会被丢吗')],
+          }),
+        ],
+      }),
+    );
+    const undone = applyOperations(
+      result.doc,
+      result.inverseOps,
+      makeContext().ctx,
+    );
+    expect(undone.doc.blocks).toEqual(base.blocks);
+  });
+
+  it('flattens container text instead of dropping it when converting back', () => {
+    const base = makeDoc([
+      createBlockNode('blk_quote', 'blockquote', {
+        children: [
+          paragraph('blk_q1', '第一段'),
+          paragraph('blk_q2', '第二段'),
+        ],
+      }),
+    ]);
+    const result = applyOperations(
+      base,
+      [{ op: 'transform_block', target: 'blk_quote', to: 'paragraph' }],
+      makeContext().ctx,
+    );
+    const block = result.doc.blocks[0]!;
+    expect(block.type).toBe('paragraph');
+    expect(plainTextOfBlock(block)).toBe('第一段\n第二段');
+    const undone = applyOperations(
+      result.doc,
+      result.inverseOps,
+      makeContext().ctx,
+    );
+    expect(undone.doc.blocks).toEqual(base.blocks);
+  });
+
   it('falls back to delete+insert when no reverse transform edge exists', () => {
     const base = makeDoc([heading('blk_h', 1, 'T')]);
     const result = applyOperations(

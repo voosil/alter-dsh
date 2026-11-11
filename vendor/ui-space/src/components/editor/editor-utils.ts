@@ -87,6 +87,31 @@ export function isCaretAtStart(line: HTMLElement) {
   return head.toString().length === 0;
 }
 
+/**
+ * True when neither text nor inline content precedes the collapsed caret.
+ *
+ * {@link isCaretAtStart} only measures text, so a caret sitting right after an
+ * inline image (or file chip) reads as "at the start" even though deleting
+ * there is a normal backward delete. Line-format changes driven by Backspace
+ * use this stricter check so they never swallow media.
+ */
+export function isCaretBeforeLineContent(line: HTMLElement) {
+  const selection = window.getSelection();
+  if (!selection?.rangeCount) return false;
+  const range = selection.getRangeAt(0);
+  if (!range.collapsed || !line.contains(range.startContainer)) return false;
+  const head = document.createRange();
+  head.selectNodeContents(line);
+  head.setEnd(range.startContainer, range.startOffset);
+  const contents = head.cloneContents();
+  if ((contents.textContent ?? '') !== '') return false;
+  return (
+    contents.querySelector(
+      'img,br,hr,[data-file],[data-divider],[data-object-card],[data-link-card],a[data-web-link]',
+    ) === null
+  );
+}
+
 export function placeCaretAtEnd(element: HTMLElement) {
   const editable = element.closest<HTMLElement>('[contenteditable="true"]');
   editable?.focus();
@@ -182,6 +207,69 @@ export function convertLineTo(
   line.replaceWith(element);
   placeCaretAtEnd(element);
   return element;
+}
+
+/** Side of its command line a slash menu is anchored to. */
+export type SlashMenuSide = 'above' | 'below';
+
+export interface SlashMenuGeometry {
+  /** Command-line box in viewport coordinates. */
+  lineTop: number;
+  lineBottom: number;
+  lineLeft: number;
+  /** Rendered menu box. */
+  menuWidth: number;
+  menuHeight: number;
+  viewportWidth: number;
+  viewportHeight: number;
+  /** Side picked when the menu opened; `null` lets this call pick it. */
+  preferredSide: SlashMenuSide | null;
+  /** Minimum distance to the viewport edge (12px, like the legacy menu). */
+  margin?: number;
+  /** Distance between the command line and the menu (4px). */
+  gap?: number;
+}
+
+export interface SlashMenuPlacement {
+  top: number;
+  left: number;
+  side: SlashMenuSide;
+}
+
+/**
+ * Place the slash menu against its command line, keeping the side it first
+ * appeared on.
+ *
+ * Filtering the command list changes the menu height, so re-measuring a naive
+ * "below if it fits, above otherwise" rule makes the menu jump across the
+ * command line while typing. The direction is therefore decided once, when the
+ * menu opens (`preferredSide === null`), and later measurements pass that side
+ * back in; only the offset is recomputed.
+ */
+export function placeSlashMenu(
+  geometry: SlashMenuGeometry,
+): SlashMenuPlacement {
+  const margin = geometry.margin ?? 12;
+  const gap = geometry.gap ?? 4;
+  const width = geometry.menuWidth || 290;
+  const height = geometry.menuHeight;
+  const left = Math.min(
+    Math.max(margin, geometry.lineLeft),
+    Math.max(margin, geometry.viewportWidth - width - margin),
+  );
+  const fitsBelow =
+    geometry.lineBottom + gap + height <= geometry.viewportHeight - margin;
+  const side: SlashMenuSide =
+    geometry.preferredSide ?? (fitsBelow ? 'below' : 'above');
+  const desired =
+    side === 'below'
+      ? geometry.lineBottom + gap
+      : geometry.lineTop - gap - height;
+  const top = Math.min(
+    Math.max(margin, desired),
+    Math.max(margin, geometry.viewportHeight - height - margin),
+  );
+  return { top, left, side };
 }
 
 export function convertLineToList(

@@ -70,6 +70,15 @@ save,recovery,input,resilience,anchors}.test.ts`、`tests/editor-fuzz.test.ts`�
   已定义约定，不出现「保存后无法撤销」或「撤销与版本恢复互相打脸」。
 - [x] **D5 键盘与无障碍**：工具栏可键盘到达与操作，编辑器与状态有可读的语义标签，屏幕阅读器不
   产生错误播报或焦点陷阱。
+- [x] **D6 引用输入与行首删除正确**：空行行首输入 `>` 后按空格转为引用块（markdown 标准手势；全角
+  `》`+空格同；直接输入的单独一个 `》` 不再立即转换；输入法组合提交直接给出标记或标记+空格算完成同一手势）；
+  光标在顶层引用行行首按退格 → 只删除该行引用标记、该行原地变回正文段落并保留内容与光标位置，不把内容或
+  引用格式并入上一行（上一行为空时同样），之后再按退格才按普通行合并；例外按既有行为处理：非顶层引用
+  （列表项/表格内的引用）与含嵌套引用的行不改格式，相邻分割线/图片先被选中的首个退格优先处理该块，
+  行首是内联图片时退格删除图片而不是改格式。
+- [x] **D7 slash 菜单方向稳定**：输入 `/` 打开菜单时按可用空间确定在命令行下方或上方，方向在该菜单
+  实例打开时固定 → 继续输入过滤（菜单变矮/变高）只重新测量尺寸与位置、不翻到另一侧；输入法组合期间
+  菜单收起、提交后恢复时沿用原方向；只有重新打开菜单（换行、执行指令后）才重新判定方向。
 
 ## E. 正确性与异常（P1）
 
@@ -102,7 +111,7 @@ save,recovery,input,resilience,anchors}.test.ts`、`tests/editor-fuzz.test.ts`�
 - [x] **G4 故障注入**：保存超时、宿主重启、数据库忙、回执丢失等故障下输入不丢且可恢复（自动化）。
 - [x] **G5 文档同步**：实施范围、验收状态与代码在同一变更里更新；独立复验通过，清单状态 `active`。
 
-自动证据：`tests/document-legacy-{adapter,view,save,recovery,input,resilience,anchors}.test.ts`、`tests/editor-fuzz.test.ts`；编辑器专题优化（分割线/图片/表格选择、空 checkbox/placeholder、列表与 IME 转换、`---` 即时分割线、slash 菜单）另见 `tests/document-editor-{blocks,caret,convert,slash}.test.ts`；真实浏览器验收（G3）覆盖编辑/保存/刷新、slash、撤销、崩溃草稿、版本恢复脏状态、粘贴 XSS 与资产物化、大文档+保存失败重试、导出/历史/评论、样式/DOM 冻结对照。
+自动证据：`tests/document-legacy-{adapter,view,save,recovery,input,resilience,anchors}.test.ts`、`tests/editor-fuzz.test.ts`；编辑器专题优化（分割线/图片/表格选择、空 checkbox/placeholder、列表与 IME 转换、`---` 即时分割线、slash 菜单与方向固定、引用标记输入与行首删除）另见 `tests/document-editor-{blocks,caret,convert,slash}.test.ts`；真实浏览器验收（G3）覆盖编辑/保存/刷新、slash、撤销、崩溃草稿、版本恢复脏状态、粘贴 XSS 与资产物化、大文档+保存失败重试、导出/历史/评论、样式/DOM 冻结对照；第 12–14 项（D6/D7）当前以 jsdom 行为测试为准，真实浏览器与真实输入法抽查待补。
 
 ## 相关文档
 

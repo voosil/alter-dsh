@@ -6,7 +6,7 @@ updated: 2026-11-10
 
 # Agent 文档工具 v0
 
-本篇规范约束模型可调用的文档工具契约（`space_*`）、投影预算与裁剪、spike 验收标准，
+本篇规范约束模型可调用的文档工具与控制面工具契约（`space_*`）、投影预算与裁剪、spike 验收标准，
 是 Agent 文档能力的实施基准。工具读写的底层语义由 [document-model-v0.md](document-model-v0.md)
 与 [document-operations-v0.md](document-operations-v0.md) 定义，本篇不重复。
 
@@ -146,9 +146,31 @@ updated: 2026-11-10
   `GET /api/alter-space/asset?id=…`。
 - 浏览器上传走同源 RPC `doc.importAsset` / `doc.importFile`，与本工具共用同一内容寻址资产存储。
 
+### 2.9 `space_settings`
+
+```
+输入：{ action: 'get'|'set'|'test'|'flush', mode?, server_url?, token?, clear_token?, history_limit?, snapshot_keep? }
+输出：{ mode, serverUrl, tokenConfigured, connection, capabilities, storage: { historyLimit, snapshotKeep } | null }
+```
+
+- 控制面工具：字段沿用 Host 控制面（`settings.*` / `sync.*`）的 camelCase 命名，不混入文档工具
+  的 snake_case 规则；`token` 只写不读。
+- `set` 中涉及服务器地址/token/切到服务端的写入必须经审批（无审批服务即失败关闭），并写入
+  `connection-audit.jsonl`；`test` 探测非当前配置地址同样需要审批，且不隐式携带已存 token。
+
+### 2.10 `space_migrate`
+
+```
+输入：{ action: 'preflight'|'start'|'status'|'cancel', direction: 'to-server'|'from-server', overwrite?, trim_history? }
+输出：预检结果或任务状态（phase/transferredBytes/counts/backup 等）
+```
+
+- `start` 必须经审批；方向必须与当前权威匹配（to-server 要求本地模式，from-server 要求服务端模式）。
+- 迁移会替换整库并切换权威；必须先用 `preflight` 说明影响，不得在未确认覆盖时启动。
+
 ## 3. 预算与裁剪
 
-- 11 个核心工具 schema 约 +2.2–2.6k tokens；读投影单次 ≤ 12k tokens / ≤ 40k 字符。
+- 11 个文档工具 schema 约 +2.2–2.6k tokens；两个控制面工具见 §2.9/§2.10。读投影单次 ≤ 12k tokens / ≤ 40k 字符。
 - 每个工具的输出 schema 只列模型真正需要消费的字段，不回传整篇文档或未变更内容。
 - 读工具超限必须截断并在 `next` 给出续读锚点；写工具不因预算裁剪而改变语义。
 - 结构摘要与检索结果有独立上限：outline ≤ 2k tokens，search 默认 20 条且 preview ≤ 60 字。
@@ -178,7 +200,7 @@ Spike 不做：组件沙箱、实时协作。
 3. table 合并单元格与代码组件沙箱的后续方案。
 4. `doc_ops` 是否作为版本历史主存储（当前：快照 + op log 并存）。
 5. 版本预算（当前 10 版 / 64 KiB → 可配置累计字节）与备份资产目录的实施方案。
-6. 列表/发现工具与评论工具是否纳入 v0.1（当前 11 个工具含组件目录发现，不含文档列表与评论能力）。
+6. 列表/发现工具与评论工具是否纳入 v0.1（当前 11 个文档工具含组件目录发现，不含文档列表与评论能力）。
 
 ## 相关文档
 

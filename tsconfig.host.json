@@ -3,8 +3,12 @@
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "lib": ["ES2022"],
-    "types": ["node"],
+    "lib": [
+      "ES2022"
+    ],
+    "types": [
+      "node"
+    ],
     "strict": true,
     "noEmit": false,
     "declaration": false,
@@ -21,12 +25,15 @@
     "noFallthroughCasesInSwitch": true,
     "baseUrl": ".",
     "paths": {
-      "@alter/protocol": ["vendor/protocol/src/index.ts"]
+      "@alter/protocol": [
+        "vendor/protocol/src/index.ts"
+      ]
     }
   },
   "include": [
     "host/**/*.ts",
     "vendor/service/src/**/*.ts",
-    "vendor/protocol/src/**/*.ts"
+    "vendor/protocol/src/**/*.ts",
+    "server/**/*.ts"
   ]
 }

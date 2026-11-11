@@ -1,12 +1,15 @@
 // @vitest-environment jsdom
 /**
- * Legacy editor caret/placeholder regressions (专题优化 第 9、11、7 项).
+ * Legacy editor caret/placeholder regressions (专题优化 第 9、11、7、14 项).
  *
  * The editor surface is a frozen 1:1 restoration of the old UI: these tests
  * lock behavior (focus, DOM changes, style contract) instead of markup. The
  * jsdom layer has no layout engine, so vertical centering is asserted as
  * "caret lives in the line box of the first typable line" — the same invariant
  * Chrome renders as a centered caret (verified against headless Chrome).
+ * Item 14 is a behavior boundary on a blockquote line: Backspace at the very
+ * line start strips the quote marker, while a caret inside the line stays with
+ * the browser default.
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -117,6 +120,17 @@ function caret(): { node: Node; offset: number; line: HTMLElement } {
   const line = element?.closest<HTMLElement>('p,h1,h2,h3,li,blockquote,pre,[data-todo]');
   if (!line) throw new Error('caret is outside any line box');
   return { node, offset: selection.anchorOffset, line };
+}
+
+/** Plain-text offset of the collapsed caret measured from one element's start. */
+function caretOffsetIn(line: HTMLElement): number {
+  const selection = window.getSelection();
+  if (selection === null || selection.rangeCount === 0) return -1;
+  const range = selection.getRangeAt(0);
+  const before = document.createRange();
+  before.selectNodeContents(line);
+  before.setEnd(range.startContainer, range.startOffset);
+  return before.toString().length;
 }
 
 function lastChangeHtml(onChange: unknown): string {
@@ -346,5 +360,211 @@ describe('第 7 项 附件 chip 态样式', () => {
     const focused = ruleWith('.surface [data-file]:focus-visible');
     expect(focused).toMatch(/background-color:\s*var\(--alter-[\w-]+\)/);
     expect(css).toMatch(/\[data-file\]:focus-visible[^{]*\{[^}]*outline:/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 第 14 项: Backspace with the caret at the very start of a blockquote line
+// strips the quote marker (the line becomes a paragraph) instead of merging
+// the quote text into the line above.
+// ---------------------------------------------------------------------------
+
+describe('第 14 项 引用行首退格删除标记', () => {
+  it('strips the quote marker and keeps the text as a paragraph', () => {
+    const props = renderEditor({
+      initialHtml: '<p>上一行</p><blockquote>引用</blockquote>',
+    });
+    const quote = surface().querySelector('blockquote')!;
+    caretAt(quote.firstChild!, 0);
+
+    const notPrevented = fireEvent.keyDown(surface(), { key: 'Backspace' });
+
+    expect(notPrevented).toBe(false);
+    expect(surface().querySelector('blockquote')).toBeNull();
+    const blocks = [...surface().children];
+    expect(blocks).toHaveLength(2);
+    // No merge: the preceding paragraph keeps its own text, the quote text
+    // stays on its own line and is not carried upwards.
+    expect(blocks[0]!.tagName).toBe('P');
+    expect(blocks[0]!.textContent).toBe('上一行');
+    const line = blocks[1] as HTMLElement;
+    expect(line.tagName).toBe('P');
+    expect(line.textContent).toBe('引用');
+    const position = caret();
+    expect(position.line).toBe(line);
+    expect(line.contains(position.node)).toBe(true);
+    expect(caretOffsetIn(line)).toBe(0);
+    expect(props.onChange).toHaveBeenCalled();
+  });
+
+  it('strips the marker when the previous line is blank (reported bug)', () => {
+    const props = renderEditor({
+      initialHtml: '<p><br></p><blockquote>引用</blockquote>',
+    });
+    const quote = surface().querySelector('blockquote')!;
+    caretAt(quote.firstChild!, 0);
+
+    const notPrevented = fireEvent.keyDown(surface(), { key: 'Backspace' });
+
+    expect(notPrevented).toBe(false);
+    expect(surface().querySelector('blockquote')).toBeNull();
+    const blocks = [...surface().children];
+    expect(blocks).toHaveLength(2);
+    // The blank line above stays blank instead of absorbing the quote text.
+    expect(blocks[0]!.tagName).toBe('P');
+    expect(blocks[0]!.textContent).toBe('');
+    const line = blocks[1] as HTMLElement;
+    expect(line.tagName).toBe('P');
+    expect(line.textContent).toBe('引用');
+    const position = caret();
+    expect(position.line).toBe(line);
+    expect(caretOffsetIn(line)).toBe(0);
+    expect(props.onChange).toHaveBeenCalled();
+  });
+
+  it('turns an empty quote into an empty paragraph with the caret inside', () => {
+    renderEditor({ initialHtml: '<blockquote><br></blockquote>' });
+    const quote = surface().querySelector('blockquote')!;
+    caretAt(quote, 0);
+
+    const notPrevented = fireEvent.keyDown(surface(), { key: 'Backspace' });
+
+    expect(notPrevented).toBe(false);
+    expect(surface().querySelector('blockquote')).toBeNull();
+    const blocks = [...surface().children];
+    expect(blocks).toHaveLength(1);
+    const line = blocks[0] as HTMLElement;
+    expect(line.tagName).toBe('P');
+    expect(line.textContent).toBe('');
+    expect(line.firstElementChild?.tagName).toBe('BR');
+    const position = caret();
+    expect(position.line).toBe(line);
+    expect(line.contains(position.node)).toBe(true);
+    expect(caretOffsetIn(line)).toBe(0);
+  });
+
+  it('replaces the only quote line with one paragraph', () => {
+    renderEditor({ initialHtml: '<blockquote>引用</blockquote>' });
+    const quote = surface().querySelector('blockquote')!;
+    caretAt(quote.firstChild!, 0);
+
+    const notPrevented = fireEvent.keyDown(surface(), { key: 'Backspace' });
+
+    expect(notPrevented).toBe(false);
+    expect(surface().querySelector('blockquote')).toBeNull();
+    const blocks = [...surface().children];
+    expect(blocks).toHaveLength(1);
+    const line = blocks[0] as HTMLElement;
+    expect(line.tagName).toBe('P');
+    expect(line.textContent).toBe('引用');
+    const position = caret();
+    expect(position.line).toBe(line);
+    expect(caretOffsetIn(line)).toBe(0);
+  });
+
+  it('leaves Backspace alone when the caret is not at the line start', () => {
+    renderEditor({
+      initialHtml: '<p>上一行</p><blockquote>引用</blockquote>',
+    });
+    const quote = surface().querySelector('blockquote')!;
+    caretAt(quote.firstChild!, 1);
+
+    const notPrevented = fireEvent.keyDown(surface(), { key: 'Backspace' });
+
+    expect(notPrevented).toBe(true);
+    expect(surface().querySelector('blockquote')).toBe(quote);
+    expect(quote.textContent).toBe('引用');
+  });
+
+  it('does not strip the quote while another block is selected', () => {
+    // Selecting a divider parks the caret at the start of the next line (the
+    // quote); the second Backspace must delete the selected divider, not the
+    // quote marker.
+    renderEditor({
+      initialHtml:
+        '<div data-divider contenteditable="false"><hr></div><blockquote>引用</blockquote>',
+    });
+    const quote = surface().querySelector('blockquote')!;
+    caretAt(quote.firstChild!, 0);
+
+    const firstPress = fireEvent.keyDown(surface(), { key: 'Backspace' });
+    expect(firstPress).toBe(false);
+    expect(
+      surface().querySelector('[data-divider]')?.hasAttribute('data-selected'),
+    ).toBe(true);
+    expect(caret().line).toBe(quote);
+
+    const secondPress = fireEvent.keyDown(surface(), { key: 'Backspace' });
+    expect(secondPress).toBe(false);
+    expect(surface().querySelector('[data-divider]')).toBeNull();
+    expect(surface().querySelector('blockquote')).toBe(quote);
+    expect(quote.textContent).toBe('引用');
+  });
+
+  it('does not swallow an inline image at the line start', () => {
+    // A text-only "caret at line start" check would treat the position right
+    // after the image as the line start and strip the quote instead of
+    // deleting the media.
+    renderEditor({
+      initialHtml:
+        '<blockquote><img src="data:image/png;base64,AAAA" alt="图">后文</blockquote>',
+    });
+    const quote = surface().querySelector('blockquote')!;
+    caretAt(quote, 1);
+
+    const notPrevented = fireEvent.keyDown(surface(), { key: 'Backspace' });
+
+    expect(notPrevented).toBe(true);
+    expect(surface().querySelector('blockquote')).toBe(quote);
+    expect(surface().querySelector('img')).not.toBeNull();
+  });
+
+  it('strips the marker when the line starts with inline formatting', () => {
+    renderEditor({ initialHtml: '<blockquote><strong>引用</strong></blockquote>' });
+    const strong = surface().querySelector('strong')!;
+    caretAt(strong.firstChild!, 0);
+
+    const notPrevented = fireEvent.keyDown(surface(), { key: 'Backspace' });
+
+    expect(notPrevented).toBe(false);
+    expect(surface().querySelector('blockquote')).toBeNull();
+    const line = surface().firstElementChild as HTMLElement;
+    expect(line.tagName).toBe('P');
+    expect(line.querySelector('strong')?.textContent).toBe('引用');
+    expect(caretOffsetIn(line)).toBe(0);
+  });
+
+  it('leaves a quote holding a nested quote to the default merge', () => {
+    renderEditor({
+      initialHtml: '<blockquote>外<blockquote>内</blockquote></blockquote>',
+    });
+    const outer = surface().querySelector('blockquote')!;
+    caretAt(outer, 0);
+
+    const notPrevented = fireEvent.keyDown(surface(), { key: 'Backspace' });
+
+    expect(notPrevented).toBe(true);
+    expect(surface().querySelector('blockquote')).toBe(outer);
+    expect(outer.querySelector('blockquote')?.textContent).toBe('内');
+  });
+
+  it('does not intercept a second Backspace after the marker was stripped', () => {
+    renderEditor({
+      initialHtml: '<p>上一行</p><blockquote>引用</blockquote>',
+    });
+    const quote = surface().querySelector('blockquote')!;
+    caretAt(quote.firstChild!, 0);
+    fireEvent.keyDown(surface(), { key: 'Backspace' });
+
+    const line = caret().line;
+    expect(line.tagName).toBe('P');
+    expect(line.textContent).toBe('引用');
+
+    const notPrevented = fireEvent.keyDown(surface(), { key: 'Backspace' });
+
+    // The line is a paragraph again: merging back is the browser default.
+    expect(notPrevented).toBe(true);
+    expect(line.isConnected).toBe(true);
+    expect(line.textContent).toBe('引用');
   });
 });

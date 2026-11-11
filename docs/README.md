@@ -96,6 +96,6 @@ updated: 2026-11-09
 | 分类 | 入口 | 内容 |
 | --- | --- | --- |
 | 规范 | [specs/README.md](specs/README.md) | 文档模型、Operations、Agent 工具契约、系统架构与持久化边界 |
-| 方案 | [designs/README.md](designs/README.md) | 文档内容架构方向、Agent 文档工具方案、编辑器健壮性方向与决策 |
+| 方案 | [designs/README.md](designs/README.md) | 文档内容架构、Agent 文档工具与能力对齐方向、编辑器健壮性方向与决策 |
 | 调研 | [research/README.md](research/README.md) | 文档存储格式调研、DSH Agent 创建调研 |
-| 验收 | [acceptance/README.md](acceptance/README.md) | 空间↔工作区映射、协作者创建、文档工具与编辑器健壮性验收 |
+| 验收 | [acceptance/README.md](acceptance/README.md) | 双模式服务端/迁移、空间↔工作区映射、协作者创建、文档工具与编辑器健壮性验收 |

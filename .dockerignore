@@ -1,0 +1,13 @@
+node_modules
+lib
+client.js
+.git
+.github
+.dsh-build
+.agents
+docs
+tests
+coverage
+.vitest-cache
+*.log
+.env

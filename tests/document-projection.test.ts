@@ -736,4 +736,11 @@ describe('parse edge cases', () => {
     expect(parse('')).toEqual([]);
     expect(parse('  \n\n')).toEqual([]);
   });
+
+  it('rejects runaway nesting instead of overflowing the stack', () => {
+    expectDocumentError(
+      () => parse('>'.repeat(3_000) + ' x'),
+      'parse/unsupported',
+    );
+  });
 });

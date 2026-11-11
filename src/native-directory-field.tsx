@@ -62,6 +62,76 @@ export function appendPickedDirectory(
   return [...directories, path];
 }
 
+/**
+ * Manual path entry shown next to the browser fallback. Server mode lists the
+ * server's filesystem and the browser cannot always reach a deep directory, so
+ * the user must be able to type the path directly.
+ */
+function ManualDirectoryInput({
+  directories,
+  onChange,
+}: DirectoryFieldProps) {
+  const [value, setValue] = useState('');
+  const [error, setError] = useState('');
+
+  function add(): void {
+    const path = value.trim();
+    if (path === '') return;
+    if (!path.startsWith('/') && path !== '~' && !path.startsWith('~/')) {
+      setError('请输入绝对路径或 ~ 开头的路径');
+      return;
+    }
+    const next = appendPickedDirectory(directories, path);
+    if (next === directories) {
+      setValue('');
+      return;
+    }
+    onChange([...next]);
+    setValue('');
+    setError('');
+  }
+
+  return (
+    <div className={portStyles.manual}>
+      <div className={portStyles.manualRow}>
+        <input
+          className={portStyles.manualInput}
+          type="text"
+          inputMode="text"
+          autoComplete="off"
+          spellCheck={false}
+          placeholder="或手工输入目录路径"
+          aria-label="手工输入目录路径"
+          value={value}
+          onChange={(event) => {
+            setValue(event.target.value);
+            setError('');
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              add();
+            }
+          }}
+        />
+        <button
+          type="button"
+          className={portStyles.manualButton}
+          onClick={add}
+          disabled={value.trim() === ''}
+        >
+          添加
+        </button>
+      </div>
+      {error ? (
+        <p className={portStyles.error} role="alert">
+          {error}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function isPickerUnavailable(error: unknown): boolean {
   return (
     typeof error === 'object' &&
@@ -89,7 +159,10 @@ export function DirectoryField({ directories, onChange }: DirectoryFieldProps) {
   // Host without any picker, or one that reported itself unavailable mid-way.
   if (pickDirectory === null || browserFallback) {
     return (
-      <BrowserDirectoryField directories={directories} onChange={onChange} />
+      <div className={portStyles.fallback}>
+        <BrowserDirectoryField directories={directories} onChange={onChange} />
+        <ManualDirectoryInput directories={directories} onChange={onChange} />
+      </div>
     );
   }
 

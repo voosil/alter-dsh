@@ -109,6 +109,7 @@ const DOCUMENT_METHODS = [
   'generate',
   'importAsset',
   'importFile',
+  'updateObject',
 ] as const;
 const OBJECT_METHODS = ['get'] as const;
 
@@ -117,6 +118,43 @@ const HUB_METHOD_SET: ReadonlySet<string> = new Set(HUB_METHODS);
 const STORAGE_METHOD_SET: ReadonlySet<string> = new Set(STORAGE_METHODS);
 const DOCUMENT_METHOD_SET: ReadonlySet<string> = new Set(DOCUMENT_METHODS);
 const OBJECT_METHOD_SET: ReadonlySet<string> = new Set(OBJECT_METHODS);
+
+/** Settings endpoints served by the plugin core, not by an authority backend. */
+export const SETTINGS_METHODS = ['get', 'update', 'test'] as const;
+/** Sync endpoints served by the plugin core. */
+export const SYNC_METHODS = ['status', 'flush'] as const;
+/** Migration endpoints served by the plugin core. */
+export const MIGRATION_METHODS = [
+  'preflight',
+  'start',
+  'status',
+  'cancel',
+] as const;
+
+/**
+ * Whether an endpoint belongs to the plugin control plane (settings/sync).
+ * These never reach an authority backend; the plugin route dispatches them
+ * to the settings handler.
+ */
+export function isPluginControlEndpoint(endpoint: string): boolean {
+  const [group, method] = endpoint.split('.');
+  if (method === undefined) return false;
+  if (group === 'settings')
+    return (SETTINGS_METHODS as readonly string[]).includes(method);
+  if (group === 'sync')
+    return (SYNC_METHODS as readonly string[]).includes(method);
+  return false;
+}
+
+/** Whether an endpoint belongs to the migration control plane. */
+export function isMigrationEndpoint(endpoint: string): boolean {
+  const [group, method] = endpoint.split('.');
+  return (
+    group === 'migration' &&
+    method !== undefined &&
+    (MIGRATION_METHODS as readonly string[]).includes(method)
+  );
+}
 
 const MAX_ARGS = 16;
 
@@ -152,6 +190,13 @@ export interface SpaceRpcOptions {
   document?: DocumentService;
   /** Document asset store; absent disables `doc.importAsset` / `doc.importFile`. */
   assets?: DocumentAssets;
+  /**
+   * Who the browser-facing route speaks for. The local Host route is a user
+   * browser, so it forces `user` and ignores any caller-supplied actor. The
+   * standalone server accepts the bridge's explicit `alter` for Agent tools
+   * and attributes everything else to `user`.
+   */
+  actorPolicy?: 'browser' | 'passthrough';
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -342,6 +387,14 @@ async function importDocumentFile(
  */
 export function createSpaceRpc(options: SpaceRpcOptions): SpaceRpcHandler {
   const { service, storage } = options;
+  const forceUserActor = (options.actorPolicy ?? 'browser') === 'browser';
+  /** Strip caller-supplied actors and stamp the authenticated origin. */
+  const attributed = <T>(input: unknown): T => {
+    const record = isPlainObject(input) ? input : {};
+    const actor =
+      forceUserActor || record.actor !== 'alter' ? 'user' : 'alter';
+    return { ...record, actor } as T;
+  };
   return async (endpoint, payload) => {
     const args = normalizeArgs(payload);
     try {
@@ -422,25 +475,35 @@ export function createSpaceRpc(options: SpaceRpcOptions): SpaceRpcHandler {
           case 'applyOps':
             return {
               value: await document.applyOperations(
-                (args[0] ?? {}) as ApplyOperationsInput,
+                attributed<ApplyOperationsInput>(args[0]),
               ),
             };
           case 'undo':
             return {
               value: await document.undo(
-                (args[0] ?? {}) as Parameters<DocumentService['undo']>[0],
+                attributed<Parameters<DocumentService['undo']>[0]>(args[0]),
               ),
             };
           case 'restoreVersion':
             return {
               value: await document.restoreVersion(
-                (args[0] ?? {}) as Parameters<DocumentService['restoreVersion']>[0],
+                attributed<
+                  Parameters<DocumentService['restoreVersion']>[0]
+                >(args[0]),
               ),
             };
           case 'generate':
             return {
               value: await document.generate(
-                (args[0] ?? {}) as GenerateDocumentInput,
+                attributed<GenerateDocumentInput>(args[0]),
+              ),
+            };
+          case 'updateObject':
+            return {
+              value: await document.updateObject(
+                attributed<
+                  Parameters<DocumentService['updateObject']>[0]
+                >(args[0]),
               ),
             };
           default:
@@ -477,6 +540,16 @@ export function createSpaceRpc(options: SpaceRpcOptions): SpaceRpcHandler {
   };
 }
 
+/**
+ * Fetch-route handler mounted at {@link RPC_ROUTE_PATH} through
+ * `ctx.connection.fetch.register`. Connection authenticates the browser and
+ * calls this with the validated peer; the request body is the Connection RPC
+ * envelope, so the response must echo its `rpcId`.
+ */
+export function createSpaceFetchRoute(options: SpaceRpcOptions) {
+  return createConnectionFetchRoute(createSpaceRpc(options));
+}
+
 interface ConnectionRequestEnvelope {
   rpcId: string;
   payload: unknown;
@@ -502,8 +575,9 @@ function jsonResponse(status: number, body: unknown): Response {
  * calls this with the validated peer; the request body is the Connection RPC
  * envelope, so the response must echo its `rpcId`.
  */
-export function createSpaceFetchRoute(options: SpaceRpcOptions) {
-  const handler = createSpaceRpc(options);
+export function createConnectionFetchRoute(
+  handler: SpaceRpcHandler,
+): (request: Request) => Promise<Response> {
   return async (request: Request): Promise<Response> => {
     if (request.method !== 'POST')
       return jsonResponse(405, { error: 'method_not_allowed' });

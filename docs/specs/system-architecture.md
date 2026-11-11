@@ -1,7 +1,7 @@
 ---
 type: spec
 status: active
-updated: 2026-11-10
+updated: 2026-11-11
 ---
 
 # 系统架构与持久化约束
@@ -14,9 +14,11 @@ updated: 2026-11-10
 
 | 层 | 职责 | 数据所有权 |
 | --- | --- | --- |
-| Host 进程（Cordis 插件，`host/` → `lib/`） | 打开 SQLite、组合 `vendor/service` 的业务服务、暴露精确 Fetch 路由 | **唯一权威**：全部业务数据 |
+| Host 进程（Cordis 插件，`host/` → `lib/`） | 组合业务服务、注册 RPC/asset 路由、按模式选择本地权威或服务端 bridge | 本地模式下为**唯一权威**；服务端模式下只持有缓存与队列 |
+| 服务端（独立 Node/Docker 进程，`server/`） | 打开同一 `LocalSpaceRuntime`，以 bearer token 暴露 RPC/asset/迁移路由与 health/version | 服务端模式下的**唯一权威** |
+| 本地 bridge（服务端模式下的 Host 半侧） | 代理 RPC/asset、读缓存、持久化写队列、版本握手 | 仅本地缓存与待同步队列，不是权威 |
 | 传输（DSH Connection） | 浏览器鉴权、Host/Origin 校验、RPC 信封转发 | 无状态 |
-| 浏览器客户端（`src/` → `client.js`） | 把 `vendor/ui-space` 的 `SpaceApp` 挂到面板，用 RPC 实现 `SpaceService` | 仅内存状态与 UI 偏好 |
+| 浏览器客户端（`src/` → `client.js`） | 把 `vendor/ui-space` 的 `SpaceApp` 挂到面板，用 RPC 实现 `SpaceService` | 仅内存状态、UI 偏好与崩溃草稿 |
 
 不变量：
 
@@ -26,6 +28,9 @@ updated: 2026-11-10
 - 插件自有数据放 SQLite 侧表（如空间 ↔ 工作区绑定），不写入 `vendor/` 的实体结构。
 - 文档页是 `vendor/ui-space` 的旧 UI 1:1 还原（DOM/CSS 冻结）；AST 适配层在 `src/document/legacy`，
   正文仍只经 Document Operations 写入 Host。
+- 服务端模式的数据流：`SpaceApp` → Connection → 本地 Host bridge → HTTPS + bearer token → 服务端
+  `LocalSpaceRuntime` → SQLite。bridge 的读缓存与写队列只存在于本地数据目录，不能作为权威。
+- 模式切换只经显式迁移或显式放弃；两种模式之间不做自动双向同步。
 - 本仓库是 Space 协议、业务服务、编辑器、UI 与 Host 的唯一实现源（单仓库、自包含）。
 - `vendor/` 是项目自有源码，可以修改但须克制：新增逻辑优先放 `host/`、`src/`；确需改 `vendor/`
   时保持既有行为与约定一致，并在 `vendor/README.md` 的「构建期模块覆盖与别名 / 关键行为约定」中更新。
@@ -34,6 +39,23 @@ updated: 2026-11-10
 
 - 浏览器只能通过 DSH Connection 的精确 Fetch 路由 `POST /api/alter-space` 访问 Host；
   鉴权与 Host/Origin 校验由 Connection 统一完成，Host 路由不重复实现鉴权。
+- 服务端模式由本地 bridge 持 bearer token 调用服务端的 `POST /api/alter-space`、
+  `GET /api/alter-space/asset` 与 `/api/alter-space/migrate/*`；token 存在 DSH credentials 或
+  `0600` 文件，服务端不把网络位置当作身份。服务端 `/healthz` 与 `/version` 公开，其余路由必须鉴权。
+- 设置与迁移控制面（`settings.*` / `sync.*` / `migration.*`）始终由 Host 核心处理，即使服务端离线
+  仍可读取状态、修改连接配置；其余业务端点交给当前后端。迁移冻结期间，非只读业务端点返回
+  `migration/read-only`，控制面保持可用。控制面端点：
+
+| 端点 | 请求 | 结果 |
+| --- | --- | --- |
+| `settings.get` / `sync.status` | 无 | `{ mode, serverUrl, tokenConfigured, updatedAt, connection, capabilities, sync }` |
+| `settings.update` | `{ mode?, serverUrl?, token?: string \| null }` | 同上；落盘后后端切换失败时回滚已保存配置并保留旧后端 |
+| `settings.test` | `{ serverUrl?, token? }` | `{ ok, serverVersion?, protocolVersion?, authenticated?, message? }`；未配置的地址不得隐式使用已存 token |
+| `sync.flush` | 无 | 触发一次队列重放并返回状态 |
+| `migration.preflight/start/status/cancel` | `{ direction: 'to-server' \| 'from-server', overwrite?, trimHistory? }` | 预检或任务状态（`status`、`phase`、`counts`、`backup` 等） |
+
+  迁移进行中拒绝修改服务器配置、切换模式与重放队列（`migration/busy`）。浏览器写入归属 `user`、
+  Agent 工具写入归属 `alter`；RPC 边界按入口强制归属，不信任请求体里的 actor。
 - 通道常量 `('/api', 'alter-space')` 在 Host 与客户端各有一份，必须保持同步。
 - 请求信封 `{ type: 'client-request', rpcId, payload: { op, args } }`；响应信封
   `{ type: 'server-response', rpcId, result: { ok: true, value } }`。业务结果在 `value` 内为
@@ -82,6 +104,20 @@ updated: 2026-11-10
   `storage.get / storage.estimate / storage.set` RPC 修改；保存后立即裁剪历史并清理多余快照；
   占用估算是上限值（不含 WAL 与损坏兜底副本）。
 
+### 3.1 远程缓存、写队列与迁移暂存
+
+- 服务端模式的读缓存与写队列放在本地数据目录的独立 `remote-cache-<server>.db`（按服务端地址哈希
+  分文件），与权威库分离，结构版本不匹配时直接重建；读缓存损坏只丢弃缓存，不触碰权威数据。写队列
+  条目是未确认的用户内容，不是可弃缓存：结构升级不得静默清空；不同服务端之间队列与读缓存互相隔离，
+  切换服务端或完成整库迁移后必须显式处置（清空）旧队列。
+- 写队列在向浏览器确认前必须落盘，携带幂等键与 `baseRevision`，按文档串行重放；传输失败退避重试，
+  业务冲突标记为冲突并保留本地内容，不自动覆盖。队列与冲突计数通过 `settings.get` / `sync.status` 暴露。
+- 资产按内容寻址缓存；超过上限的资产只流式转发不落缓存。
+- 迁移以 `VACUUM INTO` 一致性快照导出，剔除 `workspace_links` 等设备本地侧表；可选只保留每篇文档
+  最新版本。暂存与目标备份位于 `<dataDir>/.migration/`，替换前暂停服务端 runtime，完成后重新打开，
+  失败时恢复备份；启动时清扫超过 7 天的遗留暂存。冻结从快照前开始并持续到权威切换完成：先拒绝新的
+  写请求，再等待在途写结束（drain），避免已确认的写入落在快照之外。
+
 ## 4. 恢复与损坏处理
 
 - **损坏判定**：只有真正的数据库损坏（`SQLITE_NOTADB` / `SQLITE_CORRUPT`，或 `quick_check` 失败）
@@ -103,12 +139,17 @@ updated: 2026-11-10
   `vitest.config.mts` 三处声明，必须保持同步。新增覆盖或别名须在 `vendor/README.md` 登记。
 - 客户端 bundle 自包含：外置依赖仅限 react 族，新增第三方库必须打进 bundle；
   Host 侧新增依赖不得引入 `@deepseek-ai/*` 运行时依赖。
+- 服务端入口编译到 `lib/server/index.js`，Docker 镜像只构建 Host 面（`pnpm build:host`），运行阶段
+  不带构建工具；配置经 `SPACE_DATA_DIR` / `SPACE_HOST` / `SPACE_PORT` / `SPACE_TOKENS`（必填，命名
+  token 列表）/ `SPACE_SNAPSHOTS` 提供，数据目录必须挂持久卷。
 - 交付前 `pnpm check`（build + verify + docs:check + typecheck + test）必须全绿；
-  Host 改动后需重启 Loader 行，客户端改动由 client-HMR 替换。
+  Host 改动后需重启 Loader 行，客户端改动由 client-HMR 原地替换。客户端 bundle 被原地替换时，
+  Space 面板选择与面板内路由在页面内续接；页面刷新仍按 DSH 默认重置。
 
 ## 6. 空间 ↔ DSH 工作区映射不变量
 
 - 一个空间只把主工作目录（`directories[0]`）映射为一个 DSH 工作区；参考目录不创建工作区。
+- 该映射只在本地模式生效；服务端模式下空间目录属于服务器，不创建、不改写本机 DSH 工作区。
 - 工作区以 canonical 路径（`fs.realpath` 后）为唯一身份：同一目录最多一个工作区，也只能归属
   一个空间（含已归档空间）。
 - 新建空间时创建/接管工作区，标题为 `🪐 <空间名>`；改名同步工作区标题；删除/归档空间只解绑，
@@ -123,7 +164,11 @@ updated: 2026-11-10
 ## 7. 已知边界
 
 - **单 Host 实例**：同一个 `space.db` 由单进程写入；多 Host 进程同时写由 SQLite 写锁串行
-  （last-writer-wins）。
+  （last-writer-wins）。服务端模式同样只有一个服务端权威进程。
+- **服务端模式依赖在线**：断网时只能读缓存并排队文档写入；创建空间、评论、迁移等未缓存操作会失败；
+  不做多主合并或 CRDT，冲突以服务端 revision 为准并保留本地草稿/版本。
+- **迁移是整库切换**：切换瞬间客户端进入只读；迁移中断时源侧保持权威，目标只保留暂存与备份；
+  反向迁移会覆盖目标侧自上次快照后的新数据，界面必须先说明损失。
 - **无跨窗口实时推送**：其他窗口在刷新/重新读取后看到最新数据。
 - **`node:sqlite` 同步 API**：写操作在 Host 事件循环上同步执行；平台缺少 `node:sqlite` 时插件
   明确报错，不静默降级。

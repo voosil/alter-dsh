@@ -14,8 +14,14 @@ import { ArrowLeft, Archive } from 'lucide-react';
 import { Button } from '@alter/ui-system';
 import type { Agent, Space, SpaceService } from '@alter/protocol';
 import { StorageSettingsSection } from './storage-settings';
+import { ServerSettingsSection } from './server-settings';
+import { MigrationSettingsSection } from './migration-settings';
 import { SettingsSection } from './settings-section';
 import type { SpaceStorageClient } from './storage-client.js';
+import type {
+  SpaceMigrationClient,
+  SpaceSettingsClient,
+} from './space-client.js';
 import styles from './settings.module.css';
 
 /** Keep in sync with package.json; shown as reference, not a feature surface. */
@@ -37,6 +43,10 @@ export interface SpaceSettingsPageProps {
   service: SpaceService;
   /** Storage policy client; omitted only by tests that do not need it. */
   storage?: SpaceStorageClient;
+  /** Server/mode settings client; omitted only by tests that do not need it. */
+  settings?: SpaceSettingsClient;
+  /** Migration client; omitted only by tests that do not need it. */
+  migration?: SpaceMigrationClient;
   /** Return to the Space route the settings page was opened from. */
   onBack: () => void;
 }
@@ -44,6 +54,8 @@ export interface SpaceSettingsPageProps {
 export function SpaceSettingsPage({
   service,
   storage,
+  settings,
+  migration,
   onBack,
 }: SpaceSettingsPageProps) {
   const [agents, setAgents] = useState<Agent[] | null>(null);
@@ -136,6 +148,8 @@ export function SpaceSettingsPage({
           ) : null}
 
           <div className={styles.sections}>
+            {settings ? <ServerSettingsSection client={settings} /> : null}
+            {migration ? <MigrationSettingsSection client={migration} /> : null}
             {storage ? <StorageSettingsSection storage={storage} /> : null}
 
             {loadError ? null : (

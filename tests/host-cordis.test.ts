@@ -35,6 +35,17 @@ interface Harness {
   dispose: () => Promise<void>;
 }
 
+async function waitFor(
+  predicate: () => boolean,
+  timeoutMs = 3_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error('timed out waiting for route registration');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
 async function boot(dataDir: string): Promise<Harness> {
   const registry = new FakeWorkspaceRegistry();
   let routePath = '';
@@ -68,9 +79,9 @@ async function boot(dataDir: string): Promise<Harness> {
     },
     { dataDir },
   );
-  // The workspace bridge attaches through its own `ctx.inject` fiber; let the
-  // Cordis notification queue settle before exercising the RPC seam.
-  await new Promise((resolve) => setTimeout(resolve, 100));
+  // The plugin opens SQLite and attaches injected services asynchronously; wait
+  // for the route instead of assuming a fixed scheduling latency.
+  await waitFor(() => routePath === RPC_ROUTE_PATH);
   return {
     root,
     registry,
@@ -157,7 +168,7 @@ describe('Host plugin on the real Cordis kernel', () => {
       },
       { dataDir },
     );
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await waitFor(() => routes.has(RPC_ROUTE_PATH));
     const response = await routes.get(RPC_ROUTE_PATH)!(
       new Request(`http://dsh.internal${RPC_ROUTE_PATH}`, {
         method: 'POST',

@@ -1,12 +1,18 @@
 // @vitest-environment jsdom
 /**
- * Legacy editor block auto-conversion (《编辑器专题优化》第 2、3 项).
+ * Legacy editor block auto-conversion (《编辑器专题优化》第 2、3、13 项).
  *
  * Item 2: any `N. ` marker at the start of a line becomes an ordered list
  * (previously only a hardcoded `1.`), and deleting an empty list item keeps
  * the caret on the current line instead of jumping to the previous item.
  * Item 3: an IME-committed `N. ` / `》` triggers the same conversion even when
  * the browser emits no trailing `input` event.
+ * Item 13: the quote marker converts only as "marker + space" — `>` and the
+ * full-width `》` a Chinese IME produces both need the following space. A bare
+ * `>` / `》` stays text whether it arrives through a keydown or a plain input
+ * event (the input path must not convert early, or the space would land inside
+ * the quote), while an IME that commits `>` / `》` — with or without the trailing
+ * space it consumed — still converts at composition end.
  * Divider: typing `---` alone on a line converts it as soon as the third dash
  * lands, without the Enter the legacy editor required.
  *
@@ -488,6 +494,162 @@ describe('第 3 项 中文输入法收尾转换', () => {
     expect(list.getAttribute('start')).toBe('3');
     expect(caretInside(list.querySelector('li')!)).toBe(true);
   });
+});
+
+// ---------------------------------------------------------------------------
+// 第 13 项: the quote marker converts only as "marker + space". `>` already
+// worked; the full-width `》` a Chinese IME produces must behave the same, and
+// the old immediate conversion on the bare `》` keydown is gone.
+// ---------------------------------------------------------------------------
+
+describe('第 13 项 引用标记标准输入', () => {
+  it('converts ">" followed by space into an empty blockquote', () => {
+    const props = renderEditor({ initialHtml: '<p><br></p>' });
+    const line = surface().querySelector('p')!;
+    typeText(line, '>');
+
+    const notPrevented = fireEvent.keyDown(surface(), { key: ' ' });
+
+    expect(notPrevented).toBe(false);
+    const quotes = surface().querySelectorAll('blockquote');
+    expect(quotes).toHaveLength(1);
+    // The marker (and the space) are consumed, so the quote starts empty.
+    expect(quotes[0]!.textContent).toBe('');
+    expect(surface().textContent).toBe('');
+    expect(caretInside(quotes[0]!)).toBe(true);
+    expect(props.onChange).toHaveBeenCalled();
+  });
+
+  it('converts the full-width "》" followed by space the same way', () => {
+    const props = renderEditor({ initialHtml: '<p><br></p>' });
+    const line = surface().querySelector('p')!;
+    typeText(line, '》');
+
+    const notPrevented = fireEvent.keyDown(surface(), { key: ' ' });
+
+    expect(notPrevented).toBe(false);
+    const quotes = surface().querySelectorAll('blockquote');
+    expect(quotes).toHaveLength(1);
+    expect(quotes[0]!.textContent).toBe('');
+    expect(surface().textContent).toBe('');
+    expect(caretInside(quotes[0]!)).toBe(true);
+    expect(props.onChange).toHaveBeenCalled();
+  });
+
+  it('does not convert a bare "》" keydown on an empty line', () => {
+    renderEditor({ initialHtml: '<p><br></p>' });
+    const line = surface().querySelector('p')!;
+    caretAtEnd(line);
+
+    const notPrevented = fireEvent.keyDown(surface(), { key: '》' });
+
+    expect(notPrevented).toBe(true);
+    expect(surface().querySelector('blockquote')).toBeNull();
+    const paragraph = surface().querySelector('p');
+    expect(paragraph).not.toBeNull();
+    expect(paragraph!.textContent).toBe('');
+  });
+
+  it('converts ">" committed by the IME when compositionend emits no input', () => {
+    renderEditor({ initialHtml: '<p><br></p>' });
+    const editor = surface();
+    const line = editor.querySelector('p')!;
+    caretAtEnd(line);
+
+    compositionStart(editor);
+    typeText(line, '>');
+    fireEvent.input(editor);
+    expect(editor.querySelector('blockquote')).toBeNull();
+    compositionEnd(editor);
+
+    const quote = editor.querySelector('blockquote');
+    expect(quote).not.toBeNull();
+    expect(quote!.textContent).toBe('');
+    expect(caretInside(quote!)).toBe(true);
+  });
+
+  it.each(['> ', '》 '])(
+    'converts "%s" committed by the IME with the trailing space',
+    (committed) => {
+      renderEditor({ initialHtml: '<p><br></p>' });
+      const editor = surface();
+      const line = editor.querySelector('p')!;
+      caretAtEnd(line);
+
+      compositionStart(editor);
+      typeText(line, committed);
+      // Half-composed input must not convert early.
+      fireEvent.input(editor);
+      expect(editor.querySelector('blockquote')).toBeNull();
+      compositionEnd(editor);
+
+      const quote = editor.querySelector('blockquote');
+      expect(quote).not.toBeNull();
+      expect(quote!.textContent).toBe('');
+      expect(caretInside(quote!)).toBe(true);
+    },
+  );
+
+  it.each(['前》', '>x'])(
+    'keeps "%s" as plain text when a space follows',
+    (text) => {
+      renderEditor({ initialHtml: '<p><br></p>' });
+      const line = surface().querySelector('p')!;
+      typeText(line, text);
+
+      const notPrevented = fireEvent.keyDown(surface(), { key: ' ' });
+
+      expect(notPrevented).toBe(true);
+      expect(surface().querySelector('blockquote')).toBeNull();
+      expect(line.tagName).toBe('P');
+      expect(line.textContent).toBe(text);
+    },
+  );
+
+  // A browser typing ">" or "》" fires an input event before the space key
+  // arrives; the marker must stay text until the space (the input-path check
+  // must not accept a bare marker, otherwise " typing > " turns the line into a
+  // quote and the following space lands inside it).
+  it.each(['>', '》'])(
+    'keeps the marker "%s" as text when it is typed without the space',
+    (marker) => {
+      const props = renderEditor({ initialHtml: '<p><br></p>' });
+      const editor = surface();
+      const line = editor.querySelector('p')!;
+      typeText(line, marker);
+
+      fireEvent.input(editor, { inputType: 'insertText', data: marker });
+
+      expect(editor.querySelector('blockquote')).toBeNull();
+      expect(line.tagName).toBe('P');
+      expect(line.textContent).toBe(marker);
+      expect(props.onChange).toHaveBeenCalled();
+
+      // The standard gesture still completes with the following space.
+      const notPrevented = fireEvent.keyDown(editor, { key: ' ' });
+      expect(notPrevented).toBe(false);
+      const quote = editor.querySelector('blockquote');
+      expect(quote).not.toBeNull();
+      expect(quote!.textContent).toBe('');
+      expect(caretInside(quote!)).toBe(true);
+    },
+  );
+
+  it.each(['> ', '》 '])(
+    'converts "%s" arriving in one plain input event',
+    (committed) => {
+      renderEditor({ initialHtml: '<p><br></p>' });
+      const editor = surface();
+      typeText(editor.querySelector('p')!, committed);
+
+      fireEvent.input(editor, { inputType: 'insertText', data: committed });
+
+      const quote = editor.querySelector('blockquote');
+      expect(quote).not.toBeNull();
+      expect(quote!.textContent).toBe('');
+      expect(caretInside(quote!)).toBe(true);
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------

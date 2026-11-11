@@ -56,7 +56,7 @@ updated: 2026-11-10
 | `update_attrs` | `target`, `attrs` | 按 registry 补丁式更新属性；`null` 删除可选属性；不允许改 `objectId` |
 | `move_block` | `target`, `parent?`, `after?`, `index?` | 移动节点（含子树）；目标不得在自身子树内 |
 | `delete_block` | `target`, `mode?: 'remove' \| 'unwrap'` | 删除（默认 remove；unwrap 仅对容器块） |
-| `transform_block` | `target`, `to`, `attrs?` | 类型转换，必须命中 registry 的转换白名单；保留字段规则由 registry 声明 |
+| `transform_block` | `target`, `to`, `attrs?` | 类型转换，必须命中 registry 的转换白名单；同内容模型保留 payload；inline→blocks 把正文包成唯一 paragraph 子块（id 由父 id 派生），blocks→inline 把后代文本按换行展平，不得静默丢正文 |
 | `update_object` | `target`（block id）, `payload` | 为 structured/application 块生成新不可变对象并更新 `objectId`（同一事务） |
 | `insert_markdown` | `parent?`, `after?`, `markdown` | `insert_blocks` 的便利别名（仅新内容） |
 

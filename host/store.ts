@@ -48,7 +48,7 @@ export const DEFAULT_SPACE_ID = 'sp-inbox';
 /** Default space name. */
 export const DEFAULT_SPACE_NAME = '日常';
 
-const FORMAT_VERSION = 3;
+export const SPACE_DB_FORMAT_VERSION = 3;
 const ORDER_PREFIX = 'order:';
 /** Sidecar table owning the Space ↔ DSH workspace binding (schema v2). */
 const WORKSPACE_LINKS_TABLE = 'workspace_links';
@@ -958,23 +958,23 @@ export async function openSpaceStore(
   await setFileMode(file);
 
   let version = readUserVersion(db);
-  if (version > FORMAT_VERSION) {
+  if (version > SPACE_DB_FORMAT_VERSION) {
     db.close();
     throw new Error(
-      `Space 数据库结构版本 ${version} 高于当前插件支持的版本 ${FORMAT_VERSION}，请升级插件`,
+      `Space 数据库结构版本 ${version} 高于当前插件支持的版本 ${SPACE_DB_FORMAT_VERSION}，请升级插件`,
     );
   }
   if (version === 0) {
     db.exec(SCHEMA);
-    db.exec(`PRAGMA user_version = ${FORMAT_VERSION}`);
-    version = FORMAT_VERSION;
-  } else if (version < FORMAT_VERSION) {
+    db.exec(`PRAGMA user_version = ${SPACE_DB_FORMAT_VERSION}`);
+    version = SPACE_DB_FORMAT_VERSION;
+  } else if (version < SPACE_DB_FORMAT_VERSION) {
     // v1 → v2: Space ↔ workspace sidecar; v2 → v3: document-model sidecars.
     // Business tables are untouched, so every step is an idempotent CREATE.
     db.exec(CREATE_WORKSPACE_LINKS);
     db.exec(DOCUMENT_SCHEMA);
-    db.exec(`PRAGMA user_version = ${FORMAT_VERSION}`);
-    version = FORMAT_VERSION;
+    db.exec(`PRAGMA user_version = ${SPACE_DB_FORMAT_VERSION}`);
+    version = SPACE_DB_FORMAT_VERSION;
   }
   // Defensive: sidecar tables missing from a current-version database are
   // healed here instead of failing every later write.

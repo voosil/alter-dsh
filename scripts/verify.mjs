@@ -191,6 +191,36 @@ check(
 );
 notes.push(`host scripts: ${String(hostScripts.length)}`);
 
+// Every compiled module must still have a source file: a stale `lib/` output
+// would otherwise ship inside the package after its module was deleted.
+for (const file of hostFiles.filter((entry) => entry.endsWith('.js'))) {
+  const source = file.replace(/\.js$/, '.ts');
+  check(
+    file.startsWith('host/') ||
+      file.startsWith('server/') ||
+      file.startsWith('vendor/'),
+    `unexpected compiled output ${file}`,
+  );
+  try {
+    await stat(path.join(pluginRoot, source));
+  } catch {
+    check(false, `stale compiled output ${file} has no source ${source}`);
+  }
+}
+check(
+  hostFiles.includes('server/index.js'),
+  'compiled server entry lib/server/index.js must exist',
+);
+check(
+  hostFiles.includes('host/remote/bridge.js') &&
+    hostFiles.includes('host/migration/transfer.js'),
+  'compiled Host half must carry the server bridge and migration transfer',
+);
+check(
+  typeof pkg.packageManager === 'string' && pkg.packageManager.startsWith('pnpm@'),
+  'package.json must pin packageManager for reproducible Docker builds',
+);
+
 // --- Client half -----------------------------------------------------------
 const client = await read('client.js');
 check(

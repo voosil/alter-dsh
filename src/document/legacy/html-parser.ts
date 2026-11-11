@@ -769,7 +769,7 @@ function addLinkMark(marks: readonly Mark[], href: string): Mark[] {
   return canonicalizeMarks([...marks, { type: 'link', attrs: { href } }]);
 }
 
-function safeHref(value: string | undefined): string | undefined {
+export function safeHref(value: string | undefined): string | undefined {
   if (value === undefined) return undefined;
   const href = value.trim();
   if (href === '' || href.length > MAX_HREF_LENGTH) return undefined;

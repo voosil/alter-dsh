@@ -284,6 +284,12 @@ export interface SpaceDocumentClient {
   importAsset(input: SpaceImportAssetInput): Promise<SpaceImportedAsset>;
   importFile(input: SpaceImportFileInput): Promise<SpaceImportedFile>;
   getObject(objectId: string): Promise<unknown>;
+  updateObject(input: {
+    docId: string;
+    blockId: string;
+    baseRevision: number;
+    payload: unknown;
+  }): Promise<unknown>;
 }
 
 /**
@@ -320,5 +326,176 @@ export function createSpaceDocumentClient(
     importAsset: (input) => request('doc.importAsset', [input]),
     importFile: (input) => request('doc.importFile', [input]),
     getObject: (objectId) => request('object.get', [objectId]),
+    updateObject: (input) => request('doc.updateObject', [input]),
+  };
+}
+
+/** Link/authority facts shown in the server settings section. */
+export interface SpaceConnectionStatus {
+  state: 'local' | 'connecting' | 'online' | 'offline' | 'error';
+  message?: string;
+  serverVersion?: string;
+  protocolVersion?: number;
+  pendingWrites?: number;
+  conflicts?: number;
+  lastSyncedAt?: string;
+}
+
+/** Non-secret settings snapshot returned by the Host control plane. */
+export interface SpaceSettingsSnapshot {
+  mode: 'local' | 'server';
+  serverUrl: string | null;
+  tokenConfigured: boolean;
+  updatedAt: string;
+  connection: SpaceConnectionStatus;
+  capabilities: {
+    remoteDirectories: boolean;
+    workspaceMapping: boolean;
+    agentConfigurable: boolean;
+  };
+  sync: {
+    pendingWrites: number;
+    conflicts: number;
+    failed: number;
+    lastSyncedAt?: string;
+  };
+}
+
+/** Outcome of one server reachability/compatibility probe. */
+export interface SpaceRemoteTestResult {
+  ok: boolean;
+  serverVersion?: string;
+  protocolVersion?: number;
+  databaseSchemaVersion?: number;
+  authenticated?: boolean;
+  message?: string;
+}
+
+/** Client mirror of the Host settings/sync endpoints. */
+export interface SpaceSettingsClient {
+  get(): Promise<SpaceSettingsSnapshot>;
+  update(patch: {
+    mode?: 'local' | 'server';
+    serverUrl?: string | null;
+    token?: string | null;
+  }): Promise<SpaceSettingsSnapshot>;
+  test(input: {
+    serverUrl?: string;
+    token?: string | null;
+  }): Promise<SpaceRemoteTestResult>;
+  syncStatus(): Promise<SpaceSettingsSnapshot>;
+  flush(): Promise<SpaceSettingsSnapshot>;
+}
+
+/**
+ * Build the browser-side settings client over the same Connection RPC channel
+ * as the Space service.
+ * @param rpc - the client Connection RPC caller.
+ */
+export function createSpaceSettingsClient(
+  rpc: SpaceRpcCaller,
+): SpaceSettingsClient {
+  async function request<T>(endpoint: string, args: unknown[] = []): Promise<T> {
+    const result = await rpc.call(SPACE_RPC_CHANNEL, SPACE_RPC_ENDPOINT, {
+      op: endpoint,
+      args: trimTrailingUndefined(args),
+    });
+    if (!result.ok) throw remoteError(result.error);
+    const body = result.value;
+    if (body !== null && typeof body === 'object') {
+      const record = body as Record<string, unknown>;
+      if (record.error !== undefined) throw remoteError(record.error);
+      return (record.value ?? undefined) as T;
+    }
+    return undefined as T;
+  }
+  return {
+    get: () => request('settings.get'),
+    update: (patch) => request('settings.update', [patch]),
+    test: (input) => request('settings.test', [input]),
+    syncStatus: () => request('sync.status'),
+    flush: () => request('sync.flush'),
+  };
+}
+
+/** Migration direction accepted by the Host migration service. */
+export type SpaceMigrationDirection = 'to-server' | 'from-server';
+
+/** Preflight facts for one migration direction. */
+export interface SpaceMigrationPreflight {
+  server: {
+    reachable: boolean;
+    message?: string;
+    empty?: boolean;
+    protocolVersion?: number;
+    databaseSchemaVersion?: number;
+    counts?: Record<string, number> | null;
+  };
+  local: {
+    databaseBytes: number;
+    assetBytes: number;
+    assetCount: number;
+    hasUserData: boolean;
+  };
+  needsOverwrite: boolean;
+  replacesLocal: boolean;
+  ok: boolean;
+  message?: string;
+}
+
+/** Live migration job state. */
+export interface SpaceMigrationState {
+  status: 'idle' | 'running' | 'done' | 'failed' | 'cancelled';
+  direction?: SpaceMigrationDirection;
+  phase?: string;
+  message?: string;
+  transferredBytes: number;
+  totalBytes: number | null;
+  startedAt?: string;
+  finishedAt?: string;
+  error?: string;
+  counts?: Record<string, number>;
+  backup?: string | null;
+}
+
+/** Client mirror of the Host migration endpoints. */
+export interface SpaceMigrationClient {
+  preflight(direction: SpaceMigrationDirection): Promise<SpaceMigrationPreflight>;
+  start(input: {
+    direction: SpaceMigrationDirection;
+    overwrite?: boolean;
+    trimHistory?: boolean;
+  }): Promise<SpaceMigrationState>;
+  status(): Promise<SpaceMigrationState>;
+  cancel(): Promise<SpaceMigrationState>;
+}
+
+/**
+ * Build the browser-side migration client over the Connection RPC channel.
+ * @param rpc - the client Connection RPC caller.
+ */
+export function createSpaceMigrationClient(
+  rpc: SpaceRpcCaller,
+): SpaceMigrationClient {
+  async function request<T>(endpoint: string, args: unknown[] = []): Promise<T> {
+    const result = await rpc.call(SPACE_RPC_CHANNEL, SPACE_RPC_ENDPOINT, {
+      op: endpoint,
+      args: trimTrailingUndefined(args),
+    });
+    if (!result.ok) throw remoteError(result.error);
+    const body = result.value;
+    if (body !== null && typeof body === 'object') {
+      const record = body as Record<string, unknown>;
+      if (record.error !== undefined) throw remoteError(record.error);
+      return (record.value ?? undefined) as T;
+    }
+    return undefined as T;
+  }
+  return {
+    preflight: (direction) =>
+      request('migration.preflight', [{ direction }]),
+    start: (input) => request('migration.start', [input]),
+    status: () => request('migration.status'),
+    cancel: () => request('migration.cancel'),
   };
 }

@@ -12,6 +12,7 @@
  * @module @alter-dsh/space/document/legacy/to-html
  */
 import { documentAssetUrl } from '../asset-url';
+import { safeHref } from './html-parser';
 import type { AlterDoc, BlockNode, InlineNode, JsonValue, Mark } from '../types';
 
 /** Options of {@link alterDocToEditorHtml}. */
@@ -306,14 +307,26 @@ function renderBookmark(block: BlockNode): string {
   const title = attrText(block, 'title') ?? url;
   const description = attrText(block, 'description') ?? url;
   const icon = attrText(block, 'icon');
+  const attrs = blockAttrs(block, [
+    ['title', attrText(block, 'title')],
+    ['description', attrText(block, 'description')],
+    ['icon', icon],
+  ]);
+  const href = safeHref(url);
+  if (href === undefined) {
+    // Stored content must not put an unchecked scheme (javascript:, data:) in
+    // an href: the history panel renders this HTML via innerHTML.
+    return (
+      `<a data-link-card="${escapeAttr(url)}"${attrs} contenteditable="false">` +
+      `<strong>${escapeHtml(title)}</strong><span>${escapeHtml(
+        description,
+      )}</span></a>`
+    );
+  }
   return (
     `<a data-link-card="${escapeAttr(url)}" data-href="${escapeAttr(
       url,
-    )}"${blockAttrs(block, [
-      ['title', attrText(block, 'title')],
-      ['description', attrText(block, 'description')],
-      ['icon', icon],
-    ])} href="${escapeAttr(url)}" contenteditable="false">` +
+    )}"${attrs} href="${escapeAttr(href)}" contenteditable="false">` +
     `<strong>${escapeHtml(title)}</strong><span>${escapeHtml(
       description,
     )}</span></a>`

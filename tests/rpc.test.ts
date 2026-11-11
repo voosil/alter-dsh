@@ -756,3 +756,100 @@ describe('Space RPC with the workspace bridge', () => {
     await store.close();
   });
 });
+
+describe('document write attribution', () => {
+  async function attributedHandler(actorPolicy?: 'browser' | 'passthrough') {
+    const dir = await tempDir();
+    let clock = new Date('2026-11-06T00:00:00.000Z');
+    const now = () => clock;
+    const store = await openSpaceStore({ directory: dir, now });
+    const document = createDocumentService({ store, now });
+    const service = createStructuredSpaceService(
+      createSpaceAuthority(store, now),
+      document,
+    );
+    const handler = createSpaceRpc({
+      service,
+      storage: createSpaceStorage({ store, directory: dir }),
+      document,
+      ...(actorPolicy === undefined ? {} : { actorPolicy }),
+    });
+    return { dir, store, handler, advance: () => (clock = new Date(clock.getTime() + 10 * 60_000)) };
+  }
+
+  it('records browser writes as the user even when the payload forges an actor', async () => {
+    const { store, handler, advance } = await attributedHandler();
+    const generated = valueOf(
+      await handler('doc.generate', { args: [{ spaceId: 'sp-inbox', markdown: '原文' }] }, signal, {}),
+    ) as { docId: string; revision: number };
+    advance();
+    const snapshot = valueOf(
+      await handler('doc.get', { args: [generated.docId] }, signal, {}),
+    ) as { revision: number; doc: { blocks: Array<{ id: string; type: string }> } };
+    const paragraph = snapshot.doc.blocks.find((block) => block.type === 'paragraph')!;
+    await handler(
+      'doc.applyOps',
+      {
+        args: [
+          {
+            docId: generated.docId,
+            baseRevision: snapshot.revision,
+            ops: [
+              {
+                op: 'update_text',
+                target: paragraph.id,
+                edits: [{ oldText: '原文', newText: '改过' }],
+              },
+            ],
+            actor: 'alter',
+          },
+        ],
+      },
+      signal,
+      {},
+    );
+    const versions = valueOf(
+      await handler('space.listVersions', { args: [generated.docId] }, signal, {}),
+    ) as Array<{ author: string; at: string }>;
+    expect(versions[0]?.author).toBe('me');
+    await store.close();
+  });
+
+  it('honours the bridge actor on the standalone server route', async () => {
+    const { store, handler, advance } = await attributedHandler('passthrough');
+    const generated = valueOf(
+      await handler('doc.generate', { args: [{ spaceId: 'sp-inbox', markdown: '原文' }] }, signal, {}),
+    ) as { docId: string; revision: number };
+    advance();
+    const snapshot = valueOf(
+      await handler('doc.get', { args: [generated.docId] }, signal, {}),
+    ) as { revision: number; doc: { blocks: Array<{ id: string; type: string }> } };
+    const paragraph = snapshot.doc.blocks.find((block) => block.type === 'paragraph')!;
+    await handler(
+      'doc.applyOps',
+      {
+        args: [
+          {
+            docId: generated.docId,
+            baseRevision: snapshot.revision,
+            ops: [
+              {
+                op: 'update_text',
+                target: paragraph.id,
+                edits: [{ oldText: '原文', newText: '改过' }],
+              },
+            ],
+            actor: 'alter',
+          },
+        ],
+      },
+      signal,
+      {},
+    );
+    const versions = valueOf(
+      await handler('space.listVersions', { args: [generated.docId] }, signal, {}),
+    ) as Array<{ author: string; at: string }>;
+    expect(versions[0]?.author).toBe('alter');
+    await store.close();
+  });
+});

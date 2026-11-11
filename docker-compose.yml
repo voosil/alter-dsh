@@ -1,0 +1,37 @@
+# Self-hosted Space server.
+#
+# 1. Copy `.env.example` to `.env` and set `SPACE_TOKENS`.
+# 2. `docker compose up -d --build`
+# 3. Point the plugin's server settings at this container's URL and token.
+#
+# The published port defaults to loopback. For use across devices, either put
+# the container on a private network (Tailscale/WireGuard) or bind it to the
+# private interface only; public exposure must go through a TLS reverse proxy.
+
+services:
+  space:
+    build: .
+    image: alter-dsh-space-server:local
+    restart: unless-stopped
+    environment:
+      SPACE_DATA_DIR: /data
+      SPACE_HOST: 0.0.0.0
+      SPACE_PORT: "8787"
+      SPACE_TOKENS: ${SPACE_TOKENS:?set SPACE_TOKENS in .env}
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - space-data:/data
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:8787/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+volumes:
+  space-data: {}

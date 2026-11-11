@@ -13,8 +13,14 @@
 import { createElement, useEffect } from 'react';
 import { Orbit } from 'lucide-react';
 import { attachDocumentClient } from './document/client-access';
-import { createSpaceClient, createSpaceDocumentClient } from './space-client';
+import {
+  createSpaceClient,
+  createSpaceDocumentClient,
+  createSpaceSettingsClient,
+  createSpaceMigrationClient,
+} from './space-client';
 import { createSpaceStorageClient } from './storage-client';
+import { createReloadContinuity } from './reload-continuity';
 import { createSpaceRouter } from './router.js';
 import { SpaceShell } from './space-shell';
 import { DIRECTORY_PICKER_UNAVAILABLE } from './native-directory-field';
@@ -31,7 +37,7 @@ const dictionaries = {
   en: { panel: 'Space' },
 };
 
-function SpacePanel({ service, storage, router, pickDirectory }) {
+function SpacePanel({ service, storage, settings, migration, router, pickDirectory }) {
   useEffect(() => {
     const tag = document.createElement('style');
     tag.dataset.plugin = '@alter-dsh/space';
@@ -46,7 +52,14 @@ function SpacePanel({ service, storage, router, pickDirectory }) {
   return createElement(
     'div',
     { className: 'alter-space-host' },
-    createElement(SpaceShell, { service, storage, router, pickDirectory }),
+    createElement(SpaceShell, {
+      service,
+      storage,
+      settings,
+      migration,
+      router,
+      pickDirectory,
+    }),
   );
 }
 
@@ -59,8 +72,16 @@ function SpacePanel({ service, storage, router, pickDirectory }) {
  * a dedicated error code lets the field fall back to the built-in browser.
  * @param ctx - the client plugin context.
  */
-function createHostDirectoryPicker(ctx) {
+function createHostDirectoryPicker(ctx, settings) {
   return async () => {
+    // Server mode lists the server's filesystem; the host's native picker
+    // would return a local path with no meaning there.
+    const snapshot = await settings.get().catch(() => null);
+    if (snapshot?.mode === 'server') {
+      const error = new Error('服务端模式使用远端目录浏览或手工输入');
+      error.code = DIRECTORY_PICKER_UNAVAILABLE;
+      throw error;
+    }
     const ui =
       typeof ctx.get === 'function' ? ctx.get('uiWorkspace') : undefined;
     if (ui === undefined || typeof ui.pickDirectory !== 'function') {
@@ -83,7 +104,7 @@ function SpaceIcon({ size = 18 }) {
   });
 }
 
-export const inject = ['slots', 'locale', 'connection'];
+export const inject = ['slots', 'locale', 'connection', 'layout'];
 
 /**
  * Register the Space panel and its sidebar entry.
@@ -96,13 +117,20 @@ export function apply(ctx) {
     createSpaceDocumentClient(rpc),
   );
   const storage = createSpaceStorageClient(rpc);
+  const settings = createSpaceSettingsClient(rpc);
+  const migration = createSpaceMigrationClient(rpc);
   const router = createSpaceRouter();
-  const pickDirectory = createHostDirectoryPicker(ctx);
+  // DSH replaces this module in place when client.js is rebuilt; the page
+  // record keeps the reader's panel and route across that replacement.
+  const continuity = createReloadContinuity(ctx.layout, ctx.slots, PANEL_ID);
+  const pickDirectory = createHostDirectoryPicker(ctx, settings);
 
   function SpaceView() {
     return createElement(SpacePanel, {
       service,
       storage,
+      settings,
+      migration,
       router,
       pickDirectory,
     });
@@ -112,11 +140,23 @@ export function apply(ctx) {
     () => ctx.locale.register(NS, dictionaries),
     'alter-space: dictionaries',
   );
+  ctx.effect(
+    () => () => continuity.dispose(),
+    'alter-space: reload continuity',
+  );
   const t = ctx.locale.bind(NS);
 
-  ctx.slots.inject('main', () =>
-    ctx.slots.register({ name: 'main', key: PANEL_ID }, SpaceView),
-  );
+  ctx.slots.inject('main', () => {
+    const dispose = ctx.slots.register(
+      { name: 'main', key: PANEL_ID },
+      SpaceView,
+    );
+    // Selecting the panel needs its entry registered. A replacement that
+    // interrupted the reader is restored here, before the layout settles on
+    // the Conversation for the rest of the session.
+    continuity.restore();
+    return dispose;
+  });
 
   ctx.slots.inject('sidebar.panellist', () =>
     ctx.slots.register(

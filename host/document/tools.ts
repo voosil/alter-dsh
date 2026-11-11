@@ -8,7 +8,6 @@
  * @module @alter-dsh/space/document/tools
  */
 import type { JsonValue } from './types.js';
-import type { DocumentAssets } from './assets.js';
 import type {
   ApplyOperationsInput,
   DocumentService,
@@ -68,10 +67,44 @@ export interface ToolsLike {
   ): () => void;
 }
 
+/**
+ * The subset of the Host document service the Agent tools call. A remote
+ * authority adapter implements exactly this surface, so the same tools run in
+ * both authority modes without knowing where the data lives.
+ */
+export type DocumentToolApi = Pick<
+  DocumentService,
+  | 'outline'
+  | 'read'
+  | 'search'
+  | 'applyOperations'
+  | 'generate'
+  | 'undo'
+  | 'getObject'
+  | 'updateObject'
+>;
+
+/** Public fields of one imported asset the Agent tools consume. */
+export interface DocumentToolAssetRecord {
+  id: string;
+  mime: string;
+  bytes: number;
+  name?: string;
+}
+
+/** The subset of the asset store the Agent tools call. */
+export interface DocumentToolAssetApi {
+  import(input: {
+    data: Uint8Array;
+    mime: string;
+    name?: string;
+  }): Promise<DocumentToolAssetRecord>;
+}
+
 export interface DocumentToolDeps {
-  service: DocumentService;
+  service: DocumentToolApi;
   /** Optional asset store; absent disables space_asset_import. */
-  assets?: DocumentAssets;
+  assets?: DocumentToolAssetApi;
 }
 
 function view(value: unknown): JsonValue {
@@ -336,7 +369,7 @@ function componentCatalogEntry(
 
 /** Read one stored object through the document service. */
 async function readObject(
-  service: DocumentService,
+  service: DocumentToolApi,
   objectId: string,
 ): Promise<Record<string, unknown>> {
   const record = await service.getObject(objectId);

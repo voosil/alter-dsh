@@ -423,3 +423,150 @@
     padding: 0 18px;
   }
 }
+
+/* Server settings: mode switch, text fields and link/queue status. */
+.modeSwitch {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: calc(var(--alter-radius-control) + 2px);
+  background: var(--alter-surface-hover);
+}
+
+.modeButton {
+  appearance: none;
+  border: 0;
+  border-radius: var(--alter-radius-control);
+  background: transparent;
+  color: var(--alter-text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--alter-font-body-sm);
+  line-height: var(--alter-line-ui);
+  padding: 6px 12px;
+}
+
+.modeButton:hover:not(:disabled):not(.modeButtonActive) {
+  color: var(--alter-text);
+}
+
+.modeButtonActive {
+  background: var(--alter-surface);
+  box-shadow: 0 1px 2px rgb(26 24 23 / 8%);
+  color: var(--alter-text);
+}
+
+.modeButton:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.modeButton:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: 2px;
+}
+
+.textRow {
+  align-items: flex-start;
+}
+
+.textRow > .rowLabel {
+  padding-top: 6px;
+}
+
+.textControl {
+  flex: 1;
+  min-width: 0;
+  justify-content: flex-end;
+}
+
+.textInput {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--alter-control-border);
+  border-radius: var(--alter-radius-control);
+  background: var(--alter-surface);
+  color: var(--alter-text);
+  font: inherit;
+  font-size: var(--alter-font-body-sm);
+  line-height: var(--alter-line-ui);
+}
+
+.textInput::placeholder {
+  color: var(--alter-text-faint);
+}
+
+.textInput:focus-visible {
+  outline: none;
+  border-color: var(--alter-accent);
+  box-shadow: 0 0 0 2px var(--alter-accent-soft);
+}
+
+.textInput:disabled {
+  opacity: 0.6;
+}
+
+.statusLine {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--alter-text-secondary);
+  font-size: var(--alter-font-body-sm);
+  line-height: var(--alter-line-ui);
+}
+
+.statusDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.statusLocal {
+  color: var(--alter-text-muted);
+}
+
+.statusPending {
+  color: var(--alter-text-secondary);
+}
+
+.statusOnline {
+  color: var(--alter-diff-add-text);
+}
+
+.statusOffline {
+  color: var(--alter-danger);
+}
+
+.statusError {
+  color: var(--alter-danger-strong);
+}
+
+.noticeBar {
+  margin: 10px 0 0;
+  color: var(--alter-diff-add-text);
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+}
+
+.sectionBody .actions {
+  margin-top: 16px;
+}
+
+/* Migration progress: a thin read-only bar under the state row. */
+.progress {
+  height: 6px;
+  margin: 10px 0 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--alter-surface-hover);
+}
+
+.progressBar {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--alter-accent);
+  transition: width var(--alter-duration-fast) ease;
+}

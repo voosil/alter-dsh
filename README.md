@@ -45,6 +45,25 @@ pnpm test       # 仅 vitest
 
 `client.js` 与 `lib/` 是生成产物，不入版本库；安装或更新前必须先构建。
 
+## 服务端模式（自部署）
+
+默认是本地模式（数据在 `~/.dsh/data/space`）。需要多设备共享时，把 Space 服务端部署到自己的机器：
+
+```sh
+cp .env.example .env          # 设置 SPACE_TOKENS，每台设备一个 label=token
+docker compose up -d --build  # 数据卷 /data，服务监听 8787
+curl http://127.0.0.1:8787/healthz
+```
+
+- 私网：端口只绑 loopback，用 Tailscale 或反向代理提供 HTTPS；公网必须走 TLS 反代，不要直接暴露 8787。
+- 打开 空间 → 设置 → 服务器，填 URL + token，测试连接后保存并切换；也可让 Agent 通过
+  `space_settings` 工具在对话中完成（敏感写入需审批，token 不回显）。
+- 已有本地数据：设置页「数据迁移」执行本地→服务端（先备份，支持覆盖确认与仅迁移最新版本）；
+  反向迁移同理。没有 DSH 环境时可用
+  `SPACE_SERVER_URL=... SPACE_TOKEN=... pnpm build:host && pnpm migrate --direction to-server`
+  （CLI 依赖 `lib/` 构建产物，首次使用先构建 Host 面）。
+- 服务端模式下空间不映射本机 DSH 工作区；断网时读缓存并排队文档写入，冲突以服务端 revision 为准。
+
 ## 安装到当前 DSH profile
 
 用 Harness 的 `plugin_manager` 安装本目录（绝对路径）。若 profile 里还装着旧的 `@alter/dsh-space`，先移除：
@@ -79,7 +98,7 @@ client-HMR 自动替换。
 - `node:sqlite` 同步 API：写操作在 Host 事件循环上同步执行；只写变更行，代价可控。
 - Agent 能力：hub 的「事项 / 旅程 / 观察」仍是未实现占位；协作者是产品级数据，不驱动真实 DSH Agent
   运行时；Workbench 右侧面板不装配。
-- 工作区映射：只有主目录映射工作区；归档空间的工作区仍留在 DSH 侧栏。
+- 工作区映射：只有主目录映射工作区；归档空间的工作区仍留在 DSH 侧栏；服务端模式不映射本机工作区。
 - 备份存活范围：每日数据库快照与资产归档都在数据目录内，防误删/误改/损坏，不防磁盘故障。
 
 完整边界、RPO/RTO 与存储/恢复语义只在

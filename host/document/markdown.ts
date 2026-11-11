@@ -1001,7 +1001,26 @@ function parseParagraph(
   };
 }
 
+/** Guard against runaway nesting (quotes/callouts/lists) overflowing the stack. */
+const MAX_MARKDOWN_NESTING = 50;
+let activeParseDepth = 0;
+
 function parseBlocks(lines: readonly SourceLine[], ctx: MarkdownParseOptions): BlockNode[] {
+  activeParseDepth += 1;
+  try {
+    if (activeParseDepth > MAX_MARKDOWN_NESTING)
+      fail(
+        'parse/unsupported',
+        lines[0]?.no ?? 1,
+        `Markdown 嵌套超过 ${MAX_MARKDOWN_NESTING} 层`,
+      );
+    return parseBlocksInner(lines, ctx);
+  } finally {
+    activeParseDepth -= 1;
+  }
+}
+
+function parseBlocksInner(lines: readonly SourceLine[], ctx: MarkdownParseOptions): BlockNode[] {
   const blocks: BlockNode[] = [];
   let index = 0;
   while (index < lines.length) {
