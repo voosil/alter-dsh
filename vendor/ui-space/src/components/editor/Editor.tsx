@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ClipboardEvent,
@@ -276,16 +277,50 @@ function formatBytes(size: number) {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/** In-order character match, so "/tdo" still finds the "todo" keyword. */
+function isSubsequence(query: string, text: string) {
+  let index = 0;
+  for (const char of text) {
+    if (char === query[index]) index += 1;
+    if (index === query.length) return true;
+  }
+  return false;
+}
+
+/**
+ * Rank one command for a normalized query: exact id/label/keyword match first,
+ * then prefix, then substring and finally subsequence. `null` drops the item.
+ */
+function commandMatchRank(command: SlashCommand, query: string) {
+  let best: number | null = null;
+  for (const candidate of [command.id, command.label, ...command.keywords]) {
+    const text = candidate.toLowerCase();
+    let rank: number | null = null;
+    if (text === query) rank = 0;
+    else if (text.startsWith(query)) rank = 1;
+    else if (text.includes(query)) rank = 2;
+    else if (isSubsequence(query, text)) rank = 3;
+    if (rank !== null && (best === null || rank < best)) best = rank;
+    if (best === 0) break;
+  }
+  return best;
+}
+
 function filterCommands(commands: SlashCommand[], query: string) {
   const normalized = query.trim().toLowerCase();
   if (!normalized) return commands;
-  return commands.filter(
-    (command) =>
-      command.label.toLowerCase().includes(normalized) ||
-      command.keywords.some((keyword) =>
-        keyword.toLowerCase().includes(normalized),
-      ),
-  );
+  return commands
+    .map((command, index) => ({
+      command,
+      index,
+      rank: commandMatchRank(command, normalized),
+    }))
+    .filter(
+      (entry): entry is { command: SlashCommand; index: number; rank: number } =>
+        entry.rank !== null,
+    )
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .map((entry) => entry.command);
 }
 
 function buildSlashCommands(line: HTMLElement): SlashCommand[] {
@@ -470,6 +505,9 @@ export function Editor({
   const initialDocRef = useRef<string | null>(null);
   const lastRevisionRef = useRef(externalRevision);
   const composingRef = useRef(false);
+  // The command line whose menu was open when an IME composition started, so
+  // the menu can come back once the composition has been committed.
+  const composingSlashLineRef = useRef<HTMLElement | null>(null);
   const [slash, setSlash] = useState<SlashState | null>(null);
   const [toolbar, setToolbar] = useState<ToolbarState | null>(null);
   const [blockAnchor, setBlockAnchor] = useState<HTMLElement | null>(null);
@@ -669,15 +707,25 @@ export function Editor({
   function handleCompositionStart() {
     composingRef.current = true;
     onCompositionChangeRef.current?.(true);
+    composingSlashLineRef.current = slash?.line ?? null;
     clearFloatingUi();
   }
 
   function handleCompositionEnd() {
     composingRef.current = false;
     onCompositionChangeRef.current?.(false);
+    const slashLine = composingSlashLineRef.current;
+    composingSlashLineRef.current = null;
     // Some browsers do not emit a trailing non-composing input event; finish
     // the composition with one final change notification.
     notifyChange();
+    if (!slashLine || !slashLine.isConnected) return;
+    // The IME committed text without any keydown flowing through the editor,
+    // so the suppressed menu has to be restored from the line itself.
+    const caretLine = lineElement(window.getSelection()?.anchorNode ?? null);
+    const text = slashLine.textContent ?? '';
+    if (caretLine === slashLine && text.startsWith('/'))
+      openSlash(slashLine, text.slice(1));
   }
 
   useEffect(() => {
@@ -913,6 +961,40 @@ export function Editor({
     active?.scrollIntoView({ block: 'nearest' });
   }, [slash]);
 
+  // Pin the rendered menu to its command line: to the line start horizontally,
+  // below when it fits and flipped above otherwise, always 12px inside the
+  // viewport. Runs after every slash change so a filtered (shorter) menu is
+  // re-measured instead of using a fixed-height guess.
+  useLayoutEffect(() => {
+    const menu = slashMenuRef.current;
+    const line = slash?.line;
+    if (!menu || !line || !line.isConnected) return;
+    const lineRect = line.getBoundingClientRect();
+    const menuRect = menu.getBoundingClientRect();
+    const margin = 12;
+    const gap = 4;
+    const width = menuRect.width || 290;
+    const height = menuRect.height;
+    const left = Math.min(
+      Math.max(margin, lineRect.left),
+      Math.max(margin, window.innerWidth - width - margin),
+    );
+    let top = lineRect.bottom + gap;
+    if (top + height > window.innerHeight - margin) {
+      const flipped = lineRect.top - gap - height;
+      top =
+        flipped >= margin
+          ? flipped
+          : Math.max(margin, window.innerHeight - height - margin);
+    }
+    top = Math.max(margin, top);
+    if (Math.abs(top - slash.top) < 0.5 && Math.abs(left - slash.left) < 0.5)
+      return;
+    setSlash((current) =>
+      current && current.line === line ? { ...current, top, left } : current,
+    );
+  }, [slash]);
+
   useEffect(() => {
     return () => {
       if (linkTimerRef.current) window.clearTimeout(linkTimerRef.current);
@@ -1082,6 +1164,11 @@ export function Editor({
     setSlash(null);
   }
 
+  /** Open the command menu for one line; placement is measured after render. */
+  function openSlash(line: HTMLElement, query: string) {
+    setSlash({ line, query, top: 0, left: 0, index: 0 });
+  }
+
   function pickFile(kind: 'image' | 'file', line: HTMLElement) {
     line.innerHTML = '';
     placeCaretAtEnd(line);
@@ -1100,7 +1187,7 @@ export function Editor({
   }
 
   function executeSlash(command: SlashCommand) {
-    if (!slash) return;
+    if (!slash || composingRef.current) return;
     const line = slash.line;
     setSlash(null);
     if (!line.isConnected) return;
@@ -1326,20 +1413,7 @@ export function Editor({
         event.preventDefault();
         document.execCommand('insertText', false, '/');
         const current = lineElement(window.getSelection()?.anchorNode ?? null);
-        if (current) {
-          const rect = current.getBoundingClientRect();
-          const width = 290;
-          const height = 430;
-          const left = Math.min(
-            Math.max(12, rect.left),
-            window.innerWidth - width - 12,
-          );
-          const top =
-            rect.bottom + 4 + height > window.innerHeight
-              ? Math.max(12, rect.top - height - 4)
-              : rect.bottom + 4;
-          setSlash({ line: current, query: '', top, left, index: 0 });
-        }
+        if (current) openSlash(current, '');
         return;
       }
     }
