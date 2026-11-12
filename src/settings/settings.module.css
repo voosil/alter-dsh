@@ -508,6 +508,45 @@
   opacity: 0.6;
 }
 
+/* Pre-configuration hint: settings that are saved for a later migration but do
+ * not change the current authority. */
+.rowHint {
+  margin: 2px 0 6px;
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+}
+
+/* Explicit discard acknowledgement for a real authority-mode switch. */
+.confirmRow {
+  align-items: flex-start;
+  padding-top: 4px;
+}
+
+.confirmLabel {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--alter-text-secondary);
+  cursor: pointer;
+  font-size: var(--alter-font-body-sm);
+  line-height: var(--alter-line-ui);
+}
+
+.confirmCheckbox {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  margin: 2px 0 0;
+  accent-color: var(--alter-accent);
+  cursor: pointer;
+}
+
+.confirmCheckbox:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
 .statusLine {
   display: inline-flex;
   align-items: center;

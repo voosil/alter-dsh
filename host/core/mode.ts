@@ -47,6 +47,11 @@ export class SpaceModeError extends Error {
   }
 }
 
+/** Human-readable message for one failure. */
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /** Whether an error means the saved server configuration cannot be used. */
 function classify(error: unknown): 'config' | 'transient' {
   if (error instanceof ConnectionSettingsError) return 'config';
@@ -89,6 +94,12 @@ export class SpaceModeController {
    * server mode and opens a remote backend that reports `offline`, so queued
    * writes and the chosen authority survive a reboot. Only a configuration
    * error falls back to local mode.
+   *
+   * Opening the remote backend does not probe the server, so a pure network
+   * outage never fails this call and therefore never changes the mode. If even
+   * the fallback cannot be opened (corrupt or unwritable local data
+   * directory), activation degrades to the local authority and persists that
+   * choice instead of rejecting plugin activation forever.
    */
   async open(): Promise<SpaceBackend> {
     const loaded = await this.options.settings.load();
@@ -96,7 +107,7 @@ export class SpaceModeController {
       return await this.apply(loaded);
     } catch (error) {
       const kind = classify(error);
-      const reason = error instanceof Error ? error.message : String(error);
+      const reason = messageOf(error);
       this.options.logger?.warn?.(
         `[alter-dsh-space] 配置的后端无法启动（${kind}）：${reason}`,
       );
@@ -110,8 +121,42 @@ export class SpaceModeController {
       } else {
         this.degradedValue = { reason, transient: true };
       }
-      return this.apply(await this.options.settings.load());
+      const fallback = await this.options.settings.load();
+      try {
+        return await this.apply(fallback);
+      } catch (secondError) {
+        if (fallback.settings.mode === 'local') {
+          // Local was already the fallback target and it cannot open either:
+          // there is no authority left to activate.
+          throw secondError;
+        }
+        // The configured server authority cannot be opened on this machine
+        // (for example an unusable cache directory). Retrying it next boot
+        // would brick the plugin, so open the local authority for this boot
+        // and persist that decision for the next one.
+        const secondReason = messageOf(secondError);
+        this.options.logger?.warn?.(
+          `[alter-dsh-space] 服务端后端仍无法启动，改用本地模式：${secondReason}`,
+        );
+        this.degradedValue = {
+          reason: `${reason}；改用本地模式：${secondReason}`,
+          transient: false,
+        };
+        await this.options.settings
+          .save({ mode: 'local' })
+          .catch(() => undefined);
+        return this.apply(this.localFallbackSettings());
+      }
     }
+  }
+
+  /** A synthesized local settings pair, used when the persisted file cannot be trusted. */
+  private localFallbackSettings(): LoadedConnectionSettings {
+    const at = (this.options.now ?? (() => new Date()))().toISOString();
+    return {
+      settings: { mode: 'local', serverUrl: null, updatedAt: at },
+      token: undefined,
+    };
   }
 
   /** Why the last {@link open} fell back, when it did. */

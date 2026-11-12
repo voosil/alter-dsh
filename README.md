@@ -9,8 +9,7 @@
 - 文档：块编辑器、行内评论、版本历史与比较、归档/恢复、回收站
 - 随想：列表、输入、编辑、移动、删除
 - 空间详情（hub）：概览（总结 / 活动热力图 / 用量）、活动、配置与插件
-- 设置页：存储与备份、已归档空间恢复、协作者名单、快捷键与关于；协作者创建在空间详情的「配置」页
-- 搜索、空间归档页、恢复流程
+- 设置页：存储与备份、已归档空间恢复、协作者名单、快捷键与关于；协作者创建在空间详情的「配置」页；另有搜索、归档页与恢复流程
 - 空间 ↔ DSH 工作区：新建空间时把**主工作目录**（`directories[0]`，其余为参考目录）映射为一个
   DSH 原生工作区，标题为 `🪐 <空间名>`；改名同步标题，删除/归档只做非破坏性处理
 - 工作目录选择接入宿主选择器（桌面=系统文件夹对话框，Web=DSH 目录浏览）；宿主无此能力时回退内置浏览器
@@ -47,22 +46,31 @@ pnpm test       # 分层测试（unit + integration + ui）
 
 ## 服务端模式（自部署）
 
-默认是本地模式（数据在 `~/.dsh/data/space`）。需要多设备共享时，把 Space 服务端部署到自己的机器：
+默认本地模式（数据在 `~/.dsh/data/space`）。多设备共享时把 Space 服务端部署到自己的机器：
 
 ```sh
-cp .env.example .env          # 设置 SPACE_TOKENS，每台设备一个 label=token
-docker compose up -d --build  # 数据卷 /data，服务监听 8787
+cp .env.example .env          # 设置 SPACE_TOKENS；compose 自动读取同目录 .env
+docker compose up -d --build  # 数据卷 /data，容器内监听 0.0.0.0:8787
 curl http://127.0.0.1:8787/healthz
 ```
 
-- 私网：端口只绑 loopback，用 Tailscale 或反向代理提供 HTTPS；公网必须走 TLS 反代，不要直接暴露 8787。
-- 打开 空间 → 设置 → 服务器，填 URL + token，测试连接后保存并切换；也可让 Agent 通过
-  `space_settings` 工具在对话中完成（敏感写入需审批，token 不回显）。
-- 已有本地数据：设置页「数据迁移」执行本地→服务端（先备份，支持覆盖确认与仅迁移最新版本）；
-  反向迁移同理。没有 DSH 环境时可用
-  `SPACE_SERVER_URL=... SPACE_TOKEN=... pnpm build:host && pnpm migrate --direction to-server`
-  （CLI 依赖 `lib/` 构建产物，首次使用先构建 Host 面）。
-- 服务端模式下空间不映射本机 DSH 工作区；断网时读缓存并排队文档写入，冲突以服务端 revision 为准。
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `SPACE_TOKENS` | 必填 | 逗号分隔 `label=token`；每设备一个，≥16 字符，占位值被拒绝 |
+| `SPACE_DATA_DIR` / `SPACE_SNAPSHOTS` | `/data` / `true` | 数据目录（库/资产/快照，须挂持久卷）与每日快照开关 |
+| `SPACE_HOST` / `SPACE_PORT` | `127.0.0.1` / `8787` | 监听地址/端口；镜像与 compose 内为 `0.0.0.0` |
+
+- 网络：端口默认只绑 loopback；跨设备用 Tailscale 或 TLS 反代，公网不要直接暴露 8787；容器内监听
+  `0.0.0.0`，启动日志里的 URL 不是客户端地址，客户端要填宿主机/反代地址。
+- 绑定宿主机目录到 `/data` 时须对容器内 `node`（uid 1000）可写：`sudo chown -R 1000:1000 <dir>`，或改用命名卷。
+- 接入：设置 → 服务器填 URL + token 并「测试连接」；保存地址/token 不切换数据权威。首次切换须走
+  「数据迁移 → 本地 → 服务端」，或显式确认放弃本地数据后切换；直接切换会被拒绝，不会静默换库。
+- CLI 迁移（无 DSH 环境）：先 `pnpm build:host`，再单独运行
+  `SPACE_SERVER_URL=... SPACE_TOKEN=... pnpm migrate --direction to-server`（环境变量只加在 `pnpm migrate` 上）。
+- 备份/恢复与升级/回滚：每日快照在 `<dataDir>/backups/`，定期复制到外部；升级前先备份，随后
+  `docker compose build --pull && docker compose up -d`；回滚用旧镜像，库结构已升级时须同时恢复升级前快照。
+  完整 runbook 见 `.agents/skills/space-server-deploy/SKILL.md`（仓库内），恢复语义见
+  [系统规范](docs/specs/system-architecture.md) §4。
 
 ## 安装到当前 DSH profile
 
@@ -91,7 +99,7 @@ client-HMR 自动替换。
 ## 已知边界
 
 - 单 Host 实例写入；多 Host 进程由 SQLite 写锁串行（last-writer-wins）。
-- 无跨窗口实时推送：其他窗口在刷新/重新读取后看到最新数据。
+- 服务端模式依赖在线：断网时读缓存并排队文档写入，冲突以服务端 revision 为准；无跨窗口推送（刷新/重新读取后可见）。
 - `node:sqlite` 同步 API：写操作在 Host 事件循环上同步执行；只写变更行，代价可控。
 - Agent 能力：hub 的「事项 / 旅程 / 观察」仍是未实现占位；协作者是产品级数据，不驱动真实 DSH Agent
   运行时；Workbench 右侧面板不装配。

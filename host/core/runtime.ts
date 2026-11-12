@@ -10,7 +10,11 @@
  */
 import type { SpaceService } from '@alter/protocol';
 import { createSpaceAuthority } from '../authority/compose.js';
-import { createSnapshotScheduler } from '../persistence/backup.js';
+import {
+  createSnapshotScheduler,
+  forceDailySnapshot,
+  type SnapshotOutcome,
+} from '../persistence/backup.js';
 import {
   createDocumentAssets,
   type DocumentAssets,
@@ -40,6 +44,13 @@ export interface LocalSpaceRuntime {
   readonly document: DocumentService;
   readonly assets: DocumentAssets;
   readonly storage: SpaceStorageApi;
+  /**
+   * Snapshot the current data even when today already has one.
+   *
+   * Used after a migration replaces the database: the target needs an initial
+   * snapshot of the new data, but the day may already hold one of the old data.
+   */
+  snapshotNow(): Promise<SnapshotOutcome>;
   /** Close the snapshot scheduler and the database connection. */
   close(): Promise<void>;
 }
@@ -107,6 +118,10 @@ export async function createLocalSpaceRuntime(
       document,
       assets,
       storage,
+      snapshotNow() {
+        if (snapshots !== undefined) return snapshots.forceRunNow();
+        return forceDailySnapshot({ store, directory, now, logger });
+      },
       close() {
         closed ??= (async () => {
           await snapshots?.dispose();

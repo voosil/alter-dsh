@@ -34,12 +34,12 @@ import {
   createMigrationService,
 } from '../control/migration/service.js';
 import { createMigrationRpcHandler } from '../control/migration/rpc.js';
+import { sweepMigrationStaging } from '../control/migration/staging.js';
 import { isReadEndpoint } from '../authority/endpoints.js';
 import {
   RPC_ROUTE_PATH,
   createConnectionFetchRoute,
-  isMigrationEndpoint,
-  isPluginControlEndpoint,
+  type SpaceRpcHandler,
 } from '../authority/rpc.js';
 import type { SpaceStoreLogger } from '../persistence/store.js';
 import {
@@ -232,6 +232,109 @@ function createDocumentProxy(
   };
 }
 
+/** Admission barrier that drains in-flight writes around a migration freeze. */
+export interface SpaceRpcGate {
+  /** Admit one call, or refuse it because a migration froze the authority. */
+  admitCall(mutating: boolean): (() => void) | undefined;
+  /** Resolve once every admitted call has released. */
+  awaitDrain(): Promise<void>;
+}
+
+/**
+ * Build the in-flight/drain barrier used while a migration snapshots the
+ * authority.
+ *
+ * The lock check and the in-flight increment share one synchronous block on
+ * purpose: a call that observes an unlocked mode is counted before any freeze
+ * can start draining, so `awaitDrain` never misses a write that is about to
+ * run.
+ *
+ * @param isLocked - whether a migration currently freezes mutating calls.
+ */
+export function createSpaceRpcGate(isLocked: () => boolean): SpaceRpcGate {
+  let inFlight = 0;
+  const drainWaiters = new Set<() => void>();
+  return {
+    admitCall(mutating) {
+      if (mutating && isLocked()) return undefined;
+      inFlight += 1;
+      return () => {
+        inFlight -= 1;
+        if (inFlight !== 0) return;
+        for (const resolve of [...drainWaiters]) {
+          drainWaiters.delete(resolve);
+          resolve();
+        }
+      };
+    },
+    awaitDrain() {
+      return new Promise<void>((resolve) => {
+        if (inFlight === 0) resolve();
+        else drainWaiters.add(resolve);
+      });
+    },
+  };
+}
+
+/**
+ * Which plugin-owned handler serves an endpoint, if any.
+ *
+ * Prefix-based on purpose: unknown `settings.*` / `sync.*` / `migration.*`
+ * methods belong to the control plane too, so they fail with their own
+ * `settings/not-found` / migration error instead of being judged as business
+ * (write) endpoints and frozen or forwarded to a backend.
+ */
+export function controlPlaneOf(
+  endpoint: string,
+): 'migration' | 'settings' | undefined {
+  const group = endpoint.split('.')[0];
+  if (group === 'migration') return 'migration';
+  if (group === 'settings' || group === 'sync') return 'settings';
+  return undefined;
+}
+
+/** Dependencies for the plugin RPC dispatch. */
+export interface SpaceRpcDispatchOptions {
+  gate: SpaceRpcGate;
+  settingsHandler: SpaceRpcHandler;
+  migrationHandler: SpaceRpcHandler;
+  /** Active authority backend; resolved per call so mode switches apply live. */
+  backend: () => Pick<SpaceBackend, 'rpc'>;
+}
+
+/**
+ * Route one RPC call: control-plane endpoints always reach their own handler
+ * (they must work while the server is offline and while a migration freezes
+ * the authority), business reads stay available, and only mutating business
+ * calls are refused during a migration.
+ */
+export function createSpaceRpcDispatch(
+  options: SpaceRpcDispatchOptions,
+): SpaceRpcHandler {
+  return async (endpoint, payload, signal) => {
+    const control = controlPlaneOf(endpoint);
+    const release = options.gate.admitCall(
+      control === undefined && !isReadEndpoint(endpoint),
+    );
+    if (release === undefined)
+      return {
+        error: {
+          code: 'migration/read-only',
+          message: '迁移进行中，空间暂时只读；请等待迁移完成',
+        },
+      };
+    try {
+      if (control === 'migration')
+        return options.migrationHandler(endpoint, payload, signal, undefined);
+      if (control === 'settings')
+        return options.settingsHandler(endpoint, payload, signal, undefined);
+      return await options.backend().rpc(endpoint, payload, signal);
+    } finally {
+      release();
+    }
+  };
+}
+
 /**
  * Open the authority, register the RPC channel, and close everything when the
  * plugin unloads.
@@ -262,6 +365,10 @@ export async function apply(
     });
     const audit = createConnectionAudit(directory);
     await mode.open();
+    // A crashed or cancelled transfer leaves staging/backups under
+    // `<dataDir>/.migration/`; keeping the manual-recovery window clean must
+    // never block startup, so this is fire-and-forget.
+    void sweepMigrationStaging(directory).catch(() => undefined);
     const degraded = mode.degraded();
     if (degraded !== undefined) {
       // Configuration errors fall back to local (recorded for the user);
@@ -275,35 +382,10 @@ export async function apply(
     }
     // Freezing for a migration snapshot must wait for writes that already
     // passed the lock check; otherwise an acked write could commit after the
-    // snapshot and be lost on the target authority.
-    //
-    // The lock check and the in-flight increment share one synchronous block
-    // on purpose: a call that observes an unlocked mode is counted before any
-    // freeze can start draining, so `awaitDrain` never misses a write that is
-    // about to run.
-    let inFlight = 0;
-    const drainWaiters = new Set<() => void>();
-    /**
-     * Admit one call, or refuse it because a migration froze the authority.
-     * @returns a release function for an admitted call, `undefined` if frozen.
-     */
-    const admitCall = (mutating: boolean): (() => void) | undefined => {
-      if (mutating && mode.isMigrationLocked()) return undefined;
-      inFlight += 1;
-      return () => {
-        inFlight -= 1;
-        if (inFlight !== 0) return;
-        for (const resolve of [...drainWaiters]) {
-          drainWaiters.delete(resolve);
-          resolve();
-        }
-      };
-    };
-    const awaitDrain = (): Promise<void> =>
-      new Promise<void>((resolve) => {
-        if (inFlight === 0) resolve();
-        else drainWaiters.add(resolve);
-      });
+    // snapshot and be lost on the target authority. The gate owns both the
+    // lock check and the in-flight accounting, and it deliberately admits the
+    // control plane (settings/sync/migration) even while frozen.
+    const gate = createSpaceRpcGate(() => mode.isMigrationLocked());
 
     const migration = createMigrationService({
       directory,
@@ -311,7 +393,7 @@ export async function apply(
       mode,
       now,
       logger,
-      awaitDrain: () => awaitDrain(),
+      awaitDrain: () => gate.awaitDrain(),
     });
     const settingsHandler = createSettingsRpcHandler({
       settings,
@@ -347,6 +429,7 @@ export async function apply(
       const disposeSettings = registerAgentSettingsTool(tools, {
         settings,
         mode,
+        directory,
         audit,
         approval: () => approvalRef,
       });
@@ -446,25 +529,12 @@ export async function apply(
       attachWorkspaceRegistry(ctx);
     }
     const route = createConnectionFetchRoute(
-      async (endpoint, payload, signal) => {
-        const release = admitCall(!isReadEndpoint(endpoint));
-        if (release === undefined)
-          return {
-            error: {
-              code: 'migration/read-only',
-              message: '迁移进行中，空间暂时只读；请等待迁移完成',
-            },
-          };
-        try {
-          if (isMigrationEndpoint(endpoint))
-            return migrationHandler(endpoint, payload, signal, undefined);
-          if (isPluginControlEndpoint(endpoint))
-            return settingsHandler(endpoint, payload, signal, undefined);
-          return await mode.current().rpc(endpoint, payload, signal);
-        } finally {
-          release();
-        }
-      },
+      createSpaceRpcDispatch({
+        gate,
+        settingsHandler,
+        migrationHandler,
+        backend: () => mode.current(),
+      }),
     );
     const assetRoute = (request: Request) =>
       mode.current().fetchAsset(request);

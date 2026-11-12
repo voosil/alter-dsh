@@ -34,6 +34,31 @@ export class RemoteClientError extends Error {
   }
 }
 
+/**
+ * Map one non-OK HTTP status to the stable remote error code.
+ *
+ * Only a server that answers with a 5xx is treated as temporarily unavailable
+ * (retry later, keep the write queued). A 404/405/400 or any other 4xx means
+ * the request or the endpoint is wrong, which retrying cannot fix; that is a
+ * protocol/configuration error, not an offline link. 401 stays distinct so the
+ * settings surface can ask for a new token.
+ */
+export function remoteCodeForStatus(status: number): string {
+  if (status === 401) return 'remote/unauthorized';
+  if (status === 403) return 'remote/unauthorized';
+  if (status >= 500) return 'remote/unavailable';
+  return 'remote/protocol';
+}
+
+/** Human-readable detail for one HTTP failure. */
+function statusMessage(status: number): string {
+  const code = remoteCodeForStatus(status);
+  if (code === 'remote/unauthorized') return '服务端拒绝了 token';
+  if (code === 'remote/unavailable')
+    return `Space 服务端暂时不可用（HTTP ${String(status)}）`;
+  return `Space 服务端协议错误（HTTP ${String(status)}）`;
+}
+
 /** Options for one server connection. */
 export interface RemoteClientOptions {
   /** Normalized server base URL without trailing slash. */
@@ -101,7 +126,12 @@ export class RemoteSpaceClient {
   constructor(options: RemoteClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, '');
     if (!/^https?:\/\//.test(this.baseUrl))
-      throw new Error('服务器地址必须使用 http 或 https');
+      // A saved URL that cannot be spoken to is a configuration problem, not
+      // a transient link failure; the mode controller repairs settings for it.
+      throw new RemoteClientError(
+        'remote/protocol',
+        '服务器地址必须使用 http 或 https',
+      );
     this.token = options.token;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_REMOTE_TIMEOUT_MS;
@@ -152,13 +182,26 @@ export class RemoteSpaceClient {
         }`,
       );
     }
-    if (!response.ok)
+    if (!response.ok) {
+      const code = remoteCodeForStatus(response.status);
       throw new RemoteClientError(
-        'remote/unavailable',
+        code,
         `服务端版本探测失败（HTTP ${String(response.status)}）`,
         response.status,
       );
-    const info = (await response.json()) as Partial<SpaceServerInfo>;
+    }
+    let info: Partial<SpaceServerInfo>;
+    try {
+      info = (await response.json()) as Partial<SpaceServerInfo>;
+    } catch {
+      // A public /version route that does not answer JSON is not a Space
+      // server (proxy page, wrong service); retrying cannot fix it.
+      throw new RemoteClientError(
+        'remote/protocol',
+        '目标地址的 /version 不是合法的 JSON，可能不是 Space 服务端',
+        response.status,
+      );
+    }
     if (
       info.product !== '@alter-dsh/space' ||
       typeof info.protocolVersion !== 'number'
@@ -204,19 +247,28 @@ export class RemoteSpaceClient {
       signal,
     );
     if (!response.ok) {
-      if (response.status === 401)
-        throw new RemoteClientError(
-          'remote/unauthorized',
-          '服务端拒绝了 token',
-          response.status,
-        );
+      const code = remoteCodeForStatus(response.status);
       throw new RemoteClientError(
-        'remote/unavailable',
-        `Space 服务端返回 HTTP ${String(response.status)}`,
+        code,
+        statusMessage(response.status),
         response.status,
       );
     }
-    const envelope = (await response.json()) as RpcEnvelope;
+    let envelope: RpcEnvelope;
+    try {
+      envelope = (await response.json()) as RpcEnvelope;
+    } catch {
+      // The request may have been applied before the body was mangled (proxy,
+      // truncated response). Only this is retryable: a write that errored this
+      // way is queued and replayed with its idempotency key, so replaying can
+      // never apply it twice. Valid JSON with the wrong shape stays a protocol
+      // error below.
+      throw new RemoteClientError(
+        'remote/unavailable',
+        'Space 服务端返回了无法解析的响应，稍后将自动重试',
+        response.status,
+      );
+    }
     if (
       envelope.type !== 'server-response' ||
       envelope.rpcId !== rpcId ||

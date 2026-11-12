@@ -1,6 +1,7 @@
 # Self-hosted Space server.
 #
-# 1. Copy `.env.example` to `.env` and set `SPACE_TOKENS`.
+# 1. Copy `.env.example` to `.env` and set `SPACE_TOKENS` (compose reads `.env`
+#    from this directory automatically).
 # 2. `docker compose up -d --build`
 # 3. Point the plugin's server settings at this container's URL and token.
 #
@@ -13,13 +14,16 @@ services:
     build: .
     image: alter-dsh-space-server:local
     restart: unless-stopped
+    # PID 1 stays a tiny init so signals reach node and orphaned children are reaped.
+    init: true
     environment:
-      SPACE_DATA_DIR: /data
-      SPACE_HOST: 0.0.0.0
-      SPACE_PORT: "8787"
+      SPACE_DATA_DIR: "${SPACE_DATA_DIR:-/data}"
+      SPACE_HOST: "${SPACE_HOST:-0.0.0.0}"
+      SPACE_PORT: "${SPACE_PORT:-8787}"
       SPACE_TOKENS: ${SPACE_TOKENS:?set SPACE_TOKENS in .env}
+      SPACE_SNAPSHOTS: "${SPACE_SNAPSHOTS:-true}"
     ports:
-      - "127.0.0.1:8787:8787"
+      - "127.0.0.1:${SPACE_PORT:-8787}:${SPACE_PORT:-8787}"
     volumes:
       - space-data:/data
     healthcheck:
@@ -27,7 +31,7 @@ services:
         - CMD
         - node
         - -e
-        - fetch('http://127.0.0.1:8787/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))
+        - fetch('http://127.0.0.1:'+(process.env.SPACE_PORT||8787)+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))
       interval: 30s
       timeout: 5s
       start_period: 20s

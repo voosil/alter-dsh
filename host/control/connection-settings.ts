@@ -156,7 +156,8 @@ export function normalizeServerUrl(value: unknown): string | null {
   return `${parsed.origin}${path}`;
 }
 
-function normalizeToken(value: unknown): string | null | undefined {
+/** Normalize a token patch: `undefined` keeps, `null` clears, a string sets. */
+export function normalizeToken(value: unknown): string | null | undefined {
   if (value === undefined) return undefined;
   if (value === null) return null;
   if (typeof value !== 'string')
@@ -366,8 +367,18 @@ export function createConnectionSettingsStore(options: {
       serverUrl: nextUrl,
       updatedAt: now().toISOString(),
     };
-    await writePrivateJson(settingsPath, next, directory);
+    // Write the secret first: a crash between the two writes then leaves the
+    // previous (still valid) mode/URL with the token it needs, instead of a
+    // server-mode config whose token file was never written. If the settings
+    // write fails, put the previous token back so the two files stay a pair.
     if (normalizedToken !== undefined) await writeToken(normalizedToken);
+    try {
+      await writePrivateJson(settingsPath, next, directory);
+    } catch (error) {
+      if (normalizedToken !== undefined)
+        await writeToken(current.token ?? null).catch(() => undefined);
+      throw error;
+    }
     void sweepTemp(directory);
     return { settings: next, token: nextToken };
   }

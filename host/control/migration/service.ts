@@ -6,6 +6,7 @@
  * @module @alter-dsh/space/control/migration/service
  */
 import type { ConnectionSettingsStore } from '../connection-settings.js';
+import { forceDailySnapshot } from '../../persistence/backup.js';
 import { removeRemoteCache } from '../../remote/cache.js';
 import type { SpaceModeController } from '../../core/mode.js';
 import {
@@ -86,6 +87,7 @@ export function createMigrationService(
   options: MigrationServiceOptions,
 ): MigrationService {
   const logger = options.logger ?? {};
+  const now = options.now ?? (() => new Date());
   let state: MigrationState = {
     status: 'idle',
     transferredBytes: 0,
@@ -172,11 +174,26 @@ export function createMigrationService(
         state = { ...state, phase: 'switch', message: '切换到服务端模式…' };
         // The server replaced its authority from this local snapshot: any
         // queue/cache left from an older server session must not replay.
-        await removeRemoteCache(options.directory, serverUrl);
-        const loaded = await options.settings.save({ mode: 'server' });
         try {
+          await removeRemoteCache(options.directory, serverUrl);
+          const loaded = await options.settings.save({ mode: 'server' });
           await options.mode.apply(loaded);
         } catch (error) {
+          // The server has already committed the new data. Roll it back so a
+          // failed local switch cannot leave two authorities on different
+          // data sets; if rollback fails the error names the server backup
+          // for manual recovery.
+          let recovery: string;
+          try {
+            await result.rollback();
+            recovery = '已回滚服务端数据，服务端仍保持迁移前状态';
+          } catch (rollbackError) {
+            recovery = `服务端自动回滚失败（${errorMessage(
+              rollbackError,
+            )}）；服务端迁移前备份位于 ${
+              result.serverBackup ?? '<dataDir>/.migration/backup-<id>'
+            }，请手动恢复`;
+          }
           await options.settings
             .save({
               mode: previous.settings.mode,
@@ -186,7 +203,9 @@ export function createMigrationService(
           await options.settings.setToken(previous.token ?? null).catch(
             () => undefined,
           );
-          throw error;
+          throw new Error(
+            `切换到服务端模式失败（${errorMessage(error)}）；${recovery}；当前权威仍为本地`,
+          );
         }
         state = {
           ...state,
@@ -205,8 +224,8 @@ export function createMigrationService(
           signal: controller?.signal,
         });
         state = { ...state, phase: 'switch', message: '切换到本地模式…' };
-        const loaded = await options.settings.save({ mode: 'local' });
         try {
+          const loaded = await options.settings.save({ mode: 'local' });
           await options.mode.apply(loaded);
         } catch (error) {
           await options.settings
@@ -218,11 +237,36 @@ export function createMigrationService(
           await options.settings.setToken(previous.token ?? null).catch(
             () => undefined,
           );
-          throw error;
+          throw new Error(
+            `切换到本地模式失败（${errorMessage(error)}）；本地数据库已是服务端快照，原数据备份位于 ${
+              result.localBackup ?? '<dataDir>/.migration/backup-*'
+            }`,
+          );
         }
         // The downloaded snapshot is now the local authority; the server-scoped
         // queue and read cache have served their purpose.
         await removeRemoteCache(options.directory, serverUrl);
+        // A migration replaces the whole database; make sure the new authority
+        // has an initial snapshot even if today already held one of the old
+        // data (history is the recovery baseline).
+        const local = options.mode.current().local;
+        if (local !== undefined) {
+          const outcome = await forceDailySnapshot({
+            store: local.store,
+            directory: options.directory,
+            now,
+            logger,
+          }).catch((error: unknown) => {
+            logger.warn?.(
+              `[alter-dsh-space] 迁移后初始快照失败：${errorMessage(error)}`,
+            );
+            return undefined;
+          });
+          if (outcome?.status === 'failed')
+            logger.warn?.(
+              `[alter-dsh-space] 迁移后初始快照失败：${outcome.reason ?? '未知原因'}`,
+            );
+        }
         state = {
           ...state,
           status: 'done',

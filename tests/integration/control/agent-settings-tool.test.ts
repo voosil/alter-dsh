@@ -14,6 +14,7 @@ import {
   type ConnectionSettingsStore,
 } from '../../../host/control/connection-settings.js';
 import { SpaceModeController } from '../../../host/core/mode.js';
+import { openRemoteCache } from '../../../host/remote/cache.js';
 import {
   registerAgentSettingsTool,
   type ApprovalLike,
@@ -71,6 +72,7 @@ async function harness(options: {
   const dispose = registerAgentSettingsTool(tools, {
     settings,
     mode,
+    directory,
     audit: createConnectionAudit(directory),
     ...(options.approval === undefined
       ? {}
@@ -95,6 +97,29 @@ async function harness(options: {
       return definition.execute(args, exec);
     },
   };
+}
+
+/** Audit writes are async appends; wait until the expected line lands. */
+async function waitForAudit(
+  directory: string,
+  ready: (lines: Array<Record<string, unknown>>) => boolean,
+): Promise<Array<Record<string, unknown>>> {
+  const file = join(directory, 'connection-audit.jsonl');
+  const deadline = Date.now() + 4_000;
+  for (;;) {
+    try {
+      const lines = (await readFile(file, 'utf8'))
+        .trim()
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      if (ready(lines)) return lines;
+    } catch {
+      // Not created yet.
+    }
+    if (Date.now() > deadline) throw new Error('audit trail was not flushed');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
 }
 
 function approving(): ApprovalLike {
@@ -135,21 +160,19 @@ describe('Agent space_settings tool', () => {
       mode: 'server',
       server_url: 'http://127.0.0.1:1',
       token: TOKEN,
+      discard: true,
     })) as Record<string, unknown>;
     expect(state.mode).toBe('server');
     expect(h.mode.current().kind).toBe('server');
-    const lines = (await readFile(
-      join(h.directory, 'connection-audit.jsonl'),
-      'utf8',
-    ))
-      .trim()
-      .split('\n')
-      .map((line) => JSON.parse(line) as Record<string, unknown>);
-    expect(lines.at(-1)).toMatchObject({
-      actor: 'agent',
-      action: 'server',
-      result: 'ok',
-    });
+    const lines = await waitForAudit(h.directory, (all) =>
+      all.some((line) => line.action === 'mode' && line.result === 'ok'),
+    );
+    expect(
+      lines.some(
+        (line) => line.actor === 'agent' && line.action === 'mode' && line.result === 'ok',
+      ),
+    ).toBe(true);
+    expect(lines.some((line) => line.tokenChanged === true)).toBe(true);
     expect(JSON.stringify(lines)).not.toContain(TOKEN);
   });
 
@@ -161,6 +184,7 @@ describe('Agent space_settings tool', () => {
         mode: 'server',
         server_url: 'http://127.0.0.1:1',
         token: TOKEN,
+        discard: true,
       }),
     ).rejects.toThrow(/审批服务/);
     expect((await h.settings.view()).mode).toBe('local');
@@ -176,6 +200,7 @@ describe('Agent space_settings tool', () => {
         mode: 'server',
         server_url: 'http://127.0.0.1:1',
         token: TOKEN,
+        discard: true,
       }),
     ).rejects.toThrow(/用户未批准/);
     expect((await h.settings.view()).mode).toBe('local');
@@ -231,5 +256,85 @@ describe('Agent space_settings tool', () => {
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
+  });
+
+  it('never flips the authority mode without an explicit discard', async () => {
+    const h = await harness({ approval: approving() });
+    await expect(
+      h.execute({
+        action: 'set',
+        mode: 'server',
+        server_url: 'http://127.0.0.1:1',
+        token: TOKEN,
+      }),
+    ).rejects.toThrow(/显式确认放弃/);
+    expect((await h.settings.view()).mode).toBe('local');
+    expect(h.mode.current().kind).toBe('local');
+  });
+
+  it('requires approval to switch back to local mode', async () => {
+    const h = await harness({
+      approval: {
+        async request() {
+          return 'rejected';
+        },
+      },
+    });
+    // The persisted choice is server mode even though this test never ran a
+    // real backend switch; the guard reads settings, not the open backend.
+    await h.settings.save({
+      mode: 'server',
+      serverUrl: 'http://127.0.0.1:1',
+      token: TOKEN,
+    });
+    await expect(
+      h.execute({ action: 'set', mode: 'local', discard: true }),
+    ).rejects.toThrow(/用户未批准/);
+    expect((await h.settings.view()).mode).toBe('server');
+  });
+
+  it('refuses settings and queue flushes while a migration owns the authority', async () => {
+    const h = await harness({ approval: approving() });
+    h.mode.setMigrationLock(true);
+    await expect(h.execute({ action: 'flush' })).rejects.toThrow(/迁移进行中/);
+    await expect(
+      h.execute({
+        action: 'set',
+        mode: 'server',
+        server_url: 'http://127.0.0.1:1',
+        token: TOKEN,
+        discard: true,
+      }),
+    ).rejects.toThrow(/迁移进行中/);
+    expect((await h.settings.view()).mode).toBe('local');
+    h.mode.setMigrationLock(false);
+  });
+
+  it('cannot bypass the unsettled-queue guard on a server URL change', async () => {
+    const h = await harness({ approval: approving() });
+    const oldUrl = 'http://127.0.0.1:9';
+    const newUrl = 'http://127.0.0.1:10';
+    await h.settings.save({ mode: 'server', serverUrl: oldUrl, token: TOKEN });
+    const cache = openRemoteCache(h.directory, oldUrl);
+    cache.enqueue({
+      docId: 'doc-queued',
+      endpoint: 'doc.applyOps',
+      payload: { docId: 'doc-queued', baseRevision: 1, ops: [] },
+      idempotencyKey: 'idem-queued',
+      baseRevision: 1,
+      now: Date.now(),
+    });
+    cache.close();
+    await expect(
+      h.execute({ action: 'set', server_url: newUrl }),
+    ).rejects.toThrow(/尚未同步到服务端|显式确认放弃/);
+    expect((await h.settings.view()).serverUrl).toBe(oldUrl);
+    const applied = (await h.execute({
+      action: 'set',
+      server_url: newUrl,
+      discard: true,
+    })) as Record<string, unknown>;
+    expect(applied.serverUrl).toBe(newUrl);
+    expect((await h.settings.view()).serverUrl).toBe(newUrl);
   });
 });

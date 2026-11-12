@@ -235,6 +235,29 @@ function messageOf(error: unknown): string {
 export async function createDailySnapshot(
   context: SnapshotContext,
 ): Promise<SnapshotOutcome> {
+  return runSnapshot(context, false);
+}
+
+/**
+ * Snapshot the current database even when today already has one.
+ *
+ * A migration replaces the whole database; the target then needs an initial
+ * snapshot of the new data, but the day may already hold a snapshot of the
+ * previous database. This variant replaces today's database snapshot (and its
+ * asset archive) with one of the current data, so the design's "initial
+ * snapshot after migration" holds. Failures stay best-effort.
+ * @param context - store, data directory, clock and logger.
+ */
+export async function forceDailySnapshot(
+  context: SnapshotContext,
+): Promise<SnapshotOutcome> {
+  return runSnapshot(context, true);
+}
+
+async function runSnapshot(
+  context: SnapshotContext,
+  force: boolean,
+): Promise<SnapshotOutcome> {
   const { store, directory, now, logger } = context;
   const backups = backupsDirectory(directory);
   const settings = store.getStorageSettings();
@@ -242,7 +265,7 @@ export async function createDailySnapshot(
   try {
     await mkdir(backups, { recursive: true, mode: 0o700 });
     await removeStaleTemps(backups);
-    if ((await listSnapshots(directory)).some((file) => file.name === targetName)) {
+    if (!force && (await listSnapshots(directory)).some((file) => file.name === targetName)) {
       const assetTarget = assetArchiveFileName(now());
       const existingAssets = (await listAssetArchives(directory)).some(
         (file) => file.name === assetTarget,
@@ -256,6 +279,14 @@ export async function createDailySnapshot(
         reason: 'today-already-snapshotted',
         ...(existingAssets ? { assetsFile: join(backups, assetTarget) } : {}),
       };
+    }
+    if (force) {
+      // The archive must describe the new database: drop today's archive (if
+      // any) before re-creating it so a DB without assets cannot keep a stale
+      // archive next to the new snapshot.
+      await rm(join(backups, assetArchiveFileName(now())), {
+        force: true,
+      }).catch(() => undefined);
     }
     const databaseBytes = (await fileSize(store.file)) ?? 0;
     const needed = Math.ceil(databaseBytes * FREE_SPACE_FACTOR) + FREE_SPACE_MARGIN;
@@ -324,6 +355,8 @@ export interface SnapshotScheduler {
   dispose(): Promise<void>;
   /** Run one snapshot attempt now (shared with tests). */
   runNow(): Promise<SnapshotOutcome>;
+  /** Snapshot now even if today already has one (post-migration). */
+  forceRunNow(): Promise<SnapshotOutcome>;
 }
 
 /** Background daily-snapshot scheduler around {@link createDailySnapshot}. */
@@ -336,12 +369,28 @@ export function createSnapshotScheduler(
   let intervalTimer: ReturnType<typeof setInterval> | undefined;
   let active: Promise<SnapshotOutcome> | undefined;
 
+  /** Queue one run behind any active run, keeping `active` tracked. */
+  function launch(force: boolean): Promise<SnapshotOutcome> {
+    const previous = active ?? Promise.resolve();
+    const run = previous
+      .catch(() => undefined)
+      .then(() =>
+        force ? forceDailySnapshot(options) : createDailySnapshot(options),
+      );
+    const tracked = run.finally(() => {
+      if (active === tracked) active = undefined;
+    });
+    active = tracked;
+    return tracked;
+  }
+
   function runNow(): Promise<SnapshotOutcome> {
     if (active) return active;
-    active = createDailySnapshot(options).finally(() => {
-      active = undefined;
-    });
-    return active;
+    return launch(false);
+  }
+
+  function forceRunNow(): Promise<SnapshotOutcome> {
+    return launch(true);
   }
 
   function clearTimers(): void {
@@ -370,5 +419,6 @@ export function createSnapshotScheduler(
       await runNow().catch(() => undefined);
     },
     runNow,
+    forceRunNow,
   };
 }

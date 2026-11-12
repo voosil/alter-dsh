@@ -1,7 +1,7 @@
 ---
 type: spec
 status: active
-updated: 2026-11-11
+updated: 2026-11-12
 ---
 
 # 系统架构与持久化约束
@@ -50,15 +50,18 @@ updated: 2026-11-11
 | 端点 | 请求 | 结果 |
 | --- | --- | --- |
 | `settings.get` / `sync.status` | 无 | `{ mode, serverUrl, tokenConfigured, updatedAt, connection, capabilities, sync }` |
-| `settings.update` | `{ mode?, serverUrl?, token?: string \| null }` | 同上；落盘后后端切换失败时回滚已保存配置并保留旧后端 |
+| `settings.update` | `{ mode?, serverUrl?, token?: string \| null, discard?: boolean }` | 同上；不改变模式时可只保存地址/token 供迁移使用；切换模式必须 `discard: true`，服务端模式下更换地址且旧队列有未确认写入时也必须 `discard: true`，否则返回 `settings/migration-required`；落盘后后端切换失败时回滚已保存配置并保留旧后端 |
 | `settings.test` | `{ serverUrl?, token? }` | `{ ok, serverVersion?, protocolVersion?, authenticated?, message? }`；未配置的地址不得隐式使用已存 token |
 | `sync.flush` | 无 | 触发一次队列重放并返回状态 |
 | `sync.queue` | 无 | 每个存在未确认写入的文档一行：`{ docId, state: 'pending' \| 'conflict' \| 'failed', entries, baseRevision, lastError?, updatedAt }` |
 | `sync.resolve` | `{ docId, action: 'retry' \| 'discard' }` | `{ resolved, state }`；`retry` 按服务端当前 revision 重新武装该文档的队列并重放（离线时返回 `remote/unavailable`），`discard` 丢弃该文档的本地写入与影子，内容和版本以服务端为准 |
 | `migration.preflight/start/status/cancel` | `{ direction: 'to-server' \| 'from-server', overwrite?, trimHistory? }` | 预检或任务状态（`status`、`phase`、`counts`、`backup` 等） |
 
-  迁移进行中拒绝修改服务器配置、切换模式与重放队列（`migration/busy`）。浏览器写入归属 `user`、
-  Agent 工具写入归属 `alter`；RPC 边界按入口强制归属，不信任请求体里的 actor。
+  迁移进行中拒绝修改服务器配置、切换模式与重放队列（`migration/busy`），但控制面读端点
+  （`settings.get/test`、`sync.status/queue`、`migration.status/cancel`）在冻结期间保持可用；
+  返回 `migration/read-only` 的只有业务端点。浏览器写入归属 `user`、Agent 工具写入归属 `alter`；
+  本地模式由 RPC 边界强制归属，服务端模式由本地 bridge 在跨端前盖章（服务端信任 bridge 的标记，
+  不信任浏览器请求体里的 actor）。
 - 通道常量 `('/api', 'alter-space')` 在 Host 与客户端各有一份，必须保持同步。
 - 请求信封 `{ type: 'client-request', rpcId, payload: { op, args } }`；响应信封
   `{ type: 'server-response', rpcId, result: { ok: true, value } }`。业务结果在 `value` 内为
@@ -111,16 +114,27 @@ updated: 2026-11-11
 ### 3.1 远程缓存、写队列与迁移暂存
 
 - 服务端模式的读缓存与写队列放在本地数据目录的独立 `remote-cache-<server>.db`（按服务端地址哈希
-  分文件），与权威库分离，结构版本不匹配时直接重建；读缓存损坏只丢弃缓存，不触碰权威数据。写队列
-  条目是未确认的用户内容，不是可弃缓存：结构升级不得静默清空；不同服务端之间队列与读缓存互相隔离，
-  切换服务端或完成整库迁移后必须显式处置（清空）旧队列。
-- 写队列在向浏览器确认前必须落盘，携带幂等键与 `baseRevision`，按文档串行重放；传输失败退避重试，
-  业务冲突标记为冲突并保留本地内容，不自动覆盖。队列与冲突计数通过 `settings.get` / `sync.status` 暴露。
-- 资产按内容寻址缓存；超过上限的资产只流式转发不落缓存。
+  分文件），与权威库分离，结构版本不匹配时直接重建；读缓存损坏只丢弃缓存，不触碰权威数据
+  （无法打开时把库及其 `-wal`/`-shm` 改名为 `.corrupt-<时间戳>` 留证后重建）。写队列条目是未确认的
+  用户内容，不是可弃缓存：结构升级不得静默清空；不同服务端之间队列与读缓存互相隔离，切换服务端或
+  完成整库迁移后必须显式处置（清空）旧队列。
+- 写队列在向浏览器确认前必须落盘（队列库 `synchronous=FULL`），携带幂等键与 `baseRevision`，按文档
+  串行重放；传输失败退避重试，业务冲突标记为冲突并保留本地内容，不自动覆盖。重放优先复用幂等键
+  （避免响应丢失被误判为冲突）；`sync.resolve retry` 按服务端当前 revision 重写 payload 与基线后重放。
+  队列与冲突计数通过 `settings.get` / `sync.status` 暴露。
+- 读缓存按 stale-while-revalidate 使用：链路非在线时命中缓存立即返回并后台刷新，不阻塞等待网络超时；
+  传输错误只影响是否进入离线态，4xx 协议/配置错误不得伪装成离线。资产按内容寻址缓存，命中缓存时
+  优先本地读取（资产不可变）；超过上限的资产只流式转发不落缓存。
 - 迁移以 `VACUUM INTO` 一致性快照导出，剔除 `workspace_links` 等设备本地侧表；可选只保留每篇文档
-  最新版本。暂存与目标备份位于 `<dataDir>/.migration/`，替换前暂停服务端 runtime，完成后重新打开，
-  失败时恢复备份；启动时清扫超过 7 天的遗留暂存。冻结从快照前开始并持续到权威切换完成：先拒绝新的
-  写请求，再等待在途写结束（drain），避免已确认的写入落在快照之外。
+  最新版本。计数校验覆盖 `spaces/nodes/thoughts/comments/versions/events/agents/tasks/milestones/hub`
+  与资产行，空库判定必须包含 agents/tasks/milestones/hub，避免非空目标被静默覆盖。暂存与目标备份位于
+  `<dataDir>/.migration/`；Host 与服务端启动时都清扫超过 7 天的遗留暂存。冻结从快照/导出前开始并
+  持续到权威切换完成：先拒绝新的写请求，再等待在途写结束（drain），避免已确认的写入落在快照之外。
+- 本地 → 服务端的 `commit` 携带期望计数与文件数，服务端在暂停 runtime 之前解包并校验 part 哈希、
+  `quick_check`、结构版本、逐表计数与文件数；不一致直接拒绝且目标不变。替换前备份目标成员，替换
+  失败时只恢复备份中实际存在的成员；替换成功后强制为新库生成一次当日快照。Host 在提交后切换失败
+  或校验不一致时调用服务端 `POST /api/alter-space/migrate/rollback` 恢复备份，失败则保留备份路径供
+  人工恢复。
 
 ## 4. 恢复与损坏处理
 

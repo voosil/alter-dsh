@@ -12,7 +12,6 @@ import type { ConnectionAudit } from './connection-audit.js';
 import {
   ConnectionSettingsError,
   normalizeServerUrl,
-  type ConnectionSettingsPatch,
   type ConnectionSettingsStore,
 } from './connection-settings.js';
 import type { SpaceModeController } from '../core/mode.js';
@@ -23,6 +22,10 @@ import type {
   ToolsLike,
 } from '../document/editors/legacy/tools.js';
 import { isPluginControlEndpoint } from '../authority/rpc.js';
+import {
+  applyConnectionPatch,
+  type ConnectionPatchReview,
+} from './settings-rpc.js';
 
 /** DSH approval subset this tool needs. */
 export interface ApprovalLike {
@@ -39,6 +42,8 @@ export interface ApprovalLike {
 export interface AgentSettingsToolDeps {
   settings: ConnectionSettingsStore;
   mode: SpaceModeController;
+  /** Local Space data directory (owns the per-server queue/cache files). */
+  directory: string;
   audit: ConnectionAudit;
   /** Lazily resolves the approval service; may appear after registration. */
   approval?: () => ApprovalLike | undefined;
@@ -100,6 +105,32 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** Refuse writes while a migration owns the authority window. */
+function assertMigrationIdle(deps: AgentSettingsToolDeps): void {
+  const mode = deps.mode as Partial<SpaceModeController>;
+  if (typeof mode.isMigrationLocked === 'function' && mode.isMigrationLocked())
+    throw new ConnectionSettingsError(
+      'migration/busy',
+      '迁移进行中，不能修改服务器配置、存储策略或重放待同步写入',
+    );
+}
+
+/** Approval reason for one sensitive settings change (never includes a token). */
+function reviewReason(review: ConnectionPatchReview): string {
+  const parts: string[] = [];
+  if (review.modeChanged)
+    parts.push(
+      `把数据后端从${review.previousMode === 'server' ? '服务端' : '本地'}切换为${review.nextMode === 'server' ? '服务端' : '本地'}`,
+    );
+  if (review.serverUrlChanged)
+    parts.push(
+      `把服务器地址从 ${review.previousServerUrl ?? '未配置'} 改为 ${review.nextServerUrl ?? '未配置'}`,
+    );
+  if (review.tokenChanged) parts.push('写入或清除服务端 token');
+  if (review.discard) parts.push('放弃旧服务端地址下尚未同步的本地写入');
+  return `将修改 Space 服务器配置：${parts.join('；')}。这是敏感操作，可能改变空间数据的归属主机。`;
+}
+
 /**
  * Register `space_settings` on one Host tools service.
  * @returns disposer removing the registration.
@@ -111,7 +142,7 @@ export function registerAgentSettingsTool(
   const definition: ToolDefinitionLike = {
     name: 'space_settings',
     description:
-      'Read or change every Space business setting. action=get reports the current mode, server URL, token presence, link/queue status and the storage policy (history_limit/snapshot_keep). action=set switches between local mode and a self-hosted Space server (mode, server_url, token required for server mode) and can update storage settings via history_limit/snapshot_keep. action=test probes a server URL/token without saving. action=flush retries queued document writes. Setting a server URL or token is sensitive: it may be written to another host and requires the user approval flow; never ask the user to paste a token into the conversation unless they chose to.',
+      'Read or change every Space business setting. action=get reports the current mode, server URL, token presence, link/queue status and the storage policy (history_limit/snapshot_keep). action=set switches between local mode and a self-hosted Space server (mode, server_url, token required for server mode) and can update storage settings via history_limit/snapshot_keep. Switching the authority mode (including switching back to local) and changing server_url/token are sensitive: every such change requires the user approval flow, never ask the user to paste a token into the conversation unless they chose to. A mode switch also requires discard=true to acknowledge that the authority being left is abandoned; changing server_url while the old server still has unsettled queued writes requires discard=true too, otherwise the change is rejected. action=test probes a server URL/token without saving. action=flush retries queued document writes.',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -138,6 +169,11 @@ export function registerAgentSettingsTool(
         clear_token: {
           type: 'boolean',
           description: 'Clear the stored token for action=set.',
+        },
+        discard: {
+          type: 'boolean',
+          description:
+            'Explicitly acknowledge abandoning data. Required for any mode switch and for changing server_url while the old server still has unsettled queued writes; the change is rejected without it. Never set this on the user\'s behalf without their confirmation.',
         },
         history_limit: {
           type: 'integer',
@@ -166,6 +202,7 @@ export function registerAgentSettingsTool(
       try {
         if (action === 'get') return await stateOf(deps);
         if (action === 'flush') {
+          assertMigrationIdle(deps);
           await deps.mode.flush();
           deps.audit.record({
             actor: 'agent',
@@ -245,49 +282,6 @@ export function registerAgentSettingsTool(
             'settings/invalid',
             'action 必须是 get、set、test 或 flush',
           );
-        const patch: ConnectionSettingsPatch = {
-          ...(input.mode === undefined ? {} : { mode: input.mode }),
-          ...(input.server_url === undefined
-            ? {}
-            : { serverUrl: input.server_url }),
-          ...(input.clear_token === true
-            ? { token: null }
-            : typeof input.token === 'string'
-              ? { token: input.token }
-              : {}),
-        };
-        const sensitive =
-          patch.mode === 'server' ||
-          patch.serverUrl !== undefined ||
-          patch.token !== undefined;
-        if (sensitive) {
-          const approval = deps.approval?.();
-          if (approval === undefined)
-            throw new ConnectionSettingsError(
-              'settings/approval-required',
-              '修改服务器配置需要用户在设置页确认；当前宿主没有审批服务',
-            );
-          const outcome = await approval.request({
-            agent: exec.agent,
-            toolName: exec.name,
-            callId: exec.callId,
-            reason:
-              patch.mode === 'server' ||
-              patch.serverUrl !== undefined ||
-              patch.token !== undefined
-                ? '将修改 Space 的数据后端/服务器地址或 token，可能改变空间数据的归属主机'
-                : '修改 Space 服务器配置',
-            signal: exec.signal,
-          });
-          if (outcome !== 'allowed-once') {
-            deps.audit.record({
-              actor: 'agent',
-              action: 'server',
-              result: 'rejected',
-            });
-            throw new Error(`用户未批准修改服务器配置（${outcome}）`);
-          }
-        }
         const storagePatch: Record<string, number> = {};
         if (input.history_limit !== undefined) {
           if (
@@ -311,28 +305,47 @@ export function registerAgentSettingsTool(
             );
           storagePatch.snapshotKeep = input.snapshot_keep;
         }
-        const previous = await deps.settings.load();
-        const before = await deps.settings.view();
-        const loaded = await deps.settings.save(patch);
-        try {
-          await deps.mode.apply(loaded);
-        } catch (error) {
-          // Keep the persisted choice aligned with the backend that is still
-          // serving data; a failed switch must not survive a restart.
-          await deps.settings
-            .save({
-              mode: previous.settings.mode,
-              serverUrl: previous.settings.serverUrl,
-            })
-            .catch(() => undefined);
-          await deps.settings.setToken(previous.token ?? null).catch(
-            () => undefined,
-          );
-          throw error;
-        }
+        // One shared helper owns the migration lock, the mode-switch/
+        // unsettled-queue guards, approval, backend switch/rollback and audit
+        // for both the settings page and this tool.
+        await applyConnectionPatch(
+          {
+            ...(input.mode === undefined ? {} : { mode: input.mode }),
+            ...(input.server_url === undefined
+              ? {}
+              : { serverUrl: input.server_url }),
+            ...(input.clear_token === true
+              ? { token: null }
+              : typeof input.token === 'string'
+                ? { token: input.token }
+                : {}),
+            ...(input.discard === true ? { discard: true } : {}),
+          },
+          {
+            settings: deps.settings,
+            mode: deps.mode,
+            directory: deps.directory,
+            actor: 'agent',
+            audit: deps.audit,
+            approval: async (review) => {
+              const approval = deps.approval?.();
+              if (approval === undefined)
+                throw new ConnectionSettingsError(
+                  'settings/approval-required',
+                  '修改服务器配置需要用户在设置页确认；当前宿主没有审批服务',
+                );
+              return approval.request({
+                agent: exec.agent,
+                toolName: exec.name,
+                callId: exec.callId,
+                reason: reviewReason(review),
+                signal: exec.signal,
+              });
+            },
+          },
+        );
         if (Object.keys(storagePatch).length > 0) {
-          if (deps.mode.isMigrationLocked())
-            throw new Error('迁移进行中，空间设置暂时只读；请等待迁移完成');
+          assertMigrationIdle(deps);
           const stored = (await deps.mode.current().rpc('storage.set', {
             op: 'storage.set',
             args: [storagePatch],
@@ -340,14 +353,6 @@ export function registerAgentSettingsTool(
           if (stored.error !== undefined)
             throw new Error(stored.error.message ?? '保存存储设置失败');
         }
-        const after = await deps.settings.view();
-        deps.audit.record({
-          actor: 'agent',
-          action: 'server',
-          from: before.serverUrl,
-          to: after.serverUrl,
-          result: 'ok',
-        });
         return await stateOf(deps);
       } catch (error) {
         throw new Error(errorMessage(error));

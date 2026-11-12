@@ -78,6 +78,9 @@ export function ServerSettingsSection({ client }: ServerSettingsSectionProps) {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [copied, setCopied] = useState(false);
+  // A real mode change abandons the authority on the side being left, so the
+  // user has to confirm it explicitly instead of the page silently switching.
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
   const mounted = useRef(true);
   // The poll timer is created once per client; a ref keeps it from writing a
   // stale `dirty=false` over fields the user is editing.
@@ -189,6 +192,7 @@ export function ServerSettingsSection({ client }: ServerSettingsSectionProps) {
 
   function changeMode(next: 'local' | 'server') {
     setMode(next);
+    setConfirmDiscard(false);
     setDirtyState(true);
     setError('');
     setTestResult(null);
@@ -196,6 +200,7 @@ export function ServerSettingsSection({ client }: ServerSettingsSectionProps) {
 
   function changeUrl(value: string) {
     setServerUrl(value);
+    setConfirmDiscard(false);
     setDirtyState(true);
     setError('');
     setTestResult(null);
@@ -209,27 +214,52 @@ export function ServerSettingsSection({ client }: ServerSettingsSectionProps) {
   }
 
   const effectiveUrl = serverUrl.trim();
+  const urlValue = effectiveUrl === '' ? null : effectiveUrl;
+  const snapshotMode = snapshot?.mode ?? 'local';
+  // The page may save a URL/token without changing the authority; only a real
+  // mode change — or a server-URL change that would orphan unsettled queue
+  // entries — needs the discard acknowledgement (and `discard: true`).
+  const modeChanged = snapshot !== null && mode !== snapshot.mode;
+  const urlChanged = snapshot !== null && urlValue !== snapshot.serverUrl;
+  const queueNeedsDiscard =
+    snapshotMode === 'server' && urlChanged && queue.length > 0;
+  const needsDiscard = modeChanged || queueNeedsDiscard;
+  const targetConfigured =
+    effectiveUrl !== '' &&
+    (snapshot?.tokenConfigured === true || token.trim() !== '');
   const canSave =
     !saving &&
-    (mode === 'local' ||
-      (effectiveUrl !== '' &&
-        (snapshot?.tokenConfigured === true || token.trim() !== '')));
+    (mode === 'local' || targetConfigured) &&
+    (!needsDiscard || confirmDiscard);
 
   async function save(): Promise<void> {
+    const modeChangedNow = snapshot !== null && mode !== snapshot.mode;
     setSaving(true);
     setError('');
     try {
       const next = await client.update({
-        mode,
-        ...(mode === 'server' ? { serverUrl: effectiveUrl } : {}),
+        // Omit `mode` unless it actually changes: a saved URL/token is the
+        // pre-configuration a later migration needs and must not flip the
+        // authority (or be rejected by the Host's mode-switch guard).
+        ...(modeChangedNow ? { mode } : {}),
+        ...(needsDiscard ? { discard: true } : {}),
+        ...(urlChanged ? { serverUrl: urlValue } : {}),
         ...(token.trim() === '' ? {} : { token: token.trim() }),
       });
       setSnapshot(next);
       setMode(next.mode);
       setServerUrl(next.serverUrl ?? '');
       setToken('');
+      setConfirmDiscard(false);
       setDirtyState(false);
-      setNotice(mode === 'server' ? '已切换到服务端模式' : '已切换到本地模式');
+      void refreshQueue();
+      setNotice(
+        modeChangedNow
+          ? next.mode === 'server'
+            ? '已切换到服务端模式'
+            : '已切回本地模式'
+          : '服务器配置已保存',
+      );
     } catch (cause) {
       setError(`保存失败：${describeError(cause, '请重试')}`);
     } finally {
@@ -297,47 +327,71 @@ export function ServerSettingsSection({ client }: ServerSettingsSectionProps) {
           </div>
         </div>
 
-        {serverMode ? (
-          <>
-            <div className={`${styles.row} ${styles.rowSetting} ${styles.textRow}`}>
-              <label className={styles.rowLabel} htmlFor={urlId}>
-                服务器地址
-              </label>
-              <div className={`${styles.rowControl} ${styles.textControl}`}>
-                <input
-                  id={urlId}
-                  className={styles.textInput}
-                  type="url"
-                  inputMode="url"
-                  placeholder="https://space.example.com"
-                  value={serverUrl}
-                  disabled={saving}
-                  onChange={(event) => changeUrl(event.target.value)}
-                />
-              </div>
-            </div>
-            <div className={`${styles.row} ${styles.rowSetting} ${styles.textRow}`}>
-              <label className={styles.rowLabel} htmlFor={tokenId}>
-                设备 token
-              </label>
-              <div className={`${styles.rowControl} ${styles.textControl}`}>
-                <input
-                  id={tokenId}
-                  className={styles.textInput}
-                  type="password"
-                  autoComplete="off"
-                  placeholder={
-                    snapshot?.tokenConfigured
-                      ? '已配置，留空保持不变'
-                      : '粘贴服务端生成的 token'
-                  }
-                  value={token}
-                  disabled={saving}
-                  onChange={(event) => changeToken(event.target.value)}
-                />
-              </div>
-            </div>
-          </>
+        <div className={`${styles.row} ${styles.rowSetting} ${styles.textRow}`}>
+          <label className={styles.rowLabel} htmlFor={urlId}>
+            服务器地址
+          </label>
+          <div className={`${styles.rowControl} ${styles.textControl}`}>
+            <input
+              id={urlId}
+              className={styles.textInput}
+              type="url"
+              inputMode="url"
+              placeholder="https://space.example.com"
+              value={serverUrl}
+              disabled={saving}
+              onChange={(event) => changeUrl(event.target.value)}
+            />
+          </div>
+        </div>
+        <div className={`${styles.row} ${styles.rowSetting} ${styles.textRow}`}>
+          <label className={styles.rowLabel} htmlFor={tokenId}>
+            设备 token
+          </label>
+          <div className={`${styles.rowControl} ${styles.textControl}`}>
+            <input
+              id={tokenId}
+              className={styles.textInput}
+              type="password"
+              autoComplete="off"
+              placeholder={
+                snapshot?.tokenConfigured
+                  ? '已配置，留空保持不变'
+                  : '粘贴服务端生成的 token'
+              }
+              value={token}
+              disabled={saving}
+              onChange={(event) => changeToken(event.target.value)}
+            />
+          </div>
+        </div>
+        {!serverMode ? (
+          <p className={styles.rowHint} data-testid="server-target-hint">
+            当前数据仍在本机。可先保存服务器地址与 token，供之后执行迁移或切换使用；保存它们不会切换模式。
+          </p>
+        ) : null}
+        {needsDiscard ? (
+          <div
+            className={`${styles.row} ${styles.rowSetting} ${styles.confirmRow}`}
+            data-testid="mode-discard-confirm"
+          >
+            <label className={styles.confirmLabel}>
+              <input
+                type="checkbox"
+                className={styles.confirmCheckbox}
+                checked={confirmDiscard}
+                disabled={saving}
+                onChange={(event) => setConfirmDiscard(event.target.checked)}
+              />
+              <span>
+                {modeChanged
+                  ? mode === 'server'
+                    ? '我确认切换到服务端：本地数据不会自动同步，未迁移的内容在服务端不可见。'
+                    : '我确认切回本地：本机尚未同步到服务端的内容会被丢弃，服务端之后的变化也不会同步回来。'
+                  : '我确认更换服务器地址：旧服务器地址下尚未同步的本地写入会被丢弃。'}
+              </span>
+            </label>
+          </div>
         ) : null}
 
         <div className={`${styles.row} ${styles.rowCompact}`}>
@@ -391,7 +445,7 @@ export function ServerSettingsSection({ client }: ServerSettingsSectionProps) {
           </div>
         ) : null}
 
-        {serverMode && queue.length > 0 ? (
+        {snapshotMode === 'server' && queue.length > 0 ? (
           <div className={`${styles.row} ${styles.rowSetting}`}>
             <span className={styles.rowLabel}>待同步写入</span>
             <div className={`${styles.rowControl} ${styles.queueList}`}>
@@ -440,11 +494,11 @@ export function ServerSettingsSection({ client }: ServerSettingsSectionProps) {
         ) : null}
 
         <div className={styles.actions}>
-          {serverMode ? (
+          {effectiveUrl !== '' ? (
             <Button
               size="sm"
               variant="ghost"
-              disabled={testing || saving || effectiveUrl === ''}
+              disabled={testing || saving}
               onClick={() => void test()}
             >
               {testing ? '测试中…' : '测试连接'}
@@ -463,16 +517,22 @@ export function ServerSettingsSection({ client }: ServerSettingsSectionProps) {
             disabled={!canSave || !dirty}
             onClick={() => void save()}
           >
-            {saving ? '保存中…' : serverMode ? '保存并切换' : '切换回本地'}
+            {saving
+              ? modeChanged
+                ? '切换中…'
+                : '保存中…'
+              : modeChanged
+                ? '确认切换'
+                : '保存'}
           </Button>
         </div>
 
         <p className={styles.meta}>
-          {serverMode
+          {snapshotMode === 'server'
             ? '服务端是唯一权威：多台设备连接同一服务端共享数据；本机不映射空间工作区，目录使用远端浏览或手工输入。'
             : '本地模式数据保存在本机 DSH 数据目录，可离线使用，并保留空间与 DSH 工作区的映射。'}
           {' '}
-          两种模式不会自动同步，切换前请先迁移数据。
+          两种模式不会自动同步；切换模式需要勾选确认，数据迁移入口在下方「数据迁移」。
         </p>
       </div>
     </SettingsSection>

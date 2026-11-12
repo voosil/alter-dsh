@@ -11,15 +11,17 @@
  */
 import {
   mkdir,
+  open,
+  readdir,
   rename,
   rm,
   stat,
 } from 'node:fs/promises';
-import { open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { SPACE_PROTOCOL_VERSION } from '../../core/protocol.js';
 import { SPACE_DB_FORMAT_VERSION } from '../../persistence/store.js';
 import {
+  countUnpackedFiles,
   isBundlePartName,
   listAssetEntries,
   sha256File,
@@ -36,6 +38,23 @@ import {
 
 const MIGRATION_PATH = '/api/alter-space/migrate';
 const UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024;
+/** Bounded retries for one chunk when the network drops or the server is busy. */
+const CHUNK_ATTEMPTS = 4;
+const RETRY_BASE_DELAY_MS = 250;
+const RETRY_MAX_DELAY_MS = 2_000;
+/** Members that make up the local authority; replaced as one unit. */
+const LOCAL_MEMBERS = [
+  'space.db',
+  'space.db-wal',
+  'space.db-shm',
+  'space.db-journal',
+  'assets',
+] as const;
+/** Journal files of the replaced database are not part of the backup. */
+const EPHEMERAL_DB_MEMBERS = ['space.db-wal', 'space.db-shm', 'space.db-journal'] as const;
+
+/** Direction accepted by {@link SpaceMigrationTransfer.preflight}. */
+export type TransferDirection = 'to-server' | 'from-server';
 
 /** Transfer phases reported to the UI and Agent tool. */
 export type MigrationPhase =
@@ -97,26 +116,59 @@ export interface TransferOptions {
   signal?: AbortSignal;
 }
 
+/** Result of a successful local → server upload. */
+export interface ToServerTransferResult {
+  counts: SpaceDataCounts;
+  /** Server-side backup of the replaced data, when the target had any. */
+  serverBackup: string | null;
+  /**
+   * Ask the server to restore the database it replaced.
+   *
+   * Callers invoke this when the post-commit authority switch fails: the
+   * server already committed the new data, so rolling back is the only way to
+   * keep both sides on the same authority.
+   */
+  rollback(): Promise<void>;
+}
+
+/** Result of a successful server → local download. */
+export interface FromServerTransferResult {
+  counts: SpaceDataCounts;
+  /**
+   * Directory that holds the local database/assets replaced by this transfer
+   * (inside `<dataDir>/.migration`), usable for manual recovery.
+   */
+  localBackup: string | null;
+}
+
+/** Freeze hooks shared by both directions. */
+export interface TransferFreezeHooks {
+  /** Called before the snapshot/export; must block writes and drain. */
+  freeze?: () => Promise<void>;
+  /**
+   * Called when the transfer fails. `toServer` also calls it when the upload
+   * finishes; `fromServer` keeps the freeze in place on success because the
+   * caller owns the authority switch and must release the lock itself.
+   */
+  unfreeze?: () => Promise<void>;
+}
+
 /** One transfer bound to a local directory and a server identity. */
 export interface SpaceMigrationTransfer {
-  /** Inspect the server and local data without changing either side. */
-  preflight(): Promise<MigrationPreflight>;
+  /**
+   * Inspect the server and local data without changing either side.
+   * @param direction - `from-server` tolerates a missing local database
+   * (the point is to install one); `to-server` needs local data to send.
+   */
+  preflight(direction?: TransferDirection): Promise<MigrationPreflight>;
   /** Upload the local data and replace the server's data. */
   toServer(
-    options?: TransferOptions & {
-      /** Called before the final snapshot (the caller blocks local writes). */
-      freeze?: () => Promise<void>;
-      /** Called after a successful commit/switch or on failure. */
-      unfreeze?: () => Promise<void>;
-    },
-  ): Promise<{ counts: SpaceDataCounts; serverBackup: string | null }>;
+    options?: TransferOptions & TransferFreezeHooks,
+  ): Promise<ToServerTransferResult>;
   /** Download the server data and replace the local data directory. */
   fromServer(
-    options?: TransferOptions & {
-      freeze?: () => Promise<void>;
-      unfreeze?: () => Promise<void>;
-    },
-  ): Promise<{ counts: SpaceDataCounts }>;
+    options?: TransferOptions & TransferFreezeHooks,
+  ): Promise<FromServerTransferResult>;
 }
 
 /** Options for {@link createSpaceMigrationTransfer}. */
@@ -129,29 +181,72 @@ export interface MigrationTransferOptions {
   now?: () => Date;
 }
 
-/** Count regular files in one unpacked bundle directory. */
-async function countUnpackedFiles(directory: string): Promise<number> {
-  const { readdir } = await import('node:fs/promises');
-  let count = 0;
-  async function walk(current: string): Promise<void> {
-    let entries;
-    try {
-      entries = await readdir(current, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const absolute = join(current, entry.name);
-      if (entry.isDirectory()) await walk(absolute);
-      else if (entry.isFile()) count += 1;
-    }
-  }
-  await walk(directory);
-  return count;
-}
-
 function assertNotAborted(signal?: AbortSignal): void {
   if (signal?.aborted === true) throw new Error('migration_cancelled');
+}
+
+/** An error that carries whether retrying the same chunk may help. */
+interface ChunkError extends Error {
+  retryable?: boolean;
+}
+
+function httpChunkError(message: string, status: number): ChunkError {
+  const error: ChunkError = new Error(message);
+  // 4xx means the request itself is wrong; only throttling and server-side
+  // failures are worth another attempt.
+  error.retryable = status === 429 || status >= 500;
+  return error;
+}
+
+/** Sleep between retries, abortable so SIGINT wins over the backoff. */
+function retryDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal === undefined)
+    return new Promise((resolveDelay) => {
+      setTimeout(resolveDelay, ms);
+    });
+  if (signal.aborted) return Promise.reject(new Error('migration_cancelled'));
+  return new Promise<void>((resolveDelay, rejectDelay) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolveDelay();
+    }, ms);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      rejectDelay(new Error('migration_cancelled'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+/**
+ * Retry one resumable chunk with bounded exponential backoff.
+ *
+ * The chunk offset is part of the closure: a retry re-sends the same range, so
+ * uploads resume at the server's acknowledged offset and downloads re-request
+ * the same byte range. Aborting the signal must not be converted into a retry.
+ */
+async function withChunkRetries<T>(
+  operation: () => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= CHUNK_ATTEMPTS; attempt += 1) {
+    assertNotAborted(signal);
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (signal?.aborted === true) throw error;
+      const retryable = (error as ChunkError | undefined)?.retryable !== false;
+      if (!retryable || attempt === CHUNK_ATTEMPTS) break;
+      const delay = Math.min(
+        RETRY_MAX_DELAY_MS,
+        RETRY_BASE_DELAY_MS * 2 ** (attempt - 1),
+      );
+      await retryDelay(delay, signal);
+    }
+  }
+  throw lastError;
 }
 
 async function pathSize(file: string): Promise<number> {
@@ -159,6 +254,57 @@ async function pathSize(file: string): Promise<number> {
     return (await stat(file)).size;
   } catch {
     return 0;
+  }
+}
+
+/**
+ * Move every local authority member into `backup`, recording what moved.
+ *
+ * A non-ENOENT failure aborts the move so the caller can restore the members
+ * that already moved instead of replacing a database it could not back up.
+ */
+async function moveMembersAside(
+  directory: string,
+  backup: string,
+): Promise<string[]> {
+  await rm(backup, { recursive: true, force: true }).catch(() => undefined);
+  await mkdir(backup, { recursive: true, mode: 0o700 });
+  const moved: string[] = [];
+  for (const name of LOCAL_MEMBERS) {
+    const from = join(directory, name);
+    const to = join(backup, name);
+    try {
+      await rename(from, to);
+      moved.push(name);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw error;
+    }
+  }
+  return moved;
+}
+
+/**
+ * Restore the members actually present in `backup`.
+ *
+ * Members the move never captured are left untouched, so an incomplete backup
+ * can never delete live data; journal files of the rejected database are
+ * removed when the backup does not carry them.
+ */
+async function restoreMembers(backup: string, directory: string): Promise<void> {
+  let names: string[];
+  try {
+    names = await readdir(backup);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    await rm(join(directory, name), { recursive: true, force: true });
+    await rename(join(backup, name), join(directory, name));
+  }
+  for (const name of EPHEMERAL_DB_MEMBERS) {
+    if (names.includes(name)) continue;
+    await rm(join(directory, name), { force: true }).catch(() => undefined);
   }
 }
 
@@ -268,20 +414,28 @@ export function createSpaceMigrationTransfer(
         const length = Math.min(UPLOAD_CHUNK_BYTES, size - offset);
         const buffer = Buffer.alloc(length);
         await handle.read(buffer, 0, length, offset);
-        const response = await request(
-          `${MIGRATION_PATH}/part?id=${encodeURIComponent(id)}&name=${encodeURIComponent(name)}&offset=${String(offset)}`,
-          { method: 'PUT', body: buffer },
-          signal,
-        );
-        const body = (await response.json()) as JsonResponse;
-        if (response.status === 409 && typeof body.offset === 'number') {
-          offset = body.offset;
-          onProgress(offset);
-          continue;
-        }
-        if (!response.ok)
-          throw new Error(body.message ?? '上传迁移数据失败');
-        offset += length;
+        // One attempt = one chunk at this offset. Retries reuse the same
+        // offset (resumable); a 409 tells us the server's acknowledged offset.
+        const nextOffset = await withChunkRetries(async () => {
+          const response = await request(
+            `${MIGRATION_PATH}/part?id=${encodeURIComponent(id)}&name=${encodeURIComponent(name)}&offset=${String(offset)}`,
+            { method: 'PUT', body: buffer },
+            signal,
+          );
+          const body = (await response.json().catch(() => ({}))) as JsonResponse;
+          if (response.status === 409 && typeof body.offset === 'number') {
+            if (body.offset === offset)
+              throw new Error('上传迁移数据时偏移量不一致，请重试');
+            return body.offset;
+          }
+          if (!response.ok)
+            throw httpChunkError(
+              body.message ?? '上传迁移数据失败',
+              response.status,
+            );
+          return offset + length;
+        }, signal);
+        offset = nextOffset;
         onProgress(offset);
       }
     } finally {
@@ -303,27 +457,37 @@ export function createSpaceMigrationTransfer(
     try {
       while (total === null || offset < total) {
         assertNotAborted(signal);
-        const response = await request(
-          `${MIGRATION_PATH}/export/part?id=${encodeURIComponent(id)}&name=${encodeURIComponent(name)}&offset=${String(offset)}`,
-          {
-            method: 'GET',
-            headers: {
-              ...(total === null ? {} : { range: `bytes=${offset}-` }),
+        // Each attempt re-requests the same byte range, so a flaky network
+        // simply resumes where the previous attempt stopped.
+        const chunk = await withChunkRetries(async () => {
+          const response = await request(
+            `${MIGRATION_PATH}/export/part?id=${encodeURIComponent(id)}&name=${encodeURIComponent(name)}&offset=${String(offset)}`,
+            {
+              method: 'GET',
+              headers: {
+                ...(total === null ? {} : { range: `bytes=${offset}-` }),
+              },
             },
-          },
-          signal,
-        );
-        if (response.status === 416) break;
-        if (!response.ok) {
-          const body = (await response.json().catch(() => ({}))) as JsonResponse;
-          throw new Error(body.message ?? '下载迁移数据失败');
-        }
-        if (total === null) {
-          const header = Number(response.headers.get('x-total-size'));
-          total = Number.isFinite(header) && header > 0 ? header : null;
-        }
-        const chunk = Buffer.from(await response.arrayBuffer());
-        if (chunk.byteLength === 0) break;
+            signal,
+          );
+          if (response.status === 416) return null;
+          if (!response.ok) {
+            const body = (await response
+              .json()
+              .catch(() => ({}))) as JsonResponse;
+            throw httpChunkError(
+              body.message ?? '下载迁移数据失败',
+              response.status,
+            );
+          }
+          if (total === null) {
+            const header = Number(response.headers.get('x-total-size'));
+            total = Number.isFinite(header) && header > 0 ? header : null;
+          }
+          const chunk = Buffer.from(await response.arrayBuffer());
+          return chunk.byteLength === 0 ? null : chunk;
+        }, signal);
+        if (chunk === null) break;
         await handle.write(chunk, 0, chunk.byteLength, offset);
         offset += chunk.byteLength;
         onProgress(offset);
@@ -336,7 +500,9 @@ export function createSpaceMigrationTransfer(
   }
 
   return {
-    async preflight(): Promise<MigrationPreflight> {
+    async preflight(
+      direction: TransferDirection = 'to-server',
+    ): Promise<MigrationPreflight> {
       const localDb = join(directory, 'space.db');
       const localDbBytes = await pathSize(localDb);
       const assets = await assetsFootprint(directory);
@@ -390,18 +556,19 @@ export function createSpaceMigrationTransfer(
           hasUserData: localHasData,
         },
         needsOverwrite,
-        replacesLocal: true,
-        ok: protocolOk && localDbBytes > 0,
+        replacesLocal: direction === 'from-server',
+        // `from-server` installs a database into a fresh local directory, so
+        // a missing local file is expected; `to-server` needs one to send.
+        ok: protocolOk && (direction === 'from-server' || localDbBytes > 0),
         ...(protocolOk
           ? {}
           : { message: '服务端协议版本不兼容' }),
       };
     },
 
-    async toServer(transfer: TransferOptions & {
-      freeze?: () => Promise<void>;
-      unfreeze?: () => Promise<void>;
-    } = {}) {
+    async toServer(
+      transfer: TransferOptions & TransferFreezeHooks = {},
+    ): Promise<ToServerTransferResult> {
       const { onProgress = () => undefined, signal } = transfer;
       const workRoot = join(directory, '.migration');
       await mkdir(workRoot, { recursive: true, mode: 0o700 });
@@ -496,6 +663,14 @@ export function createSpaceMigrationTransfer(
           sha256: finalWritten.sha256,
         });
         const snapshotCounts = readSpaceDataCounts(snapshot);
+        // What the server must see after unpacking both parts: the database
+        // plus every distinct asset path either phase packed. The pre-commit
+        // check turns a truncated/partial upload into a 400 before the target
+        // is replaced.
+        const expectedPaths = new Set<string>(['space.db']);
+        for (const entry of firstAssets) expectedPaths.add(entry.path);
+        for (const entry of allAssets) expectedPaths.add(entry.path);
+        const migrationId = serverId;
         progress('commit', '服务端校验并替换数据…', finalWritten.size, finalWritten.size);
         const committed = await jsonRequest<JsonResponse>(
           `${MIGRATION_PATH}/commit`,
@@ -503,43 +678,77 @@ export function createSpaceMigrationTransfer(
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({
-              id: serverId,
+              id: migrationId,
               overwrite: transfer.overwrite === true,
               parts,
+              expected: {
+                counts: snapshotCounts,
+                fileCount: expectedPaths.size,
+              },
             }),
           },
           signal,
         );
-        if (committed.ok !== true)
-          throw new Error(committed.message ?? '服务端迁移提交失败');
-        const counts = (committed.counts ?? {
-          spaces: 0,
-          nodes: 0,
-          thoughts: 0,
-          comments: 0,
-          versions: 0,
-          assets: 0,
-          events: 0,
-        }) as SpaceDataCounts;
-        // Asset rows are excluded here on purpose: the server runs startup GC
-        // immediately after reopening the replaced database, so unreferenced
-        // assets can legitimately disappear before the counts are read. Asset
-        // integrity is covered by the bundle part hashes above.
+        if (committed.ok !== true) {
+          const failedBackup =
+            typeof committed.backup === 'string' ? committed.backup : null;
+          throw new Error(
+            `${committed.message ?? '服务端迁移提交失败'}${
+              failedBackup === null
+                ? ''
+                : `；迁移前数据备份位于 ${failedBackup}（可调用服务端 ${MIGRATION_PATH}/rollback 恢复）`
+            }`,
+          );
+        }
+        const counts = (committed.counts ?? snapshotCounts) as SpaceDataCounts;
+        const serverBackup =
+          typeof committed.backup === 'string' ? committed.backup : null;
+        /** Restore the server's pre-commit database (used by the caller's switch). */
+        const rollback = async (): Promise<void> => {
+          const response = await request(`${MIGRATION_PATH}/rollback`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ id: migrationId }),
+          });
+          if (!response.ok) {
+            const body = (await response
+              .json()
+              .catch(() => ({}))) as JsonResponse;
+            throw new Error(
+              body.message ??
+                `服务端回滚失败（HTTP ${String(response.status)}）`,
+            );
+          }
+        };
+        // Defense in depth: the pre-commit handshake already verified the
+        // staged bundle, but a server that resumed with different data means
+        // the two authorities diverged. Roll the target back instead of
+        // leaving a half-switched pair behind.
         const mismatch = (
           Object.keys(snapshotCounts) as Array<keyof SpaceDataCounts>
         ).filter(
           (key) => key !== 'assets' && counts[key] !== snapshotCounts[key],
         );
-        if (mismatch.length > 0)
+        if (mismatch.length > 0) {
+          let recovery: string;
+          try {
+            await rollback();
+            recovery = '已请求服务端回滚到迁移前数据';
+          } catch (rollbackError) {
+            recovery = `自动回滚失败（${
+              rollbackError instanceof Error
+                ? rollbackError.message
+                : String(rollbackError)
+            }）；请用服务端备份文件手动恢复`;
+          }
           throw new Error(
-            `服务端迁移校验不一致（${mismatch.join('、')}），当前权威保持不变`,
+            `服务端迁移后校验不一致（${mismatch.join('、')}）；${recovery}${
+              serverBackup === null ? '' : `（备份：${serverBackup}）`
+            }`,
           );
+        }
         progress('commit', '迁移完成', finalWritten.size, finalWritten.size);
-        return {
-          counts,
-          serverBackup:
-            typeof committed.backup === 'string' ? committed.backup : null,
-        };
+        return { counts, serverBackup, rollback };
       } catch (error) {
         if (serverId !== undefined) {
           await request(
@@ -556,10 +765,9 @@ export function createSpaceMigrationTransfer(
       }
     },
 
-    async fromServer(transfer: TransferOptions & {
-      freeze?: () => Promise<void>;
-      unfreeze?: () => Promise<void>;
-    } = {}) {
+    async fromServer(
+      transfer: TransferOptions & TransferFreezeHooks = {},
+    ): Promise<FromServerTransferResult> {
       const { onProgress = () => undefined, signal } = transfer;
       const workRoot = join(directory, '.migration');
       await mkdir(workRoot, { recursive: true, mode: 0o700 });
@@ -574,6 +782,16 @@ export function createSpaceMigrationTransfer(
         totalBytes: number | null,
       ) => onProgress({ phase, message, transferredBytes, totalBytes });
       try {
+        // Freeze before the server is asked for a snapshot: a write accepted
+        // during the download would be acknowledged locally but missing from
+        // the exported database. The lock is held until the caller's authority
+        // switch; this method only releases it again on failure.
+        if (transfer.freeze !== undefined) {
+          progress('freeze', '暂停当前模式写入…', 0, null);
+          await transfer.freeze();
+          frozen = true;
+        }
+        assertNotAborted(signal);
         progress('download', '请求服务端导出快照…', 0, null);
         const exported = await jsonRequest<JsonResponse>(
           `${MIGRATION_PATH}/export`,
@@ -599,11 +817,6 @@ export function createSpaceMigrationTransfer(
           if (actual !== exported.sha256) throw new Error('下载校验失败，请重试');
         }
         assertNotAborted(signal);
-        if (transfer.freeze !== undefined) {
-          progress('freeze', '暂停当前模式写入…', 0, null);
-          await transfer.freeze();
-          frozen = true;
-        }
         progress('unpack', '解包快照…', total ?? 0, total);
         const unpacked = join(job, 'data');
         await mkdir(unpacked, { recursive: true, mode: 0o700 });
@@ -639,42 +852,37 @@ export function createSpaceMigrationTransfer(
         )
           throw new Error('服务端快照文件数量校验不一致，已保留本地数据');
         // Replace the local database and assets after backing up the old ones.
+        // A failed move aborts here: restoring only the members the backup
+        // actually captured can never delete local data it did not save.
         const backup = join(workRoot, `backup-${String(Date.now())}`);
-        await mkdir(backup, { recursive: true, mode: 0o700 });
-        for (const name of ['space.db', 'space.db-wal', 'space.db-shm', 'assets']) {
-          try {
-            await rename(join(directory, name), join(backup, name));
-          } catch {
-            // Missing members are fine on a fresh local directory.
-          }
-        }
         try {
+          await moveMembersAside(directory, backup);
           await rename(stagedDb, join(directory, 'space.db'));
           const stagedAssets = join(unpacked, 'assets');
           try {
             await rename(stagedAssets, join(directory, 'assets'));
-          } catch {
-            // No assets in this export.
+          } catch (error) {
+            // No assets in this export is the only acceptable failure.
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
           }
         } catch (error) {
-          for (const name of ['space.db', 'space.db-wal', 'space.db-shm', 'assets']) {
-            await rename(join(backup, name), join(directory, name)).catch(
-              () => undefined,
-            );
-          }
+          await restoreMembers(backup, directory).catch(() => undefined);
           throw error;
         }
         progress('verify', '写入完成', total ?? 0, total);
-        return { counts: incoming };
+        return { counts: incoming, localBackup: backup };
+      } catch (error) {
+        if (frozen) {
+          frozen = false;
+          await transfer.unfreeze?.().catch(() => undefined);
+        }
+        throw error;
       } finally {
         if (exportId !== undefined) {
           await request(
             `${MIGRATION_PATH}/export?id=${encodeURIComponent(exportId)}`,
             { method: 'DELETE' },
           ).catch(() => undefined);
-        }
-        if (frozen && transfer.unfreeze !== undefined) {
-          await transfer.unfreeze().catch(() => undefined);
         }
         await rm(job, { recursive: true, force: true }).catch(() => undefined);
       }

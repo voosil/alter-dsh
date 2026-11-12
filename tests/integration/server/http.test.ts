@@ -17,6 +17,7 @@ import {
   createSpaceHttpServer,
   type SpaceHttpServer,
 } from '../../../server/core/http.js';
+import { startSpaceServer } from '../../../server/core/index.js';
 
 const VALID_TOKEN = '0123456789abcdef0123456789abcdef';
 const OTHER_TOKEN = 'fedcba9876543210fedcba9876543210';
@@ -34,6 +35,7 @@ let fixture: Fixture | undefined;
 async function startFixture(options: {
   tokens?: string;
   maxRequestBodyBytes?: number;
+  frozen?: () => boolean;
 } = {}): Promise<Fixture> {
   const directory = await mkdtemp(join(tmpdir(), 'space-server-'));
   const tokens = parseServerTokens(
@@ -49,6 +51,7 @@ async function startFixture(options: {
     ...(options.maxRequestBodyBytes === undefined
       ? {}
       : { maxRequestBodyBytes: options.maxRequestBodyBytes }),
+    ...(options.frozen === undefined ? {} : { frozen: options.frozen }),
   });
   const port = await http.listen('127.0.0.1', 0);
   return {
@@ -222,6 +225,88 @@ describe('server HTTP routes', () => {
     expect(asset.headers.get('content-type')).toBe('image/png');
     const bytes = Buffer.from(await asset.arrayBuffer());
     expect(bytes.equals(png)).toBe(true);
+  });
+
+  it('answers HEAD /version with headers and no body', async () => {
+    const current = fixture as Fixture;
+    const response = await fetch(`${current.baseUrl}/version`, {
+      method: 'HEAD',
+    });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('');
+    const post = await fetch(`${current.baseUrl}/version`, { method: 'POST' });
+    expect(post.status).toBe(405);
+  });
+
+  it('treats only the exact migration path as the migration surface', async () => {
+    const current = fixture as Fixture;
+    const response = await fetch(
+      `${current.baseUrl}/api/alter-space/migrate-extra`,
+      { headers: { authorization: `Bearer ${VALID_TOKEN}` } },
+    );
+    expect(response.status).toBe(404);
+    const body = (await response.json()) as { error?: string };
+    expect(body.error).toBe('not_found');
+  });
+
+  it('returns a stable 503 while frozen but keeps health/version public', async () => {
+    const current = await startFixture({ frozen: () => true });
+    try {
+      const rpc = await postRpc(current.baseUrl, rpcBody('space.listSpaces'));
+      expect(rpc.status).toBe(503);
+      const rpcBodyValue = (await rpc.json()) as { error?: string };
+      expect(rpcBodyValue.error).toBe('migration_paused');
+      const asset = await fetch(
+        `${current.baseUrl}/api/alter-space/asset?id=missing`,
+        { headers: { authorization: `Bearer ${VALID_TOKEN}` } },
+      );
+      expect(asset.status).toBe(503);
+      const health = await fetch(`${current.baseUrl}/healthz`);
+      expect(health.status).toBe(200);
+      const version = await fetch(`${current.baseUrl}/version`);
+      expect(version.status).toBe(200);
+      // Authentication still wins over the frozen gate.
+      const unauthorized = await postRpc(
+        current.baseUrl,
+        rpcBody('space.listSpaces'),
+        null,
+      );
+      expect(unauthorized.status).toBe(401);
+    } finally {
+      await current.http.close();
+      await current.runtime.close();
+      await rm(current.directory, { recursive: true, force: true });
+    }
+  });
+
+  it('closes gracefully and idempotently', async () => {
+    const current = await startFixture();
+    await current.http.close();
+    await current.http.close();
+    await current.runtime.close();
+    await rm(current.directory, { recursive: true, force: true });
+    fixture = undefined;
+  });
+
+  it('logs a usable loopback URL when bound to all interfaces', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'space-server-wildcard-'));
+    const server = await startSpaceServer(
+      {
+        dataDir: directory,
+        host: '0.0.0.0',
+        port: 0,
+        tokens: [{ label: 'test', token: VALID_TOKEN }],
+        snapshots: false,
+      },
+      { info: () => undefined, warn: () => undefined },
+    );
+    try {
+      expect(server.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+      expect((await fetch(`${server.url}/healthz`)).status).toBe(200);
+    } finally {
+      await server.close();
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it('answers 404/405 without leaking route internals', async () => {

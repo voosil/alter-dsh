@@ -109,7 +109,27 @@ export interface SpaceDataCounts {
   versions: number;
   assets: number;
   events: number;
+  agents: number;
+  tasks: number;
+  milestones: number;
+  /** Hub overview snapshots (one row per Space). */
+  hub: number;
 }
+
+/** Every count key, in a stable order for payloads and comparisons. */
+export const SPACE_DATA_COUNT_KEYS = [
+  'spaces',
+  'nodes',
+  'thoughts',
+  'comments',
+  'versions',
+  'assets',
+  'events',
+  'agents',
+  'tasks',
+  'milestones',
+  'hub',
+] as const satisfies readonly (keyof SpaceDataCounts)[];
 
 /**
  * Count business rows in one database without loading the whole store.
@@ -124,6 +144,10 @@ export function readSpaceDataCounts(file: string): SpaceDataCounts {
     versions: 0,
     assets: 0,
     events: 0,
+    agents: 0,
+    tasks: 0,
+    milestones: 0,
+    hub: 0,
   };
   const db = new DatabaseSync(file, { readOnly: true });
   try {
@@ -135,6 +159,10 @@ export function readSpaceDataCounts(file: string): SpaceDataCounts {
       ['versions', 'versions'],
       ['assets', 'document_assets'],
       ['events', 'events'],
+      ['agents', 'agents'],
+      ['tasks', 'tasks'],
+      ['milestones', 'milestones'],
+      ['hub', 'hub'],
     ];
     for (const [key, table] of tables) {
       if (!hasTable(db, table)) continue;
@@ -149,13 +177,26 @@ export function readSpaceDataCounts(file: string): SpaceDataCounts {
   }
 }
 
-/** Whether a Space database has no user-visible content yet. */
+/** Count keys every empty Space database has at zero (default space ignored). */
+const USER_CONTENT_COUNT_KEYS = [
+  'nodes',
+  'thoughts',
+  'comments',
+  'versions',
+  'agents',
+  'tasks',
+  'milestones',
+  'hub',
+] as const satisfies readonly (keyof SpaceDataCounts)[];
+
+/**
+ * Whether a Space database has no user-visible content yet.
+ *
+ * A default Space row always exists, and the activity log only records that
+ * something else happened, so both are ignored. Agents/tasks/milestones/hub
+ * content counts: a server holding only those is not an empty target.
+ */
 export function isEmptySpaceDatabase(file: string): boolean {
   const counts = readSpaceDataCounts(file);
-  return (
-    counts.nodes === 0 &&
-    counts.thoughts === 0 &&
-    counts.comments === 0 &&
-    counts.versions === 0
-  );
+  return USER_CONTENT_COUNT_KEYS.every((key) => counts[key] === 0);
 }

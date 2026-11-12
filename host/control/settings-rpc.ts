@@ -10,12 +10,19 @@ import type { ConnectionAudit } from './connection-audit.js';
 import {
   ConnectionSettingsError,
   normalizeServerUrl,
+  normalizeToken,
   type ConnectionSettingsStore,
+  type ConnectionSettingsView,
 } from './connection-settings.js';
 import type { SpaceModeController } from '../core/mode.js';
 import type { SpaceRpcHandler } from '../authority/rpc.js';
 import type { SyncQueueEntry } from '../remote/bridge.js';
-import { readRemoteQueueCounts } from '../remote/cache.js';
+import {
+  readRemoteQueueCounts,
+  removeRemoteCache,
+  type QueueCounts,
+} from '../remote/cache.js';
+import { RemoteClientError } from '../remote/client.js';
 import { testRemoteServer, type RemoteTestResult } from '../remote/test.js';
 
 /** Non-secret state shared by the settings page and the Agent settings tool. */
@@ -65,12 +72,300 @@ function argsOf(payload: unknown): unknown[] {
 function errorOf(error: unknown): { error: { code: string; message: string } } {
   if (error instanceof ConnectionSettingsError)
     return { error: { code: error.code, message: error.message } };
+  // RemoteClientError carries the stable remote/* codes the spec promises
+  // (`sync.resolve` offline → remote/unavailable); flattening them to
+  // settings/failed hid the retryable condition from the browser.
+  if (error instanceof RemoteClientError)
+    return { error: { code: error.code, message: error.message } };
   return {
     error: {
       code: 'settings/failed',
       message: error instanceof Error ? error.message : String(error),
     },
   };
+}
+
+/** One validated connection-settings change, before it is committed. */
+export interface ConnectionPatchReview {
+  /** Who asked for the change. */
+  actor: 'user' | 'agent';
+  previousMode: 'local' | 'server';
+  nextMode: 'local' | 'server';
+  previousServerUrl: string | null;
+  nextServerUrl: string | null;
+  modeChanged: boolean;
+  serverUrlChanged: boolean;
+  /** Whether the change writes or clears the bearer token. */
+  tokenChanged: boolean;
+  /** Explicit acknowledgement of the data being abandoned. */
+  discard: boolean;
+  /** Unsettled queue rows under the old server scope. */
+  queue: QueueCounts;
+  /** Why an explicit discard is required, when it is. */
+  discardReason?: string;
+}
+
+/** Approval outcome returned by the Agent approval service. */
+export type ConnectionApprovalOutcome =
+  | 'allowed-once'
+  | 'rejected'
+  | 'cancelled'
+  | 'unavailable';
+
+/**
+ * Ask the user to approve one sensitive connection change. The settings page
+ * confirms in its own UI and passes no callback; the Agent tool supplies the
+ * DSH approval flow.
+ */
+export type ConnectionApproval = (
+  review: ConnectionPatchReview,
+) => Promise<ConnectionApprovalOutcome>;
+
+/** Dependencies of {@link applyConnectionPatch}. */
+export interface ApplyConnectionPatchOptions {
+  settings: ConnectionSettingsStore;
+  mode: SpaceModeController;
+  /** Local data directory that owns the per-server queue/cache files. */
+  directory: string;
+  /** Audit attribution. */
+  actor: 'user' | 'agent';
+  audit?: ConnectionAudit;
+  /** Whether a migration job currently owns the authority window. */
+  isMigrationRunning?: () => boolean;
+  /** Approval gate for mode/URL/token changes (Agent tool only). */
+  approval?: ConnectionApproval;
+}
+
+/** One committed connection change. */
+export interface AppliedConnectionPatch {
+  before: ConnectionSettingsView;
+  view: ConnectionSettingsView;
+  review: ConnectionPatchReview;
+  /** Old server scope whose cache/queue was removed, when it was. */
+  clearedServerUrl: string | null;
+}
+
+/** Refuse a settings write while a migration owns the authority window. */
+function assertNotMigrationBusy(
+  options: Pick<ApplyConnectionPatchOptions, 'mode' | 'isMigrationRunning'>,
+): void {
+  const running = options.isMigrationRunning?.() === true;
+  const mode = options.mode as Partial<SpaceModeController>;
+  const locked =
+    typeof mode.isMigrationLocked === 'function' && mode.isMigrationLocked();
+  if (running || locked)
+    throw new ConnectionSettingsError(
+      'migration/busy',
+      '迁移进行中，暂时不能修改服务器配置或切换模式',
+    );
+}
+
+function changedModeOf(value: unknown): 'local' | 'server' {
+  if (value === 'local' || value === 'server') return value;
+  throw new ConnectionSettingsError('settings/invalid', 'mode 只能是 local 或 server');
+}
+
+/**
+ * Validate, authorize and commit one connection-settings patch.
+ *
+ * Shared by the settings RPC (browser, already confirmed in the page UI) and
+ * the Agent `space_settings` tool (needs the approval flow): both must apply
+ * the same migration lock, mode-switch guard, unsettled-queue guard, backend
+ * switch/rollback and audit trail.
+ *
+ * A mode switch always requires `discard: true` because it replaces the
+ * authority for every document. Changing `serverUrl` in server mode requires
+ * it too while the old server scope still has queued writes, which would
+ * otherwise be orphaned in a cache file nobody addresses again.
+ *
+ * @param rawPatch - caller-supplied patch (`mode`/`serverUrl`/`token`/`discard`).
+ * @param options - store, mode controller and audit/approval seams.
+ * @returns the committed view plus what actually changed.
+ */
+export async function applyConnectionPatch(
+  rawPatch: unknown,
+  options: ApplyConnectionPatchOptions,
+): Promise<AppliedConnectionPatch> {
+  if (!isPlainObject(rawPatch))
+    throw new ConnectionSettingsError(
+      'settings/invalid',
+      '设置更新参数必须是对象',
+    );
+  assertNotMigrationBusy(options);
+  const previous = await options.settings.load();
+  const before = await options.settings.view();
+  const nextMode =
+    rawPatch.mode === undefined
+      ? previous.settings.mode
+      : changedModeOf(rawPatch.mode);
+  const nextServerUrl =
+    rawPatch.serverUrl === undefined
+      ? previous.settings.serverUrl
+      : normalizeServerUrl(rawPatch.serverUrl);
+  const providedToken = normalizeToken(rawPatch.token);
+  const nextToken =
+    providedToken === undefined
+      ? previous.token
+      : (providedToken ?? undefined);
+  if (nextMode === 'server') {
+    if (nextServerUrl === null)
+      throw new ConnectionSettingsError(
+        'settings/not-configured',
+        '服务端模式需要配置服务器地址',
+      );
+    if (nextToken === undefined)
+      throw new ConnectionSettingsError(
+        'settings/not-configured',
+        '服务端模式需要配置 token',
+      );
+  }
+  const modeChanged = previous.settings.mode !== nextMode;
+  const serverUrlChanged = previous.settings.serverUrl !== nextServerUrl;
+  const tokenChanged = nextToken !== previous.token;
+  const discard = rawPatch.discard === true;
+  const queue =
+    previous.settings.serverUrl === null
+      ? { pending: 0, conflicts: 0, failed: 0 }
+      : readRemoteQueueCounts(options.directory, previous.settings.serverUrl);
+  const unsettled = queue.pending + queue.conflicts + queue.failed;
+  let discardReason: string | undefined;
+  if (modeChanged && !discard) {
+    discardReason =
+      nextMode === 'server'
+        ? '从本地切到服务端需要先执行「数据迁移 → 本地 → 服务端」，或显式确认放弃本地数据'
+        : '从服务端切回本地需要先执行「数据迁移 → 服务端 → 本地」，或显式确认放弃服务端数据';
+  } else if (
+    !modeChanged &&
+    previous.settings.mode === 'server' &&
+    serverUrlChanged &&
+    unsettled > 0 &&
+    !discard
+  ) {
+    discardReason = `旧服务器还有 ${String(unsettled)} 条尚未同步到服务端的本地写入；请先在「待同步写入」里处理，或显式确认放弃旧服务器的本地写入`;
+  }
+  if (discardReason !== undefined)
+    throw new ConnectionSettingsError(
+      'settings/migration-required',
+      discardReason,
+    );
+  const review: ConnectionPatchReview = {
+    actor: options.actor,
+    previousMode: previous.settings.mode,
+    nextMode,
+    previousServerUrl: previous.settings.serverUrl,
+    nextServerUrl,
+    modeChanged,
+    serverUrlChanged,
+    tokenChanged,
+    discard,
+    queue,
+    ...(discardReason === undefined ? {} : { discardReason }),
+  };
+  const sensitive = modeChanged || serverUrlChanged || tokenChanged;
+  if (!sensitive) return { before, view: before, review, clearedServerUrl: null };
+  const auditAction = (): 'mode' | 'server' | 'token' =>
+    modeChanged ? 'mode' : serverUrlChanged ? 'server' : 'token';
+  if (options.approval !== undefined) {
+    const outcome = await options.approval(review);
+    if (outcome !== 'allowed-once') {
+      options.audit?.record({
+        actor: options.actor,
+        action: auditAction(),
+        from: modeChanged ? before.mode : before.serverUrl,
+        to: modeChanged ? nextMode : nextServerUrl,
+        tokenChanged,
+        result: 'rejected',
+      });
+      throw new ConnectionSettingsError(
+        'settings/approval-required',
+        `用户未批准修改 Space 服务器配置（${outcome}）`,
+      );
+    }
+  }
+  const loaded = await options.settings.save({
+    mode: nextMode,
+    serverUrl: nextServerUrl,
+    ...(providedToken === undefined ? {} : { token: providedToken }),
+  });
+  // A local-mode settings edit only changes what the next switch will use; it
+  // must not restart the local SQLite authority on every save.
+  const backendChanged =
+    modeChanged || (nextMode === 'server' && (serverUrlChanged || tokenChanged));
+  if (backendChanged) {
+    try {
+      await options.mode.apply(loaded);
+    } catch (error) {
+      // A failed switch keeps the old backend alive, so the persisted choice
+      // must be rolled back too or the panel and the next start would disagree
+      // about the authority.
+      await options.settings
+        .save({
+          mode: previous.settings.mode,
+          serverUrl: previous.settings.serverUrl,
+          token: previous.token ?? null,
+        })
+        .catch(() => undefined);
+      options.audit?.record({
+        actor: options.actor,
+        action: auditAction(),
+        from: modeChanged ? before.mode : before.serverUrl,
+        to: modeChanged ? nextMode : nextServerUrl,
+        tokenChanged,
+        result: 'failed',
+      });
+      throw error;
+    }
+  }
+  const after = await options.settings.view();
+  if (modeChanged)
+    options.audit?.record({
+      actor: options.actor,
+      action: 'mode',
+      from: before.mode,
+      to: after.mode,
+      tokenChanged,
+      result: 'ok',
+    });
+  if (serverUrlChanged)
+    options.audit?.record({
+      actor: options.actor,
+      action: 'server',
+      from: before.serverUrl,
+      to: after.serverUrl,
+      tokenChanged,
+      result: 'ok',
+    });
+  if (tokenChanged)
+    options.audit?.record({
+      actor: options.actor,
+      action: 'token',
+      tokenChanged: true,
+      result: 'ok',
+    });
+  // The old server scope is no longer addressed by this plugin: its read
+  // cache is stale and a queue left behind would never be replayed. Unsettled
+  // writes are user content, not disposable cache, so they only go away with
+  // the explicit discard required above (a local-mode URL change skips that
+  // guard, so it must leave the orphaned file untouched).
+  let clearedServerUrl: string | null = null;
+  const oldServerUrl = previous.settings.serverUrl;
+  const mayClearOldScope = unsettled === 0 || discard;
+  if (
+    oldServerUrl !== null &&
+    mayClearOldScope &&
+    (serverUrlChanged || (modeChanged && nextMode === 'local'))
+  ) {
+    await removeRemoteCache(options.directory, oldServerUrl);
+    clearedServerUrl = oldServerUrl;
+    options.audit?.record({
+      actor: options.actor,
+      action: 'sync',
+      from: oldServerUrl,
+      to: null,
+      result: 'ok',
+    });
+  }
+  return { before, view: after, review, clearedServerUrl };
 }
 
 /**
@@ -114,89 +409,20 @@ export function createSettingsRpcHandler(
     };
   }
 
-  /**
-   * Refuse a mode change that would silently strand data.
-   *
-   * Moving to the server or back to local replaces the authority for every
-   * document, so it must go through a migration (or an explicit discard of
-   * the data that is left behind). A bare mode flip is what the settings
-   * page used to send and it dropped the remote queue without asking.
-   */
-  function guardDirection(
-    previousMode: 'local' | 'server',
-    nextMode: 'local' | 'server',
-    explicit: unknown,
-  ): void {
-    if (previousMode === nextMode || explicit === true) return;
-    if (nextMode === 'server')
-      throw new ConnectionSettingsError(
-        'settings/migration-required',
-        '从本地切到服务端需要先执行「数据迁移 → 本地 → 服务端」，或显式确认放弃本地数据',
-      );
-    throw new ConnectionSettingsError(
-      'settings/migration-required',
-      '从服务端切回本地需要先执行「数据迁移 → 服务端 → 本地」，或显式确认放弃服务端数据',
-    );
-  }
-
   return async (endpoint, payload) => {
     try {
       if (endpoint === 'settings.get')
         return { value: await buildState() };
       if (endpoint === 'settings.update') {
-        if (deps.isMigrationRunning?.() === true)
-          throw new ConnectionSettingsError(
-            'migration/busy',
-            '迁移进行中，暂时不能修改服务器配置或切换模式',
-          );
-        const patch = argsOf(payload)[0];
-        if (!isPlainObject(patch))
-          throw new ConnectionSettingsError(
-            'settings/invalid',
-            '设置更新参数必须是对象',
-          );
-        const previous = await deps.settings.load();
-        const before = await deps.settings.view();
-        const nextMode =
-          patch.mode === undefined
-            ? previous.settings.mode
-            : patch.mode === 'local' || patch.mode === 'server'
-              ? patch.mode
-              : (() => {
-                  throw new ConnectionSettingsError(
-                    'settings/invalid',
-                    'mode 只能是 local 或 server',
-                  );
-                })();
-        guardDirection(previous.settings.mode, nextMode, patch.discard);
-        const loaded = await deps.settings.save(patch);
-        try {
-          await deps.mode.apply(loaded);
-        } catch (error) {
-          // A failed switch keeps the old backend alive, so the persisted
-          // choice must be rolled back too or the panel and the next start
-          // would disagree about the authority.
-          await deps.settings
-            .save({
-              mode: previous.settings.mode,
-              serverUrl: previous.settings.serverUrl,
-            })
-            .catch(() => undefined);
-          await deps.settings.setToken(previous.token ?? null).catch(
-            () => undefined,
-          );
-          throw error;
-        }
-        const after = await deps.settings.view();
-        deps.audit?.record({
+        await applyConnectionPatch(argsOf(payload)[0], {
+          settings: deps.settings,
+          mode: deps.mode,
+          directory: deps.directory,
           actor: 'user',
-          action:
-            before.mode !== after.mode || before.serverUrl !== after.serverUrl
-              ? 'server'
-              : 'token',
-          from: before.serverUrl,
-          to: after.serverUrl,
-          result: 'ok',
+          ...(deps.audit === undefined ? {} : { audit: deps.audit }),
+          ...(deps.isMigrationRunning === undefined
+            ? {}
+            : { isMigrationRunning: deps.isMigrationRunning }),
         });
         return { value: await buildState() };
       }
@@ -286,14 +512,12 @@ export function createSettingsRpcHandler(
         await deps.mode.flush();
         return { value: await buildState() };
       }
-      if (endpoint.startsWith('settings.') || endpoint.startsWith('sync.'))
-        throw new ConnectionSettingsError(
-          'settings/not-found',
-          `未知的接口 ${endpoint}`,
-        );
+      // The plugin route sends every `settings.*` / `sync.*` endpoint here
+      // (including unknown methods, so the migration freeze cannot silently
+      // judge them read-only); they must fail with a stable business code.
       throw new ConnectionSettingsError(
         'settings/not-found',
-        `设置处理器不支持的接口 ${endpoint}`,
+        `未知的设置接口 ${endpoint}`,
       );
     } catch (error) {
       return errorOf(error);

@@ -4,6 +4,8 @@ import {
   SPACE_RPC_ENDPOINT,
   createSpaceClient,
   createSpaceDocumentClient,
+  createSpaceMigrationClient,
+  createSpaceSettingsClient,
   type SpaceRpcCaller,
 } from '../../../src/client/rpc.js';
 
@@ -304,5 +306,108 @@ describe('createSpaceDocumentClient', () => {
     expect('migrate' in document).toBe(false);
     await document.get('doc-1');
     expect(calls).toEqual(['doc.get']);
+  });
+});
+
+describe('createSpaceSettingsClient', () => {
+  it('maps settings/sync endpoints and forwards the discard acknowledgement', async () => {
+    const calls: Array<{ op: string; args: unknown[] }> = [];
+    const rpc: SpaceRpcCaller = {
+      async call(_channel, _endpoint, payload) {
+        const { op, args } = payload as { op: string; args: unknown[] };
+        calls.push({ op, args });
+        return { ok: true, value: { value: { mode: 'local' } } };
+      },
+    };
+    const client = createSpaceSettingsClient(rpc);
+    await client.get();
+    await client.update({ serverUrl: 'http://127.0.0.1:9', token: 't' });
+    await client.update({ mode: 'local', discard: true });
+    await client.test({ serverUrl: 'http://127.0.0.1:9' });
+    await client.syncStatus();
+    await client.syncQueue();
+    await client.resolveSync('doc-1', 'retry');
+    await client.flush();
+    expect(calls.map((entry) => entry.op)).toEqual([
+      'settings.get',
+      'settings.update',
+      'settings.update',
+      'settings.test',
+      'sync.status',
+      'sync.queue',
+      'sync.resolve',
+      'sync.flush',
+    ]);
+    // Saving a URL/token without a mode change must not smuggle `mode` in.
+    expect(calls[1]?.args).toEqual([
+      { serverUrl: 'http://127.0.0.1:9', token: 't' },
+    ]);
+    expect(calls[2]?.args).toEqual([{ mode: 'local', discard: true }]);
+    expect(calls[5]?.args).toEqual([]);
+    expect(calls[6]?.args).toEqual([{ docId: 'doc-1', action: 'retry' }]);
+  });
+
+  it('unwraps control-plane business error codes', async () => {
+    const rpc: SpaceRpcCaller = {
+      async call() {
+        return {
+          ok: true,
+          value: {
+            error: {
+              code: 'remote/unavailable',
+              message: '重试需要连接服务端',
+            },
+          },
+        };
+      },
+    };
+    const client = createSpaceSettingsClient(rpc);
+    await expect(client.resolveSync('doc-1', 'retry')).rejects.toMatchObject({
+      code: 'remote/unavailable',
+    });
+  });
+});
+
+describe('createSpaceMigrationClient', () => {
+  it('maps the migration endpoints', async () => {
+    const calls: Array<{ op: string; args: unknown[] }> = [];
+    const rpc: SpaceRpcCaller = {
+      async call(_channel, _endpoint, payload) {
+        const { op, args } = payload as { op: string; args: unknown[] };
+        calls.push({ op, args });
+        return { ok: true, value: { value: { status: 'idle' } } };
+      },
+    };
+    const client = createSpaceMigrationClient(rpc);
+    await client.preflight('to-server');
+    await client.start({ direction: 'from-server', overwrite: true });
+    await client.status();
+    await client.cancel();
+    expect(calls).toEqual([
+      { op: 'migration.preflight', args: [{ direction: 'to-server' }] },
+      {
+        op: 'migration.start',
+        args: [{ direction: 'from-server', overwrite: true }],
+      },
+      { op: 'migration.status', args: [] },
+      { op: 'migration.cancel', args: [] },
+    ]);
+  });
+
+  it('unwraps migration business error codes', async () => {
+    const rpc: SpaceRpcCaller = {
+      async call() {
+        return {
+          ok: true,
+          value: {
+            error: { code: 'migration/failed', message: '迁移失败' },
+          },
+        };
+      },
+    };
+    const client = createSpaceMigrationClient(rpc);
+    await expect(client.start({ direction: 'to-server' })).rejects.toMatchObject(
+      { code: 'migration/failed' },
+    );
   });
 });

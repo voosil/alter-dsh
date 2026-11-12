@@ -11,6 +11,9 @@ RUN corepack enable
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY tsconfig.host.json ./
+# `build:host` clears lib/ before compiling; the script lives in scripts/build/
+# and must be present or the in-image build fails with MODULE_NOT_FOUND.
+COPY scripts/build/clean-lib.mjs ./scripts/build/clean-lib.mjs
 COPY host ./host
 COPY server ./server
 COPY vendor/service/src ./vendor/service/src

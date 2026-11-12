@@ -6,6 +6,11 @@
  * All endpoints live under `/api/alter-space/migrate`; the HTTP carrier
  * authenticates them with the same bearer token as the RPC surface.
  *
+ * Replacing a database is not crash-safe, so the previous database is kept in
+ * `.migration/backup-<id>` until the seven-day sweep removes it. The host can
+ * ask the server to restore that backup (`POST /rollback`) when the authority
+ * switch on its side failed after a successful commit.
+ *
  * @module @alter-dsh/space/migration/service
  */
 import { randomUUID } from 'node:crypto';
@@ -22,6 +27,7 @@ import {
 import { join } from 'node:path';
 import type { LocalSpaceRuntime } from '../../host/core/runtime.js';
 import {
+  countUnpackedFiles,
   isBundlePartName,
   sha256File,
   unpackBundleTo,
@@ -29,11 +35,14 @@ import {
   listAssetEntries,
 } from '../../host/control/migration/bundle.js';
 import {
+  SPACE_DATA_COUNT_KEYS,
   isEmptySpaceDatabase,
   readDatabaseFacts,
   readSpaceDataCounts,
   snapshotSpaceDatabase,
+  type SpaceDataCounts,
 } from '../../host/control/migration/snapshot.js';
+import { sweepMigrationStaging } from '../../host/control/migration/staging.js';
 import { SPACE_DB_FORMAT_VERSION } from '../../host/persistence/store.js';
 import { SPACE_PROTOCOL_VERSION } from '../../host/core/protocol.js';
 
@@ -51,11 +60,25 @@ export interface MigrationRuntimeHost {
   pause(): Promise<void>;
   /** Reopen the authority from the (possibly replaced) data directory. */
   resume(): Promise<LocalSpaceRuntime>;
+  /**
+   * Snapshot the freshly installed database even when today already has one.
+   * The standalone server passes `config.snapshots`; defaults to `true`.
+   */
+  forceInitialSnapshot?: boolean;
 }
 
 /** One ready server migration handler. */
 export interface ServerMigration {
   handle(request: Request, url: URL): Promise<Response | undefined>;
+  /** Whether a commit is replacing the authority right now. */
+  inflight(): boolean;
+  /** Whether the authority is paused for a replace/rollback right now. */
+  paused(): boolean;
+  /**
+   * Stop accepting new commits and wait for the in-flight one.
+   * @param timeoutMs - bounded wait; a timeout only logs a warning.
+   */
+  drain(timeoutMs?: number): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -63,10 +86,47 @@ export interface ServerMigration {
 export const MIGRATION_PATH = '/api/alter-space/migrate';
 
 const STAGING_DIR = '.migration';
-const MAX_PART_BYTES = 64 * 1024 * 1024;
+/** Bound one upload request body; the client sends 8 MiB chunks. */
+const MAX_PART_CHUNK_BYTES = 64 * 1024 * 1024;
+/** Bound one commit payload: a bundle is split into a handful of parts. */
+const MAX_COMMIT_PARTS = 16;
+/** Bound the bytes one staged import may occupy on disk. */
+const MAX_TOTAL_PART_BYTES = 64 * 1024 * 1024 * 1024;
+/** Bound concurrent export staging directories (each holds one full snapshot). */
+const MAX_ACTIVE_EXPORTS = 3;
 /** Per-download response bound; clients page with Range headers. */
 const EXPORT_CHUNK_BYTES = 8 * 1024 * 1024;
 const ID_PATTERN = /^[a-z0-9-]{8,64}$/;
+const DRAIN_TIMEOUT_MS = 30_000;
+/** Members that make up one target authority; all live directly in dataDir. */
+const TARGET_MEMBERS = [
+  'space.db',
+  'space.db-wal',
+  'space.db-shm',
+  'space.db-journal',
+  'assets',
+] as const;
+/** Journal files of the replaced database are not part of the backup. */
+const EPHEMERAL_DB_MEMBERS = ['space.db-wal', 'space.db-shm', 'space.db-journal'] as const;
+
+/** Stable 400 codes for malformed migration requests. */
+const INVALID_REQUEST_CODES = new Set([
+  'invalid_json',
+  'invalid_id',
+  'invalid_part_name',
+  'invalid_offset',
+  'missing_parts',
+  'invalid_parts',
+  'too_many_parts',
+  'duplicate_part',
+  'invalid_expected',
+]);
+
+function badRequest(error: unknown): Response | undefined {
+  if (!(error instanceof Error)) return undefined;
+  if (!INVALID_REQUEST_CODES.has(error.message)) return undefined;
+  return json(400, { ok: false, error: error.message });
+}
 
 function json(status: number, value: unknown): Response {
   return new Response(JSON.stringify(value), {
@@ -75,11 +135,14 @@ function json(status: number, value: unknown): Response {
   });
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 async function readJson(request: Request): Promise<Record<string, unknown>> {
   try {
     const parsed = (await request.json()) as unknown;
-    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed))
-      return parsed as Record<string, unknown>;
+    if (isPlainObject(parsed)) return parsed;
   } catch {
     throw new Error('invalid_json');
   }
@@ -102,28 +165,6 @@ async function readOffset(value: string | null): Promise<number> {
   const offset = Number(value ?? '0');
   if (!Number.isInteger(offset) || offset < 0) throw new Error('invalid_offset');
   return offset;
-}
-
-/** Remove abandoned import/export/backup staging older than one week. */
-async function sweepStaleStaging(stagingRoot: string): Promise<void> {
-  const { stat } = await import('node:fs/promises');
-  let names: string[];
-  try {
-    names = await readdir(stagingRoot);
-  } catch {
-    return;
-  }
-  const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
-  for (const name of names) {
-    const absolute = join(stagingRoot, name);
-    try {
-      const info = await stat(absolute);
-      if (info.mtimeMs < cutoff)
-        await rm(absolute, { recursive: true, force: true });
-    } catch {
-      // A concurrent transfer may own the directory; leave it alone.
-    }
-  }
 }
 
 /** Aggregate asset footprint under one data directory. */
@@ -152,6 +193,17 @@ async function assetFootprint(
   return { assetCount, assetBytes };
 }
 
+interface CommitPart {
+  name: string;
+  size: number;
+  sha256: string;
+}
+
+interface CommitExpectation {
+  counts?: Partial<Record<keyof SpaceDataCounts, number>>;
+  fileCount?: number;
+}
+
 /**
  * Build the migration handler for one server instance.
  * @param host - data directory and runtime pause/resume hooks.
@@ -163,8 +215,11 @@ export function createServerMigration(
   const dataDir = host.dataDir;
   const stagingRoot = join(dataDir, STAGING_DIR);
   let closed = false;
-  let committing = false;
-  void sweepStaleStaging(stagingRoot).catch(() => undefined);
+  let draining = false;
+  let pausedState = false;
+  let rollingBack = false;
+  let activeCommit: Promise<Response> | undefined;
+  void sweepMigrationStaging(dataDir).catch(() => undefined);
 
   async function targetStatus(): Promise<Record<string, unknown>> {
     const dbFile = join(dataDir, 'space.db');
@@ -195,6 +250,14 @@ export function createServerMigration(
     const directory = join(stagingRoot, `import-${id}`);
     await mkdir(join(directory, 'parts'), { recursive: true, mode: 0o700 });
     return directory;
+  }
+
+  async function hasImportMeta(id: string): Promise<boolean> {
+    try {
+      return (await stat(join(stagingRoot, `import-${id}`, 'meta.json'))).isFile();
+    } catch {
+      return false;
+    }
   }
 
   async function handleStatus(): Promise<Response> {
@@ -229,6 +292,8 @@ export function createServerMigration(
   ): Promise<Response> {
     const id = requireId(url.searchParams.get('id'));
     const name = safePartName(url.searchParams.get('name'));
+    if (!(await hasImportMeta(id)))
+      return json(404, { ok: false, error: 'unknown_migration' });
     const offset = await readOffset(url.searchParams.get('offset'));
     const directory = await stagingFor(id);
     const file = join(directory, 'parts', name);
@@ -241,7 +306,7 @@ export function createServerMigration(
     if (offset !== current)
       return json(409, { ok: false, error: 'offset_mismatch', offset: current });
     const body = Buffer.from(await request.arrayBuffer());
-    if (body.byteLength > MAX_PART_BYTES)
+    if (body.byteLength > MAX_PART_CHUNK_BYTES)
       return json(413, { ok: false, error: 'part_too_large' });
     const handle = await open(file, current === 0 ? 'w' : 'r+');
     try {
@@ -252,21 +317,19 @@ export function createServerMigration(
     return json(200, { ok: true, size: current + body.byteLength });
   }
 
-  interface CommitPart {
-    name: string;
-    size: number;
-    sha256: string;
-  }
-
   function readCommitParts(value: unknown): CommitPart[] {
     if (!Array.isArray(value) || value.length === 0)
       throw new Error('missing_parts');
+    if (value.length > MAX_COMMIT_PARTS) throw new Error('too_many_parts');
     const parts: CommitPart[] = [];
+    const names = new Set<string>();
     for (const item of value) {
       if (typeof item !== 'object' || item === null) throw new Error('invalid_parts');
       const record = item as Record<string, unknown>;
       const name = safePartName(record.name);
-      if (typeof record.size !== 'number' || record.size < 0)
+      if (names.has(name)) throw new Error('duplicate_part');
+      names.add(name);
+      if (typeof record.size !== 'number' || !Number.isInteger(record.size) || record.size < 0)
         throw new Error('invalid_parts');
       if (typeof record.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(record.sha256))
         throw new Error('invalid_parts');
@@ -275,53 +338,140 @@ export function createServerMigration(
     return parts;
   }
 
+  /**
+   * Parse the sender's expected facts. Optional for backward compatibility:
+   * when present every field must match the unpacked bundle exactly, which is
+   * what turns a silent partial upload into a 400 before the target changes.
+   */
+  function readCommitExpectation(value: unknown): CommitExpectation | undefined {
+    if (value === undefined || value === null) return undefined;
+    if (!isPlainObject(value)) throw new Error('invalid_expected');
+    const expectation: CommitExpectation = {};
+    const rawCounts = value.counts;
+    if (rawCounts !== undefined) {
+      if (!isPlainObject(rawCounts)) throw new Error('invalid_expected');
+      const counts: Partial<Record<keyof SpaceDataCounts, number>> = {};
+      for (const [key, count] of Object.entries(rawCounts)) {
+        if (!(SPACE_DATA_COUNT_KEYS as readonly string[]).includes(key))
+          throw new Error('invalid_expected');
+        if (typeof count !== 'number' || !Number.isInteger(count) || count < 0)
+          throw new Error('invalid_expected');
+        counts[key as keyof SpaceDataCounts] = count;
+      }
+      expectation.counts = counts;
+    }
+    const fileCount = value.fileCount;
+    if (fileCount !== undefined) {
+      if (typeof fileCount !== 'number' || !Number.isInteger(fileCount) || fileCount < 0)
+        throw new Error('invalid_expected');
+      expectation.fileCount = fileCount;
+    }
+    return expectation;
+  }
+
+  /**
+   * Move every target member into the backup directory.
+   *
+   * The returned names are exactly the members that moved; a non-ENOENT
+   * failure aborts the move so the caller can restore what already moved
+   * instead of silently committing over data it could not back up.
+   */
+  async function moveTargetAside(backup: string): Promise<string[]> {
+    await rm(backup, { recursive: true, force: true }).catch(() => undefined);
+    await mkdir(backup, { recursive: true, mode: 0o700 });
+    const moved: string[] = [];
+    for (const name of TARGET_MEMBERS) {
+      const from = join(dataDir, name);
+      const to = join(backup, name);
+      try {
+        await rename(from, to);
+        moved.push(name);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw error;
+      }
+    }
+    return moved;
+  }
+
+  /**
+   * Restore the members actually present in `backup`.
+   *
+   * Only backed-up members are replaced: a member the move never captured is
+   * left untouched, so a partially captured backup can never delete live data.
+   * Journal files of the replaced database are removed when the backup does
+   * not carry them; they are not user data and would shadow the restored file.
+   */
   async function restoreBackup(backup: string): Promise<void> {
-    for (const name of ['space.db', 'space.db-wal', 'space.db-shm', 'assets']) {
+    let names: string[];
+    try {
+      names = await readdir(backup);
+    } catch {
+      return;
+    }
+    for (const name of names) {
       const from = join(backup, name);
       const to = join(dataDir, name);
       // Remove the half-installed member first: renaming a directory over a
       // non-empty one fails with ENOTEMPTY and would leave a mixed target.
-      await rm(to, { recursive: true, force: true }).catch(() => undefined);
-      try {
-        await rename(from, to);
-      } catch {
-        // Missing members simply mean the target had no such file.
-      }
+      await rm(to, { recursive: true, force: true });
+      await rename(from, to);
+    }
+    for (const name of EPHEMERAL_DB_MEMBERS) {
+      if (names.includes(name)) continue;
+      await rm(join(dataDir, name), { force: true }).catch(() => undefined);
     }
   }
 
-  async function moveTargetAside(backup: string): Promise<void> {
-    await rm(backup, { recursive: true, force: true }).catch(() => undefined);
-    await mkdir(backup, { recursive: true, mode: 0o700 });
-    for (const name of ['space.db', 'space.db-wal', 'space.db-shm', 'assets']) {
-      try {
-        await rename(join(dataDir, name), join(backup, name));
-      } catch {
-        // Absent files (fresh server, no assets) need no backup entry.
-      }
-    }
-  }
-
-  async function handleCommit(request: Request): Promise<Response> {
-    if (committing)
-      return json(409, {
-        ok: false,
-        error: 'commit_in_progress',
-        message: '另一个迁移正在替换本服务端的数据，请稍后重试',
-      });
-    committing = true;
+  /** Count unfinished export staging directories (each holds a snapshot). */
+  async function activeExportCount(): Promise<number> {
     try {
-      return await commit(request);
-    } finally {
-      committing = false;
+      const names = await readdir(stagingRoot);
+      return names.filter((name) => name.startsWith('export-')).length;
+    } catch {
+      return 0;
     }
+  }
+
+  function handleCommit(request: Request): Promise<Response> {
+    if (closed || draining) return Promise.resolve(json(503, { ok: false, error: 'server_closing' }));
+    if (activeCommit !== undefined)
+      return Promise.resolve(
+        json(409, {
+          ok: false,
+          error: 'commit_in_progress',
+          message: '另一个迁移正在替换本服务端的数据，请稍后重试',
+        }),
+      );
+    const run = commit(request).catch(
+      (error: unknown) =>
+        badRequest(error) ??
+        json(500, {
+          ok: false,
+          error: 'commit_failed',
+          message: error instanceof Error ? error.message : String(error),
+        }),
+    );
+    activeCommit = run;
+    return run.finally(() => {
+      if (activeCommit === run) activeCommit = undefined;
+    });
   }
 
   async function commit(request: Request): Promise<Response> {
     const body = await readJson(request);
     const id = requireId(body.id);
     const parts = readCommitParts(body.parts);
+    const expectation = readCommitExpectation(body.expected);
     const overwrite = body.overwrite === true;
+    const totalBytes = parts.reduce((sum, part) => sum + part.size, 0);
+    if (totalBytes > MAX_TOTAL_PART_BYTES)
+      return json(413, {
+        ok: false,
+        error: 'staging_too_large',
+        message: '迁移暂存超过服务端上限（64 GiB）',
+        bytes: totalBytes,
+      });
     const directory = join(stagingRoot, `import-${id}`);
     let meta: { overwrite?: boolean } = {};
     try {
@@ -366,6 +516,8 @@ export function createServerMigration(
         message: error instanceof Error ? error.message : String(error),
       });
     }
+    // Everything below verifies the staged bundle while the live authority is
+    // still serving; a mismatch returns 400 with the target untouched.
     const stagedDb = join(unpacked, 'space.db');
     let facts;
     try {
@@ -386,10 +538,37 @@ export function createServerMigration(
         schemaVersion: facts.userVersion,
         supported: SPACE_DB_FORMAT_VERSION,
       });
+    const stagedCounts = readSpaceDataCounts(stagedDb);
+    if (expectation?.counts !== undefined) {
+      const mismatched = (
+        Object.keys(expectation.counts) as Array<keyof SpaceDataCounts>
+      ).filter((key) => stagedCounts[key] !== expectation.counts?.[key]);
+      if (mismatched.length > 0)
+        return json(400, {
+          ok: false,
+          error: 'commit_counts_mismatch',
+          fields: mismatched,
+          expected: expectation.counts,
+          actual: stagedCounts,
+        });
+    }
+    const unpackedFiles = await countUnpackedFiles(unpacked);
+    if (
+      expectation?.fileCount !== undefined &&
+      unpackedFiles !== expectation.fileCount
+    )
+      return json(400, {
+        ok: false,
+        error: 'commit_files_mismatch',
+        expected: expectation.fileCount,
+        actual: unpackedFiles,
+      });
     const backup = join(stagingRoot, `backup-${id}`);
+    pausedState = true;
     try {
       await host.pause();
     } catch (error) {
+      pausedState = false;
       // A partially closed runtime must be reopened before reporting failure,
       // otherwise every later business request hits a closed database.
       await host.resume().catch(() => undefined);
@@ -410,15 +589,27 @@ export function createServerMigration(
         // failure must roll the whole commit back.
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       }
-      await host.resume();
+      const resumed = await host.resume();
+      if (host.forceInitialSnapshot !== false) {
+        await resumed.snapshotNow().catch((error: unknown) => {
+          logger.warn?.(
+            `[space-server] 迁移后初始快照失败：${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        });
+      }
     } catch (error) {
-      await restoreBackup(backup);
+      await restoreBackup(backup).catch(() => undefined);
       await host.resume().catch(() => undefined);
       return json(500, {
         ok: false,
         error: 'commit_failed',
         message: error instanceof Error ? error.message : String(error),
+        backup,
       });
+    } finally {
+      pausedState = false;
     }
     const counts = readSpaceDataCounts(join(dataDir, 'space.db'));
     await rm(directory, { recursive: true, force: true }).catch(() => undefined);
@@ -427,10 +618,103 @@ export function createServerMigration(
         counts.nodes,
       )} 个节点`,
     );
-    return json(200, { ok: true, counts, backup });
+    return json(200, {
+      ok: true,
+      counts,
+      backup,
+      fileCount: unpackedFiles,
+      schemaVersion: facts.userVersion,
+    });
+  }
+
+  async function handleRollback(request: Request): Promise<Response> {
+    if (closed || draining)
+      return json(503, { ok: false, error: 'server_closing' });
+    if (activeCommit !== undefined || rollingBack)
+      return json(409, {
+        ok: false,
+        error: 'commit_in_progress',
+        message: '服务端正在替换数据，请稍后重试',
+      });
+    const body = await readJson(request);
+    const id = requireId(body.id);
+    const backup = join(stagingRoot, `backup-${id}`);
+    let names: string[];
+    try {
+      names = await readdir(backup);
+    } catch {
+      return json(404, { ok: false, error: 'unknown_backup' });
+    }
+    if (names.length === 0)
+      return json(404, { ok: false, error: 'unknown_backup' });
+    rollingBack = true;
+    pausedState = true;
+    try {
+      try {
+        await host.pause();
+      } catch (error) {
+        pausedState = false;
+        await host.resume().catch(() => undefined);
+        throw new Error(
+          `暂停服务端运行时失败：${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+      try {
+        await restoreBackup(backup);
+        const resumed = await host.resume();
+        // Today's snapshot may already describe the rejected database; refresh
+        // it so the recovery baseline keeps matching the restored authority.
+        if (host.forceInitialSnapshot !== false) {
+          await resumed.snapshotNow().catch((error: unknown) => {
+            logger.warn?.(
+              `[space-server] 回滚后快照失败：${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            );
+          });
+        }
+      } catch (error) {
+        await host.resume().catch(() => undefined);
+        return json(500, {
+          ok: false,
+          error: 'rollback_failed',
+          message: error instanceof Error ? error.message : String(error),
+          backup,
+        });
+      }
+      pausedState = false;
+      const counts = readSpaceDataCounts(join(dataDir, 'space.db'));
+      await rm(backup, { recursive: true, force: true }).catch(() => undefined);
+      logger.info?.(
+        `[space-server] 迁移回滚完成：${String(counts.spaces)} 个空间，${String(
+          counts.nodes,
+        )} 个节点`,
+      );
+      return json(200, { ok: true, restored: true, counts });
+    } catch (error) {
+      pausedState = false;
+      return json(500, {
+        ok: false,
+        error: 'rollback_failed',
+        message: error instanceof Error ? error.message : String(error),
+        backup,
+      });
+    } finally {
+      rollingBack = false;
+    }
   }
 
   async function handleExport(): Promise<Response> {
+    if (closed || draining)
+      return json(503, { ok: false, error: 'server_closing' });
+    if ((await activeExportCount()) >= MAX_ACTIVE_EXPORTS)
+      return json(429, {
+        ok: false,
+        error: 'migration_busy',
+        message: '服务端有过多未完成的导出任务，请稍后重试',
+      });
     const id = randomUUID().replaceAll('-', '');
     const directory = join(stagingRoot, `export-${id}`);
     await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -523,6 +807,28 @@ export function createServerMigration(
     return json(200, { ok: true });
   }
 
+  async function waitForActiveCommit(timeoutMs: number): Promise<void> {
+    const active = activeCommit;
+    if (active === undefined) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<'timeout'>((resolveTimeout) => {
+      timer = setTimeout(() => resolveTimeout('timeout'), timeoutMs);
+      timer.unref?.();
+    });
+    const outcome = await Promise.race([
+      active.then(
+        () => 'done' as const,
+        () => 'done' as const,
+      ),
+      timeout,
+    ]);
+    if (timer !== undefined) clearTimeout(timer);
+    if (outcome === 'timeout')
+      logger.warn?.(
+        `[space-server] 关闭前等待迁移提交超时（${String(timeoutMs)}ms），继续关闭`,
+      );
+  }
+
   return {
     async handle(request, url): Promise<Response | undefined> {
       if (closed) return json(503, { ok: false, error: 'server_closing' });
@@ -535,6 +841,8 @@ export function createServerMigration(
           return await handlePart(request, url);
         if (url.pathname === `${MIGRATION_PATH}/commit` && request.method === 'POST')
           return await handleCommit(request);
+        if (url.pathname === `${MIGRATION_PATH}/rollback` && request.method === 'POST')
+          return await handleRollback(request);
         if (url.pathname === `${MIGRATION_PATH}/export` && request.method === 'POST')
           return await handleExport();
         if (
@@ -546,15 +854,27 @@ export function createServerMigration(
           return await handleExportDelete(url);
         return json(404, { ok: false, error: 'not_found' });
       } catch (error) {
+        const invalid = badRequest(error);
+        if (invalid !== undefined) return invalid;
         const message = error instanceof Error ? error.message : String(error);
-        if (message === 'invalid_json' || message === 'invalid_id' || message === 'invalid_part_name' || message === 'invalid_offset' || message === 'missing_parts' || message === 'invalid_parts')
-          return json(400, { ok: false, error: message });
         logger.warn?.(`[space-server] 迁移请求失败：${message}`);
         return json(500, { ok: false, error: 'migration_failed', message });
       }
     },
+    inflight(): boolean {
+      return activeCommit !== undefined;
+    },
+    paused(): boolean {
+      return pausedState;
+    },
+    async drain(timeoutMs = DRAIN_TIMEOUT_MS): Promise<void> {
+      draining = true;
+      await waitForActiveCommit(timeoutMs);
+    },
     async close() {
       closed = true;
+      draining = true;
+      await waitForActiveCommit(DRAIN_TIMEOUT_MS);
     },
   };
 }

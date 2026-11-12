@@ -13,9 +13,10 @@
  */
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { mkdir, open, rename, rm } from 'node:fs/promises';
+import { mkdir, open, readdir, rename, rm } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
+import { finished } from 'node:stream/promises';
 
 /** One file packed into a bundle. */
 export interface BundleFileEntry {
@@ -77,50 +78,69 @@ export async function writeBundleFile(
   let size = 0;
   let payloadBytes = 0;
   const output = createWriteStream(destination);
-  const write = async (buffer: Buffer): Promise<void> => {
+  // A write-stream 'error' (ENOSPC, EACCES, …) without a listener crashes the
+  // whole process; keep one persistent listener so the failure is reported to
+  // the awaiting caller instead. Writes are serialized through `writeChunk`,
+  // so memory stays bounded to one chunk.
+  let failure: Error | undefined;
+  output.on('error', (error: Error) => {
+    failure ??= error;
+  });
+  const writeChunk = async (buffer: Buffer): Promise<void> => {
+    if (failure !== undefined) throw failure;
     hash.update(buffer);
     size += buffer.byteLength;
-    if (!output.write(buffer)) {
-      await new Promise<void>((resolveDrain, rejectDrain) => {
-        output.once('drain', () => resolveDrain());
-        output.once('error', rejectDrain);
+    await new Promise<void>((resolveWrite, rejectWrite) => {
+      output.write(buffer, (error) => {
+        if (error !== null && error !== undefined) rejectWrite(error);
+        else if (failure !== undefined) rejectWrite(failure);
+        else resolveWrite();
       });
-    }
+    });
   };
-  for (const entry of entries) {
-    const file = await open(entry.source, 'r');
-    try {
-      const stat = await file.stat();
-      const path = assertBundlePath(entry.path);
-      const header = headerBuffer(path, stat.size);
-      const length = Buffer.alloc(HEADER_LENGTH_BYTES);
-      length.writeUInt32BE(header.byteLength, 0);
-      await write(length);
-      await write(header);
-      let offset = 0;
-      while (offset < stat.size) {
-        const lengthToRead = Math.min(1024 * 1024, stat.size - offset);
-        const buffer = Buffer.alloc(lengthToRead);
-        const { bytesRead } = await file.read(buffer, 0, lengthToRead, offset);
-        if (bytesRead === 0) throw new Error(`读取文件失败：${entry.source}`);
-        await write(buffer.subarray(0, bytesRead));
-        offset += bytesRead;
-        payloadBytes += bytesRead;
-        progress?.(payloadBytes);
+  try {
+    for (const entry of entries) {
+      const file = await open(entry.source, 'r');
+      try {
+        const stat = await file.stat();
+        const path = assertBundlePath(entry.path);
+        const header = headerBuffer(path, stat.size);
+        const length = Buffer.alloc(HEADER_LENGTH_BYTES);
+        length.writeUInt32BE(header.byteLength, 0);
+        await writeChunk(length);
+        await writeChunk(header);
+        let offset = 0;
+        while (offset < stat.size) {
+          const lengthToRead = Math.min(1024 * 1024, stat.size - offset);
+          const buffer = Buffer.alloc(lengthToRead);
+          const { bytesRead } = await file.read(buffer, 0, lengthToRead, offset);
+          if (bytesRead === 0) throw new Error(`读取文件失败：${entry.source}`);
+          await writeChunk(buffer.subarray(0, bytesRead));
+          offset += bytesRead;
+          payloadBytes += bytesRead;
+          progress?.(payloadBytes);
+        }
+      } finally {
+        await file.close();
       }
-    } finally {
-      await file.close();
     }
+    const terminator = headerBuffer('', 0);
+    const length = Buffer.alloc(HEADER_LENGTH_BYTES);
+    length.writeUInt32BE(terminator.byteLength, 0);
+    await writeChunk(length);
+    await writeChunk(terminator);
+    output.end();
+    try {
+      await finished(output);
+    } catch (error) {
+      throw failure ?? error;
+    }
+    if (failure !== undefined) throw failure;
+  } catch (error) {
+    // Stop the stream from emitting after the caller gave up on it.
+    output.destroy();
+    throw error;
   }
-  const terminator = headerBuffer('', 0);
-  const length = Buffer.alloc(HEADER_LENGTH_BYTES);
-  length.writeUInt32BE(terminator.byteLength, 0);
-  await write(length);
-  await write(terminator);
-  await new Promise<void>((resolveFinish, rejectFinish) => {
-    output.end(() => resolveFinish());
-    output.once('error', rejectFinish);
-  });
   return {
     size,
     sha256: hash.digest('hex'),
@@ -240,6 +260,34 @@ export async function sha256File(file: string): Promise<string> {
  */
 export function isBundlePartName(name: string): boolean {
   return /^part-[a-z0-9-]+\.bundle$/.test(name);
+}
+
+/**
+ * Count regular files under one unpacked bundle directory.
+ *
+ * The migration handshake uses this as a cheap "the whole bundle arrived"
+ * check: the exchanged file count must equal the number of files the sender
+ * packed (database plus assets). Symlinks are ignored because bundles never
+ * carry them.
+ * @param directory - unpacked bundle root.
+ */
+export async function countUnpackedFiles(directory: string): Promise<number> {
+  let count = 0;
+  async function walk(current: string): Promise<void> {
+    let entries;
+    try {
+      entries = await readdir(current, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const absolute = join(current, entry.name);
+      if (entry.isDirectory()) await walk(absolute);
+      else if (entry.isFile()) count += 1;
+    }
+  }
+  await walk(directory);
+  return count;
 }
 
 /** Enumerate files under the Space assets directory as bundle entries. */

@@ -391,6 +391,12 @@ export interface SpaceSettingsClient {
     mode?: 'local' | 'server';
     serverUrl?: string | null;
     token?: string | null;
+    /**
+     * Explicit acknowledgement that a mode switch abandons the data on the
+     * authority being left (or that a server-URL change abandons the old
+     * server's unsettled queue). Required for any real mode change.
+     */
+    discard?: boolean;
   }): Promise<SpaceSettingsSnapshot>;
   test(input: {
     serverUrl?: string;

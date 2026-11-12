@@ -84,6 +84,186 @@ check(
   'icon must be a non-empty image below 256 KiB',
 );
 
+// --- Docker image parity ---------------------------------------------------
+// The image compiles the Host half with the same `build:host` script the plugin
+// uses, so every input that script (and tsconfig.host.json) reads must be
+// copied into the build stage. A missing COPY used to surface only after a full
+// `docker build`; these checks keep the contract static.
+const dockerfile = await read('Dockerfile');
+const dockerignore = await read('.dockerignore');
+const hostTsconfig = JSON.parse(await read('tsconfig.host.json'));
+const normalizeDockerPath = (entry) =>
+  entry.replace(/^\.?\//, '').replace(/\/+$/, '');
+
+const dockerStages = [];
+const dockerCopies = [];
+let dockerStage = '';
+for (const rawLine of dockerfile.split('\n')) {
+  const line = rawLine.trim();
+  const stage = /^FROM\s+\S+(?:\s+AS\s+(\S+))?$/i.exec(line);
+  if (stage !== null) {
+    dockerStage = (stage[1] ?? `stage-${dockerStages.length + 1}`).toLowerCase();
+    dockerStages.push(dockerStage);
+    continue;
+  }
+  if (!/^COPY\s/i.test(line)) continue;
+  const tokens = line.slice(4).trim().split(/\s+/);
+  const from =
+    tokens[0]?.startsWith('--from=') === true
+      ? tokens.shift().slice('--from='.length)
+      : null;
+  const destination = normalizeDockerPath(tokens.pop() ?? '');
+  dockerCopies.push({
+    stage: dockerStage,
+    from,
+    sources: tokens.map(normalizeDockerPath),
+    destination,
+  });
+}
+check(dockerStages.length >= 2, 'Dockerfile must keep separate build and runtime stages');
+const buildStage = dockerStages.includes('build') ? 'build' : dockerStages[0];
+const runtimeStage = dockerStages[dockerStages.length - 1];
+
+const buildHost = String(pkg.scripts?.['build:host'] ?? '');
+check(buildHost !== '', 'package.json must define scripts.build:host for the image build');
+const buildInputs = new Set([
+  'package.json',
+  'pnpm-lock.yaml',
+  ...(buildHost.match(/[\w@./-]+\.(?:json|mjs|cjs|ts|js)/g) ?? []),
+  ...(hostTsconfig.include ?? []).map((entry) => String(entry).split('/**')[0]),
+]);
+const buildCopies = dockerCopies.filter(
+  (copy) => copy.stage === buildStage && copy.from === null,
+);
+for (const input of buildInputs) {
+  const normalized = normalizeDockerPath(String(input));
+  const covered = buildCopies.some((copy) =>
+    copy.sources.some(
+      (source) =>
+        source === '.' ||
+        normalized === source ||
+        normalized.startsWith(`${source}/`),
+    ),
+  );
+  check(
+    covered,
+    `Dockerfile build stage must COPY ${normalized} (needed by build:host / tsconfig.host.json)`,
+  );
+}
+for (const copy of buildCopies) {
+  for (const source of copy.sources) {
+    if (source === '.' || source === '') continue;
+    try {
+      await stat(path.join(pluginRoot, source));
+    } catch {
+      check(false, `Dockerfile COPY source ${source} does not exist in the repository`);
+    }
+  }
+}
+const ignorePatterns = dockerignore
+  .split('\n')
+  .map((line) => line.trim())
+  .filter((line) => line !== '' && !line.startsWith('#'))
+  .map((line) => normalizeDockerPath(line.replace(/^!/, '')));
+for (const input of buildInputs) {
+  const normalized = normalizeDockerPath(String(input));
+  const ignored = ignorePatterns.some(
+    (pattern) =>
+      !/[*?[\]]/.test(pattern) &&
+      (normalized === pattern || normalized.startsWith(`${pattern}/`)),
+  );
+  check(!ignored, `.dockerignore must not exclude ${normalized} (needed by build:host)`);
+}
+
+const entryLine = dockerfile
+  .split('\n')
+  .map((line) => line.trim())
+  .find((line) => /^ENTRYPOINT\s/i.test(line));
+let entryTarget = '';
+if (entryLine !== undefined) {
+  const payload = entryLine.replace(/^ENTRYPOINT\s+/i, '');
+  if (payload.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(payload);
+      if (Array.isArray(parsed) && parsed.length > 0)
+        entryTarget = String(parsed[parsed.length - 1]);
+    } catch {
+      check(false, 'Dockerfile ENTRYPOINT JSON array is unparseable');
+    }
+  } else {
+    entryTarget = payload
+      .split(/\s+/)
+      .filter((token) => !token.startsWith('-'))
+      .pop() ?? '';
+  }
+}
+const entryPath = normalizeDockerPath(entryTarget);
+check(
+  entryPath.startsWith('lib/') && entryPath.endsWith('.js'),
+  `Dockerfile ENTRYPOINT must run the compiled entry under lib/ (found ${entryTarget || 'none'})`,
+);
+const entrySource = entryPath.replace(/^lib\//, '').replace(/\.js$/, '.ts');
+try {
+  await stat(path.join(pluginRoot, entrySource));
+} catch {
+  check(false, `Dockerfile ENTRYPOINT ${entryPath} has no source ${entrySource}`);
+}
+const binPath = normalizeDockerPath(
+  typeof pkg.bin === 'string' ? pkg.bin : Object.values(pkg.bin ?? {})[0] ?? '',
+);
+check(
+  entryPath === binPath,
+  `Dockerfile ENTRYPOINT (${entryPath}) must match package.json bin (${binPath})`,
+);
+const serverScript = normalizeDockerPath(
+  String(pkg.scripts?.server ?? '').split(/\s+/).pop() ?? '',
+);
+check(
+  entryPath === serverScript,
+  `Dockerfile ENTRYPOINT (${entryPath}) must match scripts.server (${serverScript})`,
+);
+const includeRoots = (hostTsconfig.include ?? []).map((entry) =>
+  normalizeDockerPath(String(entry).split('/**')[0]),
+);
+check(
+  includeRoots.some(
+    (rootPath) =>
+      entrySource === rootPath || entrySource.startsWith(`${rootPath}/`),
+  ),
+  `Dockerfile ENTRYPOINT source ${entrySource} must be covered by tsconfig.host.json include`,
+);
+
+const runtimeCopies = dockerCopies.filter(
+  (copy) => copy.stage === runtimeStage,
+);
+for (const copy of runtimeCopies) {
+  for (const source of copy.sources) {
+    check(
+      source === 'app/lib' || source === 'app/package.json',
+      `runtime stage must carry only lib/ and package.json from the build stage, found ${source}`,
+    );
+  }
+}
+check(
+  runtimeCopies.some(
+    (copy) => copy.destination === 'lib' && copy.sources.includes('app/lib'),
+  ),
+  'runtime stage must COPY the compiled lib/ directory',
+);
+check(
+  /^USER\s+node\s*$/m.test(dockerfile),
+  'runtime image must run as the non-root node user',
+);
+check(
+  /^HEALTHCHECK\b/m.test(dockerfile),
+  'runtime image must define a HEALTHCHECK',
+);
+notes.push(
+  `docker build inputs: ${[...buildInputs]
+    .map((entry) => normalizeDockerPath(String(entry)))
+    .join(', ')}`,
+);
+
 // Space source directories that must exist in this package.
 const sourceDirs = [
   'client-modules',
@@ -171,7 +351,12 @@ for (const script of hostScripts) {
     !text.includes('from "@alter/') && !text.includes("from '@alter/"),
     `${path.relative(pluginRoot, script)} must not import @alter runtime code`,
   );
-  for (const match of text.matchAll(/from "([^"]+)"/g)) {
+  // Match real static import/export statements only. A naive `from "..."` scan
+  // also matches quoted prose in comments (e.g. `"the link is down"`) and has
+  // produced false failures for an otherwise valid build.
+  for (const match of text.matchAll(
+    /^\s*(?:import|export)\b[^;\n]*?\bfrom\s+"([^"]+)"/gm,
+  )) {
     const specifier = match[1];
     check(
       specifier.startsWith('node:') ||

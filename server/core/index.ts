@@ -8,7 +8,9 @@
  *
  * @module @alter-dsh/space/space
  */
-import { pathToFileURL } from 'node:url';
+import { realpathSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createLocalSpaceRuntime } from '../../host/core/runtime.js';
 import { createTokenAuthenticator } from './auth.js';
 import { loadServerConfig, type ServerConfig } from './config.js';
@@ -41,6 +43,24 @@ function isLoopbackHost(host: string): boolean {
   return host === '127.0.0.1' || host === '::1' || host === 'localhost';
 }
 
+/** Whether the listener is bound to every interface. */
+function isWildcardHost(host: string): boolean {
+  return host === '0.0.0.0' || host === '::' || host === '[::]';
+}
+
+/**
+ * Build the URL a human should open.
+ *
+ * `0.0.0.0` is a bind address, not a destination; logging
+ * `http://0.0.0.0:8787` produces a link most tools cannot open, so display the
+ * loopback address for a wildcard bind instead.
+ */
+function displayUrl(host: string, port: number): string {
+  if (isWildcardHost(host)) return `http://127.0.0.1:${String(port)}`;
+  if (host === '::1') return `http://[::1]:${String(port)}`;
+  return `http://${host}:${String(port)}`;
+}
+
 /**
  * Open the authority and start the HTTP listener.
  * @param config - parsed server configuration.
@@ -62,12 +82,17 @@ export async function startSpaceServer(
     auth,
     logger,
     migration: () => migration,
+    // While the migration handler replaces the data directory it pauses the
+    // runtime; business routes answer a stable 503 instead of touching the
+    // closed database.
+    frozen: () => migration?.paused() === true,
   });
   try {
     const port = await http.listen(config.host, config.port);
     migration = createServerMigration({
       dataDir: config.dataDir,
       logger,
+      forceInitialSnapshot: config.snapshots,
       current: () => runtime,
       async pause() {
         await runtime.close();
@@ -82,10 +107,9 @@ export async function startSpaceServer(
         return runtime;
       },
     });
-    const url = `http://${config.host}:${String(port)}`;
-    logger.info?.(
-      `数据目录 ${config.dataDir}；监听 ${url}；token ${auth.labels.join(', ')}`,
-    );
+    const url = displayUrl(config.host, port);
+    logger.info?.(`数据目录 ${config.dataDir}；监听 ${config.host}:${String(port)}`);
+    logger.info?.(`服务地址 ${url}；token ${auth.labels.join(', ')}`);
     if (!isLoopbackHost(config.host)) {
       logger.warn?.(
         '监听地址不是 loopback：请只在私网使用，或用 TLS 反向代理暴露；服务端不提供 TLS 终止',
@@ -97,8 +121,10 @@ export async function startSpaceServer(
       url,
       close() {
         closing ??= (async () => {
-          await http.close();
+          // `close` stops accepting new commits and waits for the in-flight
+          // one, so SIGTERM cannot kill a half-replaced data directory.
           await migration?.close();
+          await http.close();
           await runtime.close();
         })();
         return closing;
@@ -137,11 +163,27 @@ export async function runSpaceServer(
   return running;
 }
 
-const entry = process.argv[1];
-if (
-  entry !== undefined &&
-  import.meta.url === pathToFileURL(entry).href
-) {
+/**
+ * Whether this module is the process entry point.
+ *
+ * Package bins are often symlinked (pnpm, npm, Docker wrappers); comparing the
+ * literal `argv[1]` string against `import.meta.url` fails for a symlink and
+ * the process would silently exit 0 without starting. Resolve both sides to
+ * their real paths instead.
+ */
+function isMainModule(): boolean {
+  const entry = process.argv[1];
+  if (entry === undefined) return false;
+  try {
+    return (
+      realpathSync(resolve(entry)) === realpathSync(fileURLToPath(import.meta.url))
+    );
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
   runSpaceServer().catch((error: unknown) => {
     console.error(
       `[space-server] 启动失败：${error instanceof Error ? error.message : String(error)}`,

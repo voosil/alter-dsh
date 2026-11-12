@@ -34,7 +34,11 @@ import {
   type ShadowDocument,
 } from './cache.js';
 import type { RemoteClientOptions } from './client.js';
-import { RemoteClientError, RemoteSpaceClient } from './client.js';
+import {
+  RemoteClientError,
+  RemoteSpaceClient,
+  remoteCodeForStatus,
+} from './client.js';
 
 interface LoggerLike {
   info?(message: string): void;
@@ -50,8 +54,39 @@ export interface RemoteBridgeOptions {
   now?: () => Date;
   fetchImpl?: typeof fetch;
   logger?: LoggerLike;
+  /** Per-request timeout; defaults to the client's 30 seconds. */
+  timeoutMs?: number;
   /** Extra gate used by a migration freeze to suspend queue replay. */
   pauseFlush?: () => boolean;
+}
+
+/** Heartbeat period while the link is healthy. */
+const ONLINE_HEARTBEAT_MS = 20_000;
+/** First retry delay while the link is down; doubles up to the cap. */
+const OFFLINE_HEARTBEAT_BASE_MS = 20_000;
+/** Cap for the offline heartbeat backoff. */
+const OFFLINE_HEARTBEAT_MAX_MS = 5 * 60_000;
+
+/**
+ * Document writes whose provenance is decided at the RPC boundary. The
+ * standalone server route is passthrough (it trusts the bridge), so the
+ * browser-facing bridge must stamp `user` itself while the Agent document port
+ * keeps `alter`; a browser request body can never choose its own actor.
+ */
+const ACTOR_ENDPOINTS: ReadonlySet<string> = new Set([
+  'doc.applyOps',
+  'doc.undo',
+  'doc.restoreVersion',
+  'doc.generate',
+  'doc.updateObject',
+]);
+
+/** Stamp the authoritative actor onto one write payload (browser or Agent). */
+function stampActor(payload: unknown, actor: 'user' | 'alter'): unknown {
+  if (!isPlainObject(payload)) return payload;
+  const args = argsOf(payload);
+  if (args.length === 0 || !isPlainObject(args[0])) return payload;
+  return { ...payload, args: [{ ...args[0], actor }, ...args.slice(1)] };
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -164,14 +199,21 @@ export function createRemoteBridge(
     ...(options.fetchImpl === undefined
       ? {}
       : { fetchImpl: options.fetchImpl }),
+    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
   };
   const client = new RemoteSpaceClient(clientOptions);
-  const cache: RemoteCache = openRemoteCache(options.directory, options.baseUrl);
+  const cache: RemoteCache = openRemoteCache(
+    options.directory,
+    options.baseUrl,
+    options.logger,
+  );
   let link: BackendConnectionStatus = { state: 'connecting' };
   let lastSyncedAt: string | undefined;
   let closed = false;
   let flushing: Promise<void> | undefined;
   let queuedRefresh = false;
+  /** Cache keys with a background revalidation already in flight. */
+  const revalidating = new Set<string>();
 
   function counts(): { pending: number; conflicts: number; failed: number } {
     const value = cache.counts();
@@ -212,6 +254,60 @@ export function createRemoteBridge(
       state: 'offline',
       message: error instanceof Error ? error.message : String(error),
     };
+  }
+
+  /**
+   * The best cached answer for one read, without touching the network.
+   *
+   * `doc.get` prefers the shadow: it is the local document tree including
+   * queued optimistic edits, while the cached raw response is the older
+   * server snapshot.
+   */
+  function cachedRead(
+    endpoint: string,
+    args: unknown[],
+    key: string,
+  ): unknown | undefined {
+    if (endpoint === 'doc.get') {
+      const docId = typeof args[0] === 'string' ? args[0] : undefined;
+      const shadow = docId === undefined ? undefined : cache.getShadow(docId);
+      if (shadow !== undefined) return { value: shadow };
+    }
+    return cache.getJson(key);
+  }
+
+  /**
+   * Refresh one cached read in the background (stale-while-revalidate).
+   *
+   * Only one revalidation per cache key runs at a time, so a panel that keeps
+   * polling while offline cannot pile up requests; the next read after it
+   * completes serves the fresher value.
+   */
+  function scheduleRevalidate(
+    endpoint: string,
+    payload: unknown,
+    key: string,
+  ): void {
+    if (closed || revalidating.has(key)) return;
+    revalidating.add(key);
+    void (async () => {
+      try {
+        const result = await client.rpc(endpoint, payload);
+        if (closed) return;
+        if (!isPlainObject(result) || result.error === undefined) {
+          cache.setJson(key, result);
+          if (endpoint === 'doc.get') rememberShadow(result);
+        }
+        markOnline(link.serverVersion, link.protocolVersion);
+      } catch (error) {
+        if (closed) return;
+        if (isTransportError(error)) markOffline(error);
+        else if (isUnauthorizedError(error))
+          link = { state: 'error', message: '服务端拒绝了 token，请更新 token' };
+      } finally {
+        revalidating.delete(key);
+      }
+    })();
   }
 
   async function refresh(): Promise<void> {
@@ -402,23 +498,22 @@ export function createRemoteBridge(
         ? input.idempotencyKey
         : (existingKey ?? newOutboxIdempotencyKey());
     try {
-      cache.enqueue({
-        docId,
-        endpoint,
-        payload: { ...input, baseRevision, idempotencyKey },
-        idempotencyKey,
-        baseRevision,
-        now: now().getTime(),
-      });
+      // The queue row and the optimistic shadow are one transaction: the
+      // successful answer below must never exist without a durable replay.
+      cache.enqueue(
+        {
+          docId,
+          endpoint,
+          payload: { ...input, baseRevision, idempotencyKey },
+          idempotencyKey,
+          baseRevision,
+          now: now().getTime(),
+        },
+        { docId, revision, title: shadow.title, doc: nextDoc },
+      );
     } catch (queueError) {
       return errorOf(queueError);
     }
-    cache.putShadow({
-      docId,
-      revision,
-      title: shadow.title,
-      doc: nextDoc,
-    });
     markOffline(error);
     return {
       value: {
@@ -452,44 +547,60 @@ export function createRemoteBridge(
     if (shadow === undefined) cache.deleteShadow(docId);
   }
 
-  async function rpc(
+  /**
+   * Dispatch one call for a known origin.
+   *
+   * `origin` is not client input: the browser-facing route calls {@link rpc}
+   * (always `user`) and the Agent document port calls with `alter`. The server
+   * route is passthrough, so this is the only place that can keep provenance
+   * honest across the server hop.
+   */
+  async function dispatch(
     endpoint: string,
     payload: unknown,
-    signal?: AbortSignal,
+    signal: AbortSignal | undefined,
+    origin: 'user' | 'alter',
   ): Promise<unknown> {
-    const args = argsOf(payload);
     const isRead = isReadEndpoint(endpoint);
     if (isRead) {
+      const args = argsOf(payload);
+      const key = cacheKey(endpoint, args);
+      const cached = cachedRead(endpoint, args, key);
+      if (cached !== undefined && link.state !== 'online') {
+        // Stale-while-revalidate: with the link down, a cached answer is
+        // served immediately instead of blocking on the 30s request timeout.
+        scheduleRevalidate(endpoint, payload, key);
+        return cached;
+      }
       try {
         const result = await client.rpc(endpoint, payload, signal);
         if (!isPlainObject(result) || result.error === undefined) {
-          cache.setJson(cacheKey(endpoint, args), result);
+          cache.setJson(key, result);
           if (endpoint === 'doc.get') rememberShadow(result);
         }
-        if (link.state !== 'online') markOnline(link.serverVersion, link.protocolVersion);
+        if (link.state !== 'online')
+          markOnline(link.serverVersion, link.protocolVersion);
         return result;
       } catch (error) {
         if (!isTransportError(error)) return errorOf(error);
         markOffline(error);
-        if (endpoint === 'doc.get') {
-          const docId = typeof args[0] === 'string' ? args[0] : undefined;
-          const shadow = docId === undefined ? undefined : cache.getShadow(docId);
-          if (shadow !== undefined)
-            return { value: shadow };
-        }
-        const cached = cache.getJson(cacheKey(endpoint, args));
-        if (cached !== undefined) return cached;
+        const fallback = cachedRead(endpoint, args, key);
+        if (fallback !== undefined) return fallback;
         return errorOf(error);
       }
     }
-    const input = writeInput(payload);
+    const args = argsOf(payload);
+    const outgoing = ACTOR_ENDPOINTS.has(endpoint)
+      ? stampActor(payload, origin)
+      : payload;
+    const input = writeInput(outgoing);
     const queueable =
       endpoint === 'doc.applyOps' &&
       input !== undefined &&
       typeof input.docId === 'string';
     // Ensure a retryable write carries an idempotency key even when the
     // caller never sent one.
-    let outgoingPayload = payload;
+    let outgoingPayload = outgoing;
     let queuedKey: string | undefined;
     if (queueable && input !== undefined) {
       const key =
@@ -497,9 +608,9 @@ export function createRemoteBridge(
           ? input.idempotencyKey
           : newOutboxIdempotencyKey();
       queuedKey = key;
-      outgoingPayload = isPlainObject(payload)
-        ? { ...payload, args: [{ ...input, idempotencyKey: key }, ...args.slice(1)] }
-        : payload;
+      outgoingPayload = isPlainObject(outgoing)
+        ? { ...outgoing, args: [{ ...input, idempotencyKey: key }, ...args.slice(1)] }
+        : outgoing;
     }
     try {
       const result = await client.rpc(endpoint, outgoingPayload, signal);
@@ -524,6 +635,15 @@ export function createRemoteBridge(
       }
       return errorOf(error);
     }
+  }
+
+  /** Browser-originated call: document writes are always attributed to `user`. */
+  async function rpc(
+    endpoint: string,
+    payload: unknown,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    return dispatch(endpoint, payload, signal, 'user');
   }
 
   /** Mark one queue entry as failed without blocking the remaining entries. */
@@ -571,40 +691,6 @@ export function createRemoteBridge(
             if (closed) return;
             const entry = cache.nextPending();
             if (entry === undefined) break;
-            let server: unknown;
-            try {
-              server = await client.call<{ docId: string; revision: number }>(
-                'doc.get',
-                [entry.docId],
-              );
-            } catch (error) {
-              if (isTransportError(error)) {
-                markOffline(error);
-                return;
-              }
-              if (isUnauthorizedError(error)) {
-                link = { state: 'error', message: '服务端拒绝了 token，请更新 token' };
-                return;
-              }
-              failEntry(entry.seq, error);
-              continue;
-            }
-            const revision =
-              isPlainObject(server) && typeof server.revision === 'number'
-                ? server.revision
-                : undefined;
-            if (revision === undefined) {
-              failEntry(entry.seq, '服务端返回的文档版本无效');
-              continue;
-            }
-            if (revision !== entry.baseRevision) {
-              cache.markConflict(
-                entry.docId,
-                `文档已在其他设备修改（服务端 revision=${String(revision)}，本地基线=${String(entry.baseRevision)}）`,
-                now().getTime(),
-              );
-              continue;
-            }
             let payload: Record<string, unknown>;
             try {
               payload = JSON.parse(entry.payload) as Record<string, unknown>;
@@ -612,6 +698,15 @@ export function createRemoteBridge(
               failEntry(entry.seq, '排队的写入内容已损坏');
               continue;
             }
+            if (!isPlainObject(payload)) {
+              failEntry(entry.seq, '排队的写入内容已损坏');
+              continue;
+            }
+            // Replay the stored request first, without a doc.get pre-check:
+            // the server checks the idempotency key before the base revision,
+            // so a write that was applied but whose response was lost is
+            // acknowledged by replay instead of being mistaken for a conflict
+            // against the newer revision its own first attempt created.
             try {
               await client.call(entry.endpoint, [payload]);
               cache.remove(entry.seq);
@@ -625,6 +720,8 @@ export function createRemoteBridge(
                 link = { state: 'error', message: '服务端拒绝了 token，请更新 token' };
                 return;
               }
+              // Only a genuine business conflict needs the user's decision;
+              // every other rejection fails just this entry.
               if (
                 error instanceof RemoteClientError &&
                 (error.code === 'doc/conflict' ||
@@ -654,23 +751,47 @@ export function createRemoteBridge(
   }
 
   // Keep the link fact fresh; refresh() triggers a flush after recovery.
-  const heartbeat = setInterval(() => {
-    void refresh().catch(() => undefined);
-  }, 20_000);
-  heartbeat.unref?.();
+  let heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
+  let offlineProbes = 0;
+
+  /**
+   * Heartbeat delay: fast while online, exponential backoff with jitter while
+   * offline, so a long outage neither hammers the server nor keeps every
+   * plugin probing in lockstep.
+   */
+  function heartbeatDelay(): number {
+    if (link.state === 'online') {
+      offlineProbes = 0;
+      return ONLINE_HEARTBEAT_MS;
+    }
+    const exponent = Math.min(offlineProbes, 6);
+    offlineProbes += 1;
+    const base = Math.min(
+      OFFLINE_HEARTBEAT_MAX_MS,
+      OFFLINE_HEARTBEAT_BASE_MS * 2 ** exponent,
+    );
+    return Math.round(base * (0.8 + Math.random() * 0.4));
+  }
+
+  function scheduleHeartbeat(): void {
+    if (closed) return;
+    heartbeatTimer = setTimeout(() => {
+      void refresh()
+        .catch(() => undefined)
+        .finally(() => scheduleHeartbeat());
+    }, heartbeatDelay());
+    heartbeatTimer.unref?.();
+  }
+
+  scheduleHeartbeat();
   // A pending queue found at startup waits for the first link probe.
   if (counts().pending > 0) void flush().catch(() => undefined);
 
   /**
-   * Stamp the Agent actor onto one document write. The server-authority route
-   * treats a missing actor as the browser `user`, so every write that crosses
-   * the bridge must carry `alter` explicitly (a tool edit must never be
-   * recorded as the user's own version).
+   * Agent tool port. Every call goes through `dispatch(..., 'alter')`, so a
+   * tool edit is attributed to the Agent even though the standalone server
+   * route only sees the bridge as its caller.
    */
-  const asAgentWrite = <T extends object>(
-    input: T,
-  ): T & { actor: 'alter' } => ({ ...input, actor: 'alter' });
-
   const documentPort: DocumentToolApi = {
     outline: (docId) =>
       callDocument('doc.outline', [docId]) as ReturnType<
@@ -685,15 +806,15 @@ export function createRemoteBridge(
         DocumentToolApi['search']
       >,
     applyOperations: (input) =>
-      callDocument('doc.applyOps', [asAgentWrite(input)]) as ReturnType<
+      callDocument('doc.applyOps', [input]) as ReturnType<
         DocumentToolApi['applyOperations']
       >,
     generate: (input) =>
-      callDocument('doc.generate', [asAgentWrite(input)]) as ReturnType<
+      callDocument('doc.generate', [input]) as ReturnType<
         DocumentToolApi['generate']
       >,
     undo: (input) =>
-      callDocument('doc.undo', [asAgentWrite(input)]) as ReturnType<
+      callDocument('doc.undo', [input]) as ReturnType<
         DocumentToolApi['undo']
       >,
     getObject: (objectId) =>
@@ -701,13 +822,13 @@ export function createRemoteBridge(
         DocumentToolApi['getObject']
       >,
     updateObject: (input) =>
-      callDocument('doc.updateObject', [asAgentWrite(input)]) as ReturnType<
+      callDocument('doc.updateObject', [input]) as ReturnType<
         DocumentToolApi['updateObject']
       >,
   };
 
   async function callDocument(endpoint: string, args: unknown[]): Promise<unknown> {
-    const result = await rpc(endpoint, { op: endpoint, args });
+    const result = await dispatch(endpoint, { op: endpoint, args }, undefined, 'alter');
     if (isPlainObject(result)) {
       if (result.error !== undefined) {
         const error = isPlainObject(result.error) ? result.error : {};
@@ -772,7 +893,10 @@ export function createRemoteBridge(
   ): Promise<{ resolved: number }> {
     if (action === 'discard') {
       const resolved = cache.discard(docId);
-      cache.deleteMatching(`${'doc.get'}\u0000${JSON.stringify([docId])}`);
+      // Drop every cached read that belongs to this document, not just
+      // doc.get: outline/read/versions would otherwise keep serving the
+      // discarded local content after the shadow is gone.
+      cache.deleteKeysContaining(JSON.stringify(docId));
       return { resolved };
     }
     let revision: number | undefined;
@@ -781,10 +905,27 @@ export function createRemoteBridge(
       if (isPlainObject(server) && typeof server.revision === 'number')
         revision = server.revision;
     } catch (error) {
+      // Preserve the underlying code (401, protocol, business) instead of
+      // flattening every failure into "unavailable": the settings surface
+      // shows "repair the token" differently from "the link is down".
+      if (error instanceof RemoteClientError) {
+        if (isTransportError(error)) {
+          markOffline(error);
+          throw new RemoteClientError(
+            error.code,
+            `重试需要连接服务端以确认最新版本；请恢复连接后重试（${error.message}）`,
+          );
+        }
+        if (isUnauthorizedError(error))
+          link = { state: 'error', message: '服务端拒绝了 token，请更新 token' };
+        throw error;
+      }
       markOffline(error);
       throw new RemoteClientError(
         'remote/unavailable',
-        '重试需要连接服务端以确认最新版本；请恢复连接后重试',
+        `重试需要连接服务端以确认最新版本；请恢复连接后重试（${
+          error instanceof Error ? error.message : String(error)
+        }）`,
       );
     }
     if (revision === undefined)
@@ -808,31 +949,57 @@ export function createRemoteBridge(
           headers: { 'content-type': 'application/json' },
         });
       }
+      // Content-addressed assets are immutable, so a cached copy can never be
+      // stale: serve it without waiting for the network at all.
       const cached = cache.getAsset(assetId);
+      if (cached !== undefined) return assetResponse(cached.mime, cached.data);
+      let response: Response;
       try {
-        const response = await client.asset(assetId);
-        if (response.ok) {
+        response = await client.asset(assetId, request.signal);
+      } catch (error) {
+        // A browser-cancelled asset request says nothing about the link.
+        if (!request.signal.aborted) markOffline(error);
+        return assetUnavailable();
+      }
+      if (response.ok) {
+        try {
           const data = new Uint8Array(await response.arrayBuffer());
           const mime =
             response.headers.get('content-type') ?? 'application/octet-stream';
           cache.putAsset(assetId, mime, data);
           markOnline(link.serverVersion, link.protocolVersion);
           return assetResponse(mime, data);
+        } catch {
+          // The body was cut off after the headers; the link is flaky, not
+          // the asset. Do not cache a partial body.
+          markOffline(new Error('读取资产响应体失败'));
+          return assetUnavailable();
         }
-        if (cached !== undefined)
-          return assetResponse(cached.mime, cached.data);
-        return new Response(JSON.stringify({ error: 'not_found' }), {
-          status: response.status === 404 ? 404 : 502,
-          headers: { 'content-type': 'application/json' },
-        });
-      } catch (error) {
-        markOffline(error);
-        if (cached !== undefined) return assetResponse(cached.mime, cached.data);
-        return new Response(JSON.stringify({ error: 'asset_unavailable' }), {
-          status: 502,
-          headers: { 'content-type': 'application/json' },
-        });
       }
+      const code = remoteCodeForStatus(response.status);
+      if (code === 'remote/unavailable') {
+        markOffline(
+          new RemoteClientError(
+            code,
+            `Space 服务端资产接口暂时不可用（HTTP ${String(response.status)}）`,
+            response.status,
+          ),
+        );
+        return assetUnavailable();
+      }
+      if (code === 'remote/unauthorized')
+        link = { state: 'error', message: '服务端拒绝了 token，请更新 token' };
+      if (response.status === 404)
+        return new Response(JSON.stringify({ error: 'not_found' }), {
+          status: 404,
+          headers: { 'content-type': 'application/json' },
+        });
+      // 404/405 and other non-auth 4xx mean the asset route is wrong, not that
+      // the link is down; report a bad gateway without claiming offline.
+      return new Response(JSON.stringify({ error: 'asset_unavailable' }), {
+        status: 502,
+        headers: { 'content-type': 'application/json' },
+      });
     },
     document: documentPort,
     assets: {
@@ -866,10 +1033,18 @@ export function createRemoteBridge(
     async close() {
       if (closed) return;
       closed = true;
-      clearInterval(heartbeat);
+      if (heartbeatTimer !== undefined) clearTimeout(heartbeatTimer);
       cache.close();
     },
   };
+}
+
+/** One stable 502 body for an asset that could not be served right now. */
+function assetUnavailable(): Response {
+  return new Response(JSON.stringify({ error: 'asset_unavailable' }), {
+    status: 502,
+    headers: { 'content-type': 'application/json' },
+  });
 }
 
 function assetResponse(mime: string, data: Uint8Array): Response {

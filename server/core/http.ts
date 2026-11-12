@@ -32,6 +32,8 @@ import {
 export const DEFAULT_MAX_BODY_BYTES = 32 * 1024 * 1024;
 /** Migration parts may be larger than ordinary RPC calls. */
 export const MAX_MIGRATION_BODY_BYTES = 64 * 1024 * 1024;
+/** How long a graceful close waits for in-flight requests before forcing. */
+export const CLOSE_GRACE_MS = 5_000;
 
 interface LoggerLike {
   info?(message: string): void;
@@ -44,6 +46,13 @@ export interface SpaceHttpServerOptions {
   auth: TokenAuthenticator;
   /** Resolves the migration handler once the server lifecycle created it. */
   migration?: () => ServerMigration | undefined;
+  /**
+   * Whether the authority is paused for a migration replace/rollback right
+   * now. While frozen, authenticated business routes answer 503 with the
+   * stable `migration_paused` code instead of hitting a closed database;
+   * `/healthz`, `/version` and the migration endpoints stay available.
+   */
+  frozen?: () => boolean;
   maxRequestBodyBytes?: number;
   logger?: LoggerLike;
 }
@@ -119,7 +128,10 @@ async function writeResponse(
     response.setHeader(name, value);
   }
   response.setHeader('content-length', String(body.byteLength));
-  response.end(body);
+  // Node does not strip bodies for HEAD; a HEAD response must keep headers
+  // only.
+  const isHead = response.req?.method === 'HEAD';
+  response.end(isHead ? undefined : body);
 }
 
 /**
@@ -136,6 +148,9 @@ export function createSpaceHttpServer(
   let activeRuntime = options.runtime;
   let rpcRoute = buildRpcRoute(activeRuntime);
   let assetRoute = buildAssetRoute(activeRuntime);
+  /** New requests are rejected once close starts; in-flight ones may finish. */
+  let closing = false;
+  let closingPromise: Promise<void> | undefined;
 
   function buildRpcRoute(runtime: LocalSpaceRuntime) {
     return createSpaceFetchRoute({
@@ -155,24 +170,41 @@ export function createSpaceHttpServer(
   }
 
   const server = createServer((request, response) => {
-    void handle(request, response).catch((error: unknown) => {
-      logger.warn?.(
-        `[space-server] 请求处理失败：${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      if (response.headersSent) {
-        response.destroy();
-        return;
-      }
-      void writeResponse(response, jsonResponse(500, { error: 'server_error' }));
-    });
+    let released = false;
+    const release = (): void => {
+      if (released) return;
+      released = true;
+      if (closing) server.closeIdleConnections();
+    };
+    response.once('finish', release);
+    response.once('close', release);
+    void handle(request, response)
+      .catch((error: unknown) => {
+        logger.warn?.(
+          `[space-server] 请求处理失败：${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+        if (response.headersSent) {
+          response.destroy();
+          return;
+        }
+        void writeResponse(response, jsonResponse(500, { error: 'server_error' }));
+      })
+      .finally(release);
   });
 
   async function handle(
     request: IncomingMessage,
     response: ServerResponse,
   ): Promise<void> {
+    if (closing) {
+      await writeResponse(
+        response,
+        jsonResponse(503, { error: 'server_closing' }),
+      );
+      return;
+    }
     const url = new URL(request.url ?? '/', 'http://space.internal');
     const path = url.pathname;
 
@@ -194,7 +226,7 @@ export function createSpaceHttpServer(
       return;
     }
     if (path === '/version') {
-      if (request.method !== 'GET') {
+      if (request.method !== 'GET' && request.method !== 'HEAD') {
         await writeResponse(
           response,
           jsonResponse(405, { error: 'method_not_allowed' }),
@@ -207,7 +239,9 @@ export function createSpaceHttpServer(
 
     const isRpc = path === RPC_ROUTE_PATH;
     const isAsset = path === ASSET_ROUTE_PATH;
-    const isMigration = path.startsWith(MIGRATION_PATH);
+    // Exact prefix match: `/migrate-extra` is not a migration route.
+    const isMigration =
+      path === MIGRATION_PATH || path.startsWith(`${MIGRATION_PATH}/`);
     if (!isRpc && !isAsset && !isMigration) {
       await writeResponse(response, jsonResponse(404, { error: 'not_found' }));
       return;
@@ -220,6 +254,18 @@ export function createSpaceHttpServer(
           { error: 'unauthorized' },
           { 'www-authenticate': 'Bearer' },
         ),
+      );
+      return;
+    }
+    if (options.frozen?.() === true && !isMigration) {
+      // The authority is closed while the data directory is replaced; answer
+      // with a stable business code instead of an internal 500.
+      await writeResponse(
+        response,
+        jsonResponse(503, {
+          error: 'migration_paused',
+          message: '服务端正在迁移替换数据，空间暂时不可用；请稍后重试',
+        }),
       );
       return;
     }
@@ -301,14 +347,32 @@ export function createSpaceHttpServer(
       assetRoute = buildAssetRoute(runtime);
     },
     close(): Promise<void> {
-      return new Promise((resolveClose) => {
+      closingPromise ??= new Promise<void>((resolveClose) => {
+        closing = true;
         if (!server.listening) {
           resolveClose();
           return;
         }
-        server.close(() => resolveClose());
-        server.closeAllConnections();
+        let settled = false;
+        const settle = (): void => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolveClose();
+        };
+        // Stop accepting new connections and let idle keep-alive ones go. An
+        // in-flight request (e.g. the response of a migration commit) may
+        // finish; after the bounded grace period the remaining sockets are
+        // destroyed instead of hanging the process.
+        const timer = setTimeout(() => {
+          server.closeAllConnections();
+          settle();
+        }, CLOSE_GRACE_MS);
+        timer.unref?.();
+        server.close(() => settle());
+        server.closeIdleConnections();
       });
+      return closingPromise;
     },
   };
 }

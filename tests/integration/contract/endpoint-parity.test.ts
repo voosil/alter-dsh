@@ -15,10 +15,13 @@ import { isReadEndpoint, READ_ENDPOINTS } from '../../../host/authority/endpoint
 import {
   DOCUMENT_METHODS,
   HUB_METHODS,
+  MIGRATION_METHODS,
   OBJECT_METHODS,
   RPC_ENDPOINT,
+  SETTINGS_METHODS,
   SPACE_METHODS,
   STORAGE_METHODS,
+  SYNC_METHODS,
   isMigrationEndpoint,
   isPluginControlEndpoint,
 } from '../../../host/authority/rpc.js';
@@ -27,8 +30,12 @@ import { SPACE_RPC_CHANNEL, SPACE_RPC_ENDPOINT } from '../../../src/client/rpc.j
 const root = dirname(dirname(dirname(dirname(fileURLToPath(import.meta.url)))));
 const BROWSER_CLIENTS = ['src/client/rpc.ts', 'src/client/storage.ts'];
 
-/** `call('space.x')` / `call<StorageState>('storage.y')` — fully qualified. */
-const QUALIFIED_CALL = /(?:call|voidCall)(?:<[^>]*>)?\('([a-zA-Z]+\.[a-zA-Z]+)'/g;
+/** `call('space.x')` / `request('settings.y')` — fully qualified. */
+const QUALIFIED_CALL =
+  /(?:call|voidCall|request)(?:<[^>]*>)?\('([a-zA-Z]+\.[a-zA-Z]+)'/g;
+/** Control-plane calls the browser issues through the shared `request` helper. */
+const CONTROL_CALL =
+  /request(?:<[^>]*>)?\('((?:settings|sync|migration)\.[a-zA-Z]+)'/g;
 /** `spaceCall('x')` — qualified by its prefix. */
 const SPACE_CALL = /spaceCall(?:<[^>]*>)?\('([a-zA-Z]+)'/g;
 /** `hubCall('x')` — qualified by its prefix. */
@@ -36,6 +43,15 @@ const HUB_CALL = /hubCall(?:<[^>]*>)?\('([a-zA-Z]+)'/g;
 
 /** Control-plane groups served outside the authority whitelist. */
 const CONTROL_GROUPS = new Set(['settings', 'sync', 'migration']);
+
+/** Control-plane endpoints declared by the Host (served by the plugin core). */
+function hostControlEndpoints(): string[] {
+  return [
+    ...SETTINGS_METHODS.map((method) => `settings.${method}`),
+    ...SYNC_METHODS.map((method) => `sync.${method}`),
+    ...MIGRATION_METHODS.map((method) => `migration.${method}`),
+  ];
+}
 
 /** Every endpoint the Host accepts from the browser. */
 function hostWhitelist(): string[] {
@@ -77,23 +93,39 @@ describe('endpoint classification', () => {
     expect(isReadEndpoint('doc.applyOps')).toBe(false);
   });
 
+  it('never classifies a control-plane or unknown endpoint as a read', () => {
+    for (const endpoint of hostControlEndpoints())
+      expect(isReadEndpoint(endpoint), endpoint).toBe(false);
+    // A new/unknown method must default to "writes state": otherwise a
+    // migration freeze or the offline cache would let it through.
+    for (const endpoint of [
+      'settings.futureMethod',
+      'sync.futureMethod',
+      'migration.futureMethod',
+      'space.futureMethod',
+      'unknown.endpoint',
+    ])
+      expect(isReadEndpoint(endpoint), endpoint).toBe(false);
+  });
+
   it('routes migration and control-plane endpoints through their own handlers', () => {
     expect(isMigrationEndpoint('migration.start')).toBe(true);
     expect(isMigrationEndpoint('space.createSpace')).toBe(false);
     expect(isPluginControlEndpoint('settings.update')).toBe(true);
     expect(isPluginControlEndpoint('sync.flush')).toBe(true);
     expect(isPluginControlEndpoint('safe.ping')).toBe(false);
+    for (const endpoint of hostControlEndpoints()) {
+      expect(
+        isPluginControlEndpoint(endpoint) || isMigrationEndpoint(endpoint),
+        endpoint,
+      ).toBe(true);
+    }
   });
 });
 
 describe('browser ↔ host endpoint mapping', () => {
   it('maps every endpoint the browser names onto the Host whitelist', async () => {
-    const whitelist = new Set([
-      ...hostWhitelist(),
-      ...['settings.get', 'settings.update', 'settings.test'],
-      ...['sync.status', 'sync.flush', 'sync.queue', 'sync.resolve'],
-      ...['migration.preflight', 'migration.start', 'migration.status', 'migration.cancel'],
-    ]);
+    const whitelist = new Set([...hostWhitelist(), ...hostControlEndpoints()]);
     const missing: string[] = [];
     let seen = 0;
     for (const file of BROWSER_CLIENTS) {
@@ -107,5 +139,22 @@ describe('browser ↔ host endpoint mapping', () => {
     // Guards against this test silently matching nothing after a client refactor.
     expect(seen).toBeGreaterThan(50);
     expect(missing).toEqual([]);
+  });
+
+  it('maps every control endpoint in both directions', async () => {
+    const source = await readFile(join(root, 'src/client/rpc.ts'), 'utf8');
+    const browserControl = new Set(
+      [...source.matchAll(CONTROL_CALL)].map((match) => match[1]),
+    );
+    const hostControl = new Set(hostControlEndpoints());
+    // Both ways: a host endpoint with no browser caller is dead protocol, and
+    // a browser call with no host handler fails at runtime only.
+    expect([...browserControl].sort()).toEqual([...hostControl].sort());
+    for (const endpoint of hostControl) {
+      expect(
+        isPluginControlEndpoint(endpoint) || isMigrationEndpoint(endpoint),
+        endpoint,
+      ).toBe(true);
+    }
   });
 });
