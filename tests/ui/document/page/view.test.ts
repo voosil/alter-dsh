@@ -282,7 +282,87 @@ describe('document page on the AST-native kernel', () => {
     );
   });
 
-  it('reloads the body when an external snapshot changes the revision', async () => {
+  it('replaces the body in place when another writer updates the revision', async () => {
+    // Another writer's update is not a reason to throw the session away: the
+    // body is swapped under the same editing surface so the caret, the undo
+    // stack and the floating bars survive the refresh.
+    const doc = sampleDoc();
+    const client = createPageClient(doc);
+    const page = mountDocumentPage(makeNode(doc), client);
+    await waitFor(() => expect(screen.getByText('编辑器正文')).toBeTruthy());
+    const surface = page.surface();
+    const view = page.view();
+    const updatedRevision: AlterDoc = {
+      format: 'alter-doc/1',
+      schemaVersion: 1,
+      revision: 8,
+      blocks: [paragraph('blk_p', '外部改写')],
+    };
+    await act(async () => {
+      page.rerenderPage(makeNode(updatedRevision));
+    });
+    await waitFor(() => expect(screen.getByText('外部改写')).toBeTruthy());
+    expect(screen.queryByText('编辑器正文')).toBeNull();
+    // Same editing surface, same ProseMirror view: nothing was rebuilt.
+    expect(page.surface()).toBe(surface);
+    expect(page.view()).toBe(view);
+    // The swap is not an edit, so it must not be saved back over the server.
+    await settle();
+    await new Promise((resolve) => setTimeout(resolve, SAVE_DEBOUNCE_MS + 100));
+    await settle();
+    expect(client.applyOperations).not.toHaveBeenCalled();
+
+    // A second external update at yet another revision still lands.
+    const again: AlterDoc = {
+      format: 'alter-doc/1',
+      schemaVersion: 1,
+      revision: 9,
+      blocks: [paragraph('blk_p', '再次外部改写')],
+    };
+    await act(async () => {
+      page.rerenderPage(makeNode(again));
+    });
+    await waitFor(() =>
+      expect(screen.getByText('再次外部改写')).toBeTruthy(),
+    );
+    expect(page.surface()).toBe(surface);
+  });
+
+  it('rebuilds the editing session when a version restore replaces the body', async () => {
+    const doc = sampleDoc();
+    const client = createPageClient(doc, {
+      restoreVersion: async () => ({ docId: 'doc-1', revision: 8 }),
+    });
+    const version = {
+      id: 'ver-1',
+      docId: 'doc-1',
+      title: '测试文档',
+      content: JSON.stringify({
+        format: 'alter-doc/1',
+        schemaVersion: 1,
+        revision: 2,
+        blocks: [paragraph('blk_restored', '还原后的内容')],
+      }),
+      author: 'me',
+      at: '2026-11-09T00:00:00.000Z',
+    };
+    const page = mountDocumentPage(makeNode(doc), client, {
+      listVersions: vi.fn(async () => [version]),
+    });
+    await waitFor(() => expect(screen.getByText('编辑器正文')).toBeTruthy());
+    const surface = page.surface();
+    fireEvent.click(screen.getByRole('button', { name: '文档菜单' }));
+    fireEvent.click(
+      await screen.findByRole('menuitem', { name: /历史记录/ }),
+    );
+    fireEvent.click(await screen.findByText('还原后的内容'));
+    fireEvent.click(screen.getByRole('button', { name: /还原到此版本/ }));
+    await waitFor(() => expect(client.restoreVersion).toHaveBeenCalled());
+    // A restore must reset the session, so the editor is rebuilt on purpose.
+    await waitFor(() => expect(page.surface()).not.toBe(surface));
+  });
+
+  it('saves the refreshed body after an external update, not the old one', async () => {
     const doc = sampleDoc();
     const client = createPageClient(doc);
     const page = mountDocumentPage(makeNode(doc), client);

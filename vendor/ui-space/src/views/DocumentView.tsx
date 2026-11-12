@@ -279,6 +279,14 @@ export function DocumentView({
   } | null>(null);
   const [editorRevision, setEditorRevision] = useState(0);
   /**
+   * How the newest body identity reached the editor.
+   *
+   * Another writer's update must not destroy the session (undo stack, caret),
+   * while a version restore must reset it. The kernel reads this next to
+   * `revision` to pick between an in-place refresh and a rebuild.
+   */
+  const [bodyReload, setBodyReload] = useState<'refresh' | 'rebuild'>('rebuild');
+  /**
    * Document the AST-native kernel renders.
    *
    * The retired contentEditable kernel renders `editorHtml`; an AST kernel needs the document
@@ -353,8 +361,17 @@ export function DocumentView({
     reportDocumentError('load', failure.error, { docId: node.id });
   }, [node.id]);
 
-  /** Adopt one server snapshot into the editor (external reload/restore). */
-  function applyExternalSnapshot(snapshot: DocumentSaveSnapshot): void {
+  /**
+   * Adopt one server snapshot into the editor.
+   *
+   * `mode` says how the body should be replaced: another writer's update keeps
+   * the live session (`refresh`), while a version restore or conflict adoption
+   * resets it (`rebuild`) so the restored content cannot be undone away.
+   */
+  function applyExternalSnapshot(
+    snapshot: DocumentSaveSnapshot,
+    mode: 'refresh' | 'rebuild' = 'rebuild',
+  ): void {
     lastSavedDocRef.current = snapshot.doc;
     baseRevisionRef.current = snapshot.revision;
     lastSavedTitleRef.current = snapshot.title;
@@ -362,6 +379,7 @@ export function DocumentView({
     draftRef.current = { title: snapshot.title, blocks: snapshot.doc.blocks };
     if (!aliveRef.current) return;
     setRevision(snapshot.revision);
+    setBodyReload(mode);
     setBodyDocument(snapshot.doc);
     setTitle(snapshot.title);
     setBodyHasContent(blocksHaveContent(snapshot.doc.blocks));
@@ -588,8 +606,11 @@ export function DocumentView({
       // canonicalize attrs). Keep the live body and cursor untouched.
       return;
     }
-    // External revision (version restore, another writer): reload the editor.
-    applyExternalSnapshot(snapshot);
+    // A newer revision from outside this editor (another device, an Agent, a
+    // version restore) replaces the body. The snapshot's own identity tells
+    // them apart: this effect only sees whole-document pushes, which are
+    // updates, never a restore (restore has its own path below).
+    applyExternalSnapshot(snapshot, 'refresh');
   }, [node.content, node.title, spaceId]);
 
   // Force a crash-draft write before the page is hidden/unloaded.
@@ -1144,6 +1165,7 @@ export function DocumentView({
     draftRef.current = { title: prompt.draft.title, blocks };
     setTitle(prompt.draft.title);
     setBodyHasContent(blocksHaveContent(blocks));
+    setBodyReload('rebuild');
     setBodyDocument({
       format: 'alter-doc/1',
       schemaVersion: 1,
@@ -1194,6 +1216,7 @@ export function DocumentView({
     draftRef.current = { title: prompt.draft.title, blocks };
     setTitle(prompt.draft.title);
     setBodyHasContent(blocksHaveContent(blocks));
+    setBodyReload('rebuild');
     setBodyDocument({
       format: 'alter-doc/1',
       schemaVersion: 1,
@@ -1647,6 +1670,7 @@ export function DocumentView({
                   docId={node.id}
                   document={bodyDocument}
                   revision={editorRevision}
+                  reload={bodyReload}
                   caret="none"
                   comments={commentsWithQuote}
                   activeCommentId={activeCommentId}

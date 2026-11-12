@@ -386,6 +386,45 @@ describe('document save controller: retry and idempotency', () => {
     expect(readDocumentDraft('doc-1', harness.storage)).toBeDefined();
   });
 
+  it('keeps a conflicted document gated through a flush instead of resending', async () => {
+    // Title blur, unmount and document switch all call flush(). While a
+    // conflict is pending the write must not be replayed against the same
+    // stale revision: it would fail again and, because the status is unchanged,
+    // report nothing while the local edits drift on top of another writer.
+    const harness = setup({
+      applyOverride: async () => {
+        throw new SpaceRemoteError('doc/conflict', '文档已被修改');
+      },
+    });
+    harness.get.mockImplementation(async () => ({
+      docId: 'doc-1',
+      revision: 4,
+      title: '标题',
+      doc: docOf([paragraph('blk_other', '他人内容')], 4),
+    }));
+    harness.state.html = alterDocToEditorHtml(
+      docOf([paragraph('blk_p', '本地内容')]),
+    );
+    harness.controller.notifyChange();
+    await tick(700);
+    await settle();
+    expect(harness.applyOperations).toHaveBeenCalledTimes(1);
+    expect(harness.statuses.at(-1)?.kind).toBe('conflict');
+
+    harness.controller.notifyChange();
+    await harness.controller.flush();
+    await settle();
+    // Still exactly one attempt: the gate held.
+    expect(harness.applyOperations).toHaveBeenCalledTimes(1);
+    // The local edits survive in the draft for a later decision.
+    expect(readDocumentDraft('doc-1', harness.storage)).toBeDefined();
+
+    // An explicit retry (the user's choice) is what releases it.
+    await harness.controller.retry();
+    await settle();
+    expect(harness.applyOperations).toHaveBeenCalledTimes(2);
+  });
+
   it('recovers from a database-busy failure by retrying', async () => {
     let attempts = 0;
     const harness = setup({

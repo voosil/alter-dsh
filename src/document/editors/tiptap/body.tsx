@@ -29,8 +29,10 @@ export interface TiptapBodyProps {
   docId: string;
   /** Base document (authoritative AST the body was loaded from). */
   document: EditorKernelProps['document'];
-  /** Bumps on every external reload (version restore, conflict adoption). */
+  /** Bumps whenever the body is replaced from outside the editor. */
   revision: number;
+  /** Whether that replacement keeps the live session (see the kernel contract). */
+  reload?: 'refresh' | 'rebuild';
   caret: 'none' | 'end';
   comments: readonly EditorKernelComment[];
   activeCommentId?: string | null;

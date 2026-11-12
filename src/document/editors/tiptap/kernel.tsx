@@ -211,12 +211,14 @@ export function mountTiptapKernel(
     }, [props.docId]);
 
     // The body was created from the first document; only a *changed* identity
-    // reloads it. Reloading on the first effect run would reset the undo stack
+    // replaces it. Replacing on the first effect run would reset the undo stack
     // and the caret right after mount.
     const loadedKeyRef = useRef<string | null>(null);
     useEffect(() => {
-      // A new base revision means "external reload": replace the body without
-      // reporting an edit (the save controller owns the base revision).
+      // A new base revision means "the document changed outside this editor".
+      // How it is applied depends on the page's intent: another writer's update
+      // swaps the body in place, while a session reset (version restore,
+      // conflict adoption, draft recovery) rebuilds the editor.
       if (mounted === null) return;
       const key = `${props.docId}:${props.revision}`;
       if (loadedKeyRef.current === null) {
@@ -225,8 +227,15 @@ export function mountTiptapKernel(
       }
       if (loadedKeyRef.current === key) return;
       loadedKeyRef.current = key;
-      mounted.instance.load(props.document);
-    }, [props.docId, props.revision]);
+      if (props.reload === 'rebuild') {
+        mounted.instance.load(props.document);
+        return;
+      }
+      // An in-place refresh reports "unchanged" for an identical body; that is
+      // the no-op an echo of our own save must be, never a rebuild (which would
+      // throw away the editing session for no new content).
+      mounted.instance.refresh(props.document);
+    }, [props.docId, props.revision, props.reload]);
 
     // Comment updates are view-only repaints; an unchanged list (the page
     // re-renders on every edit) must not dispatch a transaction per keystroke.

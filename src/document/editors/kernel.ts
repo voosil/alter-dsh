@@ -161,10 +161,20 @@ export const EDITOR_KERNEL_ATTRIBUTE = 'data-editor-kernel';
 /** Props every kernel component accepts (structural, framework-agnostic). */
 export interface EditorKernelProps {
   docId: string;
-  /** Base document the body starts from; reloads when `revision` changes. */
+  /** Base document the body starts from; replaces the body when `revision` changes. */
   document: AlterDoc;
-  /** Base revision of `document`; a change means "reload the body". */
+  /** Base revision of `document`; a change means "replace the body". */
   revision: number;
+  /**
+   * How a newer `revision` treats the live editing session.
+   *
+   * - `refresh`: another writer updated the document. Swap the body in place so
+   *   the undo stack, the caret and the floating surfaces survive.
+   * - `rebuild`: the session must reset (version restore, conflict adoption,
+   *   crash-draft recovery). A fresh editor keeps a restored version from being
+   *   undone back into the pre-restore body.
+   */
+  reload?: 'refresh' | 'rebuild';
   /** Initial caret placement (`end` only for the new-document flow). */
   caret: 'none' | 'end';
   comments: readonly EditorKernelComment[];

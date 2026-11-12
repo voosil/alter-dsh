@@ -541,7 +541,16 @@ export function createDocumentSaveController(
   async function flush(): Promise<void> {
     if (disposed) return;
     clearDebounce();
-    if (blocked) blocked = false;
+    // A conflicted document stays gated until the user picks a resolution.
+    // Releasing the gate here (the previous behaviour) resent the same content
+    // against the same stale revision on every blur/unmount, failed again, and
+    // — because the status did not change — reported nothing, so the user kept
+    // typing over a conflict that had no visible signal. The draft is the
+    // safety net until a real decision arrives.
+    if (blocked) {
+      if (pending) persistDraftNow();
+      return;
+    }
     if (pending) persistDraftNow();
     flushRequested = true;
     await runSave(true);
