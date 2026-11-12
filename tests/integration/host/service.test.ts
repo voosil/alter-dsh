@@ -6,6 +6,7 @@ import { createSpaceAuthority } from '../../../host/authority/compose.js';
 import { createDocumentService } from '../../../host/document/editors/legacy/service.js';
 import { parseAlterDoc } from '../../../host/document/editors/legacy/types.js';
 import { DEFAULT_SPACE_ID, openSpaceStore } from '../../../host/persistence/store.js';
+import { createArchiveSweeper } from '../../../vendor/service/src/service.js';
 
 const dirs: string[] = [];
 
@@ -20,6 +21,16 @@ afterEach(async () => {
 });
 
 const fixedNow = () => new Date('2026-11-06T00:00:00.000Z');
+
+/** The write-identity store seam the maintenance sweep writes through. */
+function asSpaceStore(store: Awaited<ReturnType<typeof openSpaceStore>>) {
+  return {
+    read: () => store.read(),
+    update: <T>(change: (data: ReturnType<typeof store.read>) => T) =>
+      store.updateAs('user', change),
+    close: () => store.close(),
+  };
+}
 
 /** Serialize a document body the way the document service stores it. */
 function astContent(...paragraphs: string[]): string {
@@ -273,6 +284,51 @@ describe('Space business service over SQLite', () => {
     expect(
       overview.activity.reduce((sum, day) => sum + day.count, 0),
     ).toBe(entries.length);
+
+    await store.close();
+  });
+
+  it('keeps reads read-only and archives idle notes on the maintenance sweep', async () => {
+    const dir = await tempDir();
+    let current = new Date('2026-11-02T09:00:00.000Z');
+    const clock = () => current;
+    const store = await openSpaceStore({ directory: dir, now: clock });
+    const service = createSpaceAuthority(store, clock).user;
+    const space = await service.createSpace({ name: '研究' });
+    const note = await service.createNode({
+      spaceId: space.id,
+      kind: 'note',
+      title: '沉底旧文',
+    });
+
+    // Far enough in the future that the activity decay bottoms out.
+    current = new Date('2026-12-02T09:00:00.000Z');
+    expect(store.read().nodes.find((item) => item.id === note.id)?.archived).toBe(
+      false,
+    );
+
+    // Browsing is a read: it must not persist an archive decision. The sweep
+    // used to run inside listNodes/getNode/getOverview, so a read-only caller
+    // (or a migration freeze) still wrote to the database.
+    const listed = await service.listNodes(space.id);
+    expect(listed.find((item) => item.id === note.id)?.archived).toBe(false);
+    expect((await service.getNode(note.id))?.archived).toBe(false);
+    await service.getOverview(space.id);
+    expect(store.read().nodes.find((item) => item.id === note.id)?.archived).toBe(
+      false,
+    );
+
+    // The scheduled sweep owns that decision.
+    const sweeper = createArchiveSweeper({
+      store: asSpaceStore(store),
+      now: clock,
+    });
+    expect(await sweeper.sweep()).toBe(1);
+    const archived = store.read().nodes.find((item) => item.id === note.id);
+    expect(archived?.archived).toBe(true);
+    expect(archived?.archivedBy).toBe('system');
+    // A second pass finds nothing left to do.
+    expect(await sweeper.sweep()).toBe(0);
 
     await store.close();
   });

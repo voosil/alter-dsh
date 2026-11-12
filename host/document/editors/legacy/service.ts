@@ -307,7 +307,8 @@ function recordVersion(
   actor: DocumentActor,
   at: string,
   settings: ReturnType<SpaceStoreHandle['getStorageSettings']>,
-): void {
+  options: { force?: boolean; protect?: ReadonlySet<string> } = {},
+): string | undefined {
   // User writes keep the vendor service's five-minute version throttle.
   // Alter writes force a version in the same transaction even inside the
   // throttle window, so every Agent edit stays recoverable; the regular
@@ -316,21 +317,28 @@ function recordVersion(
     .filter((version) => version.docId === node.id)
     .sort((left, right) => Date.parse(right.at) - Date.parse(left.at))[0];
   if (
+    options.force !== true &&
     actor !== 'alter' &&
     latest !== undefined &&
     Date.parse(at) - Date.parse(latest.at) < 300_000
   )
-    return;
+    return undefined;
+  const id = newVersionId();
   const previousLength = data.versions.length;
   data.versions.push({
-    id: newVersionId(),
+    id,
     docId: node.id,
     title: node.title,
     content: node.content,
     author: actor === 'alter' ? 'alter' : 'me',
     at,
   });
-  trimTouchedVersions(data, previousLength, settings);
+  const protect =
+    options.protect === undefined
+      ? undefined
+      : new Set([...options.protect, id]);
+  trimTouchedVersions(data, previousLength, settings, protect);
+  return id;
 }
 
 /**
@@ -349,11 +357,12 @@ function writeDocumentBody(
   actor: DocumentActor,
   at: string,
   settings: ReturnType<SpaceStoreHandle['getStorageSettings']>,
+  options: { protect?: ReadonlySet<string> } = {},
 ): void {
   const previous = node.content;
   const content = serializeAlterDoc(doc);
   node.content = content;
-  touchNodeContent(data, node, actor, at, settings);
+  touchNodeContent(data, node, actor, at, settings, options);
   if (content === previous) return;
   cascadeDeletedComments(
     data.comments,
@@ -369,6 +378,7 @@ function touchNodeContent(
   actor: DocumentActor,
   at: string,
   settings: ReturnType<SpaceStoreHandle['getStorageSettings']>,
+  options: { protect?: ReadonlySet<string> } = {},
 ): void {
   node.updatedAt = at;
   const activity = node.activity;
@@ -378,7 +388,7 @@ function touchNodeContent(
   node.activity = Math.min(100, Math.max(0, activity + (canCredit ? 20 : 0)));
   node.activityAt = at;
   if (canCredit) node.lastEditCreditAt = at;
-  recordVersion(data, node, actor, at, settings);
+  recordVersion(data, node, actor, at, settings, options);
 }
 
 function nextTopLevelId(
@@ -782,6 +792,16 @@ export function createDocumentService(
         if (version === undefined)
           throw new DocumentError('op/invalid', '历史版本不存在');
         const restored = parseAlterDoc(version.content);
+        // Record the pre-restore body before rewriting anything: without it the
+        // restore is the one irreversible action in the product (the whole point
+        // of a restore is that the previous state may be the good one). It is
+        // protected from trimming below, so even the minimum history limit keeps
+        // a way back.
+        const undoPointId = recordVersion(data, node, actor, at, settings, {
+          force: true,
+        });
+        const undoPoint =
+          undoPointId === undefined ? undefined : new Set([undoPointId]);
         const ops: Operation[] = doc.blocks.map((block) => ({
           op: 'delete_block' as const,
           target: block.id,
@@ -810,7 +830,15 @@ export function createDocumentService(
         });
         const revision = doc.revision + 1;
         node.title = version.title;
-        writeDocumentBody(data, node, { ...result.doc, revision }, actor, at, settings);
+        writeDocumentBody(
+          data,
+          node,
+          { ...result.doc, revision },
+          actor,
+          at,
+          settings,
+          undoPoint === undefined ? {} : { protect: undoPoint },
+        );
         sidecar.appendOp({
           id: newOperationId(),
           docId: input.docId,

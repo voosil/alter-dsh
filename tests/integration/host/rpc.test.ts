@@ -41,7 +41,11 @@ const pdf = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x37, 1, 2
 const PDF_BASE64 = Buffer.from(pdf).toString('base64');
 
 async function createHandler(
-  options: { workspaceSync?: boolean; assets?: boolean } = {},
+  options: {
+    workspaceSync?: boolean;
+    assets?: boolean;
+    snapshotBeforeSpaceDelete?: () => Promise<unknown>;
+  } = {},
 ) {
   const dir = await tempDir();
   const home = join(dir, 'home');
@@ -76,6 +80,9 @@ async function createHandler(
     document,
     agentDocument,
     assets,
+    ...(options.snapshotBeforeSpaceDelete === undefined
+      ? {}
+      : { snapshotBeforeSpaceDelete: options.snapshotBeforeSpaceDelete }),
   });
   return {
     dir,
@@ -808,6 +815,60 @@ describe('Space RPC with the workspace bridge', () => {
     expect(registry?.list()).toHaveLength(1);
     expect(registry?.list()[0]?.title).toBe('新名字');
     expect(store.getWorkspaceLink(created.id)).toBeUndefined();
+    await store.close();
+  });
+
+  it('takes a recovery point before deleting a space', async () => {
+    const snapshots: string[] = [];
+    const { store, handler } = await createHandler({
+      snapshotBeforeSpaceDelete: async () => {
+        snapshots.push('snapshot');
+      },
+    });
+    const created = valueOf(
+      await handler(
+        'space.createSpace',
+        { args: [{ name: '要删的空间', directories: [] }] },
+        signal,
+        {},
+      ),
+    ) as { id: string };
+    valueOf(
+      await handler('space.deleteSpace', { args: [created.id] }, signal, {}),
+    );
+    // Exactly one recovery point, taken before the destructive write.
+    expect(snapshots).toEqual(['snapshot']);
+    expect(
+      store.read().spaces.some((space) => space.id === created.id),
+    ).toBe(false);
+    await store.close();
+  });
+
+  it('refuses the delete when the recovery point cannot be taken', async () => {
+    const { store, handler } = await createHandler({
+      snapshotBeforeSpaceDelete: async () => {
+        throw new Error('磁盘已满');
+      },
+    });
+    const created = valueOf(
+      await handler(
+        'space.createSpace',
+        { args: [{ name: '不该被删的空间', directories: [] }] },
+        signal,
+        {},
+      ),
+    ) as { id: string };
+    const result = await handler(
+      'space.deleteSpace',
+      { args: [created.id] },
+      signal,
+      {},
+    );
+    expect(errorOf(result)?.code).toBe('space/snapshot-failed');
+    // Fail closed: the space and its content are untouched.
+    expect(store.read().spaces.some((space) => space.id === created.id)).toBe(
+      true,
+    );
     await store.close();
   });
 

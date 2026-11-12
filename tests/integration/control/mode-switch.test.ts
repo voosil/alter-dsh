@@ -742,7 +742,10 @@ describe('settings control-plane guards', () => {
     ready: (lines: Array<Record<string, unknown>>) => boolean,
   ): Promise<Array<Record<string, unknown>>> {
     const file = join(directory, 'connection-audit.jsonl');
-    const deadline = Date.now() + 4_000;
+    // The audit trail is appended off the request path (fire-and-forget), so a
+    // loaded machine can delay the flush well past the first few hundred ms; a
+    // tight deadline turned that into a rare red run.
+    const deadline = Date.now() + 10_000;
     for (;;) {
       try {
         const lines = (await readFile(file, 'utf8'))

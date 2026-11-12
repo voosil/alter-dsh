@@ -315,6 +315,117 @@ describe('document service', () => {
     await store.close();
   });
 
+  it('keeps a way back after a restore, even at the minimum history limit', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'alter-space-restore-undo-'));
+    dirs.push(dir);
+    const store = await openSpaceStore({ directory: dir, now: fixedNow });
+    // The tightest policy the product allows: exactly one version per document.
+    const policy = { historyLimit: 1, snapshotKeep: 1 };
+    let clock = new Date('2026-11-09T00:00:00.000Z');
+    const service = createDocumentService({
+      store,
+      now: () => clock,
+      actor: 'user',
+      settings: policy,
+    });
+    const created = await service.generate({
+      spaceId: DEFAULT_SPACE_ID,
+      markdown: '第一版\n',
+    });
+    const firstVersion = store
+      .read()
+      .versions.filter((version) => version.docId === created.docId)[0];
+    expect(firstVersion).toBeDefined();
+
+    clock = new Date('2026-11-09T00:10:00.000Z');
+    const block = (await service.get(created.docId)).doc.blocks[0]!;
+    await service.applyOperations({
+      docId: created.docId,
+      baseRevision: 1,
+      ops: [
+        {
+          op: 'update_text',
+          target: block.id,
+          edits: [{ oldText: '第一版', newText: '第二版' }],
+        },
+      ],
+    });
+
+    clock = new Date('2026-11-09T00:20:00.000Z');
+    await service.restoreVersion({
+      docId: created.docId,
+      versionId: firstVersion!.id,
+      baseRevision: 2,
+    });
+    expect((await service.read(created.docId)).markdown).toContain('第一版');
+
+    // The restore recorded the body it replaced, and trimming must not drop it:
+    // this is the undo point that makes "restore the wrong version" recoverable.
+    const versions = store
+      .read()
+      .versions.filter((version) => version.docId === created.docId);
+    const preRestore = versions.find((version) =>
+      version.content.includes('第二版'),
+    );
+    expect(preRestore).toBeDefined();
+
+    // Restoring that undo point brings the newer body back.
+    clock = new Date('2026-11-09T00:30:00.000Z');
+    await service.restoreVersion({
+      docId: created.docId,
+      versionId: preRestore!.id,
+      baseRevision: 3,
+    });
+    expect((await service.read(created.docId)).markdown).toContain('第二版');
+    await store.close();
+  });
+
+  it('rewrites a large body in one restore and keeps its undo point', async () => {
+    // Restore rewrites the body as "delete every top-level block + insert the
+    // stored one", so the batch cap has to cover a whole large document.
+    const dir = await mkdtemp(join(tmpdir(), 'alter-space-restore-big-'));
+    dirs.push(dir);
+    const store = await openSpaceStore({ directory: dir, now: fixedNow });
+    let clock = new Date('2026-11-09T00:00:00.000Z');
+    const service = createDocumentService({ store, now: () => clock, actor: 'user' });
+    const created = await service.generate({
+      spaceId: DEFAULT_SPACE_ID,
+      markdown: '小版本\n',
+    });
+    clock = new Date('2026-11-09T00:10:00.000Z');
+    const filler = Array.from({ length: 3_000 }, (_, index) => `行 ${index}\n`)
+      .join('\n');
+    await service.generate({ docId: created.docId, markdown: filler });
+    const grown = await service.get(created.docId);
+    expect(grown.doc.blocks.length).toBeGreaterThan(2_000);
+    // The body that is about to be replaced is exactly what a restore must be
+    // able to undo, so capture it the way a version restore does.
+    const bigVersion = store
+      .read()
+      .versions.filter((version) => version.docId === created.docId)
+      .filter((version) => version.content.includes('行 2999'))[0];
+    expect(bigVersion).toBeDefined();
+
+    clock = new Date('2026-11-09T00:20:00.000Z');
+    const restored = await service.restoreVersion({
+      docId: created.docId,
+      versionId: bigVersion!.id,
+      baseRevision: grown.revision,
+    });
+    expect(restored.revision).toBe(grown.revision + 1);
+    const doc = await service.get(created.docId);
+    expect(doc.doc.blocks.length).toBe(grown.doc.blocks.length);
+    // The undo point survives the restore even though two large bodies exceed
+    // the per-document byte budget: a restore must stay reversible.
+    const versions = store
+      .read()
+      .versions
+      .filter((version) => version.docId === created.docId)
+      .filter((version) => version.content.includes('行 2999'));
+    expect(versions.length).toBeGreaterThan(0);
+    await store.close();
+  });
+
   it('searches AST text and skips non-AST content', async () => {
     const { store } = await tempStore();
     const service = createDocumentService({ store, now: fixedNow, actor: 'user' });

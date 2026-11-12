@@ -164,6 +164,10 @@ export function createSpaceHttpServer(
       // The bridge speaks for a user browser or an Agent tool; its stamped
       // actor selects the identity stack so attribution survives the hop.
       actorPolicy: 'passthrough',
+      // A space delete destroys its documents, history and comments together,
+      // so the server takes a recovery point (and refuses the delete if it
+      // cannot) before running it.
+      snapshotBeforeSpaceDelete: () => runtime.snapshotNow(),
     });
   }
 

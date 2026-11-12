@@ -393,7 +393,8 @@ export function ConfigView() {
       >
         <div className={styles.confirmBody}>
           <p className={styles.confirmText}>
-            「{space.name}」中的文档、随想和记录会一起删除，无法撤销。
+            「{space.name}」中的文档、随想和记录会一起删除，无法在应用内撤销。
+            删除前会先自动做一份备份；如果备份失败，删除会被取消。
           </p>
           <Field label="输入空间名称以确认" htmlFor={deleteConfirmId}>
             <Input

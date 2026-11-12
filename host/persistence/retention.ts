@@ -28,13 +28,22 @@ function versionTime(version: Version): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-/** Indices to drop so one document keeps at most `limit` versions / `budget`. */
+/**
+ * Indices to drop so one document keeps at most `limit` versions / `budget`.
+ *
+ * `protect` holds version ids that must survive this pass: a restore records
+ * the pre-restore body so the very action that rewrites the document stays
+ * undoable, even at the minimum history limit.
+ */
 function trimIndices(
   versions: Version[],
   indices: number[],
   settings: StorageSettings,
   drop: Set<number>,
+  protect: ReadonlySet<string> | undefined,
 ): void {
+  const keepable = (index: number): boolean =>
+    protect === undefined || !protect.has(versions[index].id);
   if (indices.length <= settings.historyLimit) {
     let bytes = 0;
     for (const index of indices) bytes += versionBytes(versions[index]);
@@ -48,10 +57,12 @@ function trimIndices(
   let keptBytes = 0;
   for (const index of ordered) {
     const bytes = versionBytes(versions[index]);
+    const protectedVersion = !keepable(index);
     const fits =
       kept < settings.historyLimit && keptBytes + bytes <= HISTORY_BYTE_BUDGET;
-    // Never drop the newest version even if it alone exceeds the byte budget.
-    if (fits || kept === 0) {
+    // Never drop the newest version even if it alone exceeds the byte budget,
+    // and never drop a version this write explicitly protects.
+    if (fits || kept === 0 || protectedVersion) {
       kept += 1;
       keptBytes += bytes;
       continue;
@@ -67,6 +78,7 @@ function trimIndices(
 export function trimAllVersions(
   data: SpaceStoreData,
   settings: StorageSettings,
+  protect?: ReadonlySet<string>,
 ): void {
   const byDoc = new Map<string, number[]>();
   data.versions.forEach((version, index) => {
@@ -76,7 +88,7 @@ export function trimAllVersions(
   });
   const drop = new Set<number>();
   for (const indices of byDoc.values())
-    trimIndices(data.versions, indices, settings, drop);
+    trimIndices(data.versions, indices, settings, drop, protect);
   if (drop.size === 0) return;
   data.versions = data.versions.filter((_, index) => !drop.has(index));
 }
@@ -89,6 +101,7 @@ export function trimTouchedVersions(
   data: SpaceStoreData,
   previousLength: number,
   settings: StorageSettings,
+  protect?: ReadonlySet<string>,
 ): void {
   const touched = new Set<string>();
   for (let index = previousLength; index < data.versions.length; index += 1)
@@ -103,7 +116,7 @@ export function trimTouchedVersions(
   });
   const drop = new Set<number>();
   for (const indices of indicesByDoc.values())
-    trimIndices(data.versions, indices, settings, drop);
+    trimIndices(data.versions, indices, settings, drop, protect);
   if (drop.size === 0) return;
   data.versions = data.versions.filter((_, index) => !drop.has(index));
 }

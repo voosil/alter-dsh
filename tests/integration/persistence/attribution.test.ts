@@ -13,6 +13,7 @@ import {
   openSpaceStore,
   type SpaceStoreHandle,
 } from '../../../host/persistence/store.js';
+import { createArchiveSweeper } from '../../../vendor/service/src/service.js';
 import { FIXED_NOW, dispose, tempDir } from '../../support/lifecycle.js';
 
 async function openStore(now?: () => Date): Promise<{
@@ -77,6 +78,19 @@ function event(id: string, source: 'user' | 'agent' | 'system'): Record<string, 
     docId: null,
     taskId: null,
     source,
+  };
+}
+
+/** Bind the raw store to one write identity for the maintenance sweep. */
+function stackStore(
+  store: Awaited<ReturnType<typeof openStore>>['store'],
+  actor: 'user' | 'alter',
+) {
+  return {
+    read: () => store.read(),
+    update: <T>(change: (data: ReturnType<typeof store.read>) => T) =>
+      store.updateAs(actor, change),
+    close: () => store.close(),
   };
 }
 
@@ -364,7 +378,7 @@ describe('historical attribution backfill', () => {
 });
 
 describe('idle auto-archiving', () => {
-  it('sweep archives as system on both identity stacks', async () => {
+  it('sweep archives as system from either identity stack', async () => {
     let current = FIXED_NOW();
     const clock = () => current;
     const { store } = await openStore(clock);
@@ -376,7 +390,18 @@ describe('idle auto-archiving', () => {
     });
     // Activity decays 8 points/day; after 13 days the note is idle.
     current = new Date(FIXED_NOW().getTime() + 13 * 86_400_000);
+    // Reads no longer sweep: browsing must not write (see the read-only rule).
     await stacks.alter.listNodes(DEFAULT_SPACE_ID);
+    expect(store.read().nodes.find((node) => node.id === doc.id)?.archived).toBe(
+      false,
+    );
+    // The maintenance sweep owns the decision, and its source is always system
+    // no matter which identity stack performs the write.
+    const alterSweep = createArchiveSweeper({
+      store: stackStore(store, 'alter'),
+      now: clock,
+    });
+    expect(await alterSweep.sweep()).toBe(1);
     const swept = store.read().nodes.find((node) => node.id === doc.id);
     expect(swept?.archived).toBe(true);
     expect(swept?.archivedBy).toBe('system');
@@ -388,7 +413,11 @@ describe('idle auto-archiving', () => {
       title: '另一篇',
     });
     current = new Date(current.getTime() + 13 * 86_400_000);
-    await stacks.user.listNodes(DEFAULT_SPACE_ID);
+    const userSweep = createArchiveSweeper({
+      store: stackStore(store, 'user'),
+      now: clock,
+    });
+    await userSweep.sweep();
     expect(
       store.read().nodes.find((node) => node.id === second.id)?.archivedBy,
     ).toBe('system');

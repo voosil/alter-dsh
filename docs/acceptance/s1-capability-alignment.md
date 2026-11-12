@@ -46,6 +46,21 @@ updated: 2026-11-12
 - [x] 新操作同变更声明暴露面（AGENTS.md 硬约束）。
 - [x] 工具注册不被 effect 生命周期吞掉：apply 测试断言完整工具清单含 `space_settings` / `space_migrate`。
 
+## 数据安全门禁（2026-11-12 决策落地）
+
+- [x] 别人更新了同一篇文档：页面原地换正文，编辑面、撤销栈与光标保留；换正文本身不触发保存，
+  下一次编辑基于新内容（`tests/ui/document/page/view.test.ts`）。
+- [x] 版本恢复：恢复前自动留一份「恢复前」版本且不受裁剪；最小历史配额下仍可撤销这次恢复
+  （`tests/integration/document/service.test.ts`）。
+- [x] 大文档恢复：整篇 3000+ 块的文档一次性恢复，撤销点（两份大正文）超出单篇历史字节预算时仍保留。
+- [x] 浏览是纯读：`space_browse` 的 tree/node/overview 不再写库；闲置归档由定时 sweep 负责，
+  两个身份栈触发都记 `archivedBy='system'`（`tests/integration/host/service.test.ts`、
+  `tests/integration/persistence/attribution.test.ts`）。
+- [x] 删除空间前强制快照；快照失败则取消删除并返回 `space/snapshot-failed`
+  （`tests/integration/host/rpc.test.ts`）。
+- [x] 冲突中的文档不被 `flush()` 静默重发：标题失焦、切换文档只写草稿，等待用户决策
+  （`tests/ui/document/runtime/save.test.ts`）。
+
 ## 人工验证（交用户 Review）
 
 - [ ] 浏览器「我创建的 / Alter 创建的」分组：Agent 经工具创建的节点/随想显示为 Alter。

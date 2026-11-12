@@ -29,10 +29,72 @@ import type {
 } from '@alter/protocol';
 import type {
   SpaceContentServiceOptions,
+  SpaceStore,
   SpaceStoreData,
 } from './contracts.js';
 
 const DAY = 86_400_000;
+
+/** Effective activity of one node at `timestamp` (linear decay, floored). */
+export function activityOf(node: SpaceNode, timestamp: Date): number {
+  const elapsed = Math.max(
+    0,
+    timestamp.getTime() - Date.parse(node.activityAt),
+  );
+  return clamp(Math.round(node.activity - (elapsed / DAY) * 8), 0, 100);
+}
+
+/** Whether an idle note is due for the system archive sweep. */
+export function needsArchiving(node: SpaceNode, timestamp: Date): boolean {
+  return (
+    node.kind === 'note' &&
+    !node.deletedAt &&
+    !node.archived &&
+    !node.pinned &&
+    activityOf(node, timestamp) <= 0
+  );
+}
+
+/**
+ * Standalone idle-archive sweep.
+ *
+ * Archiving used to run inside the read methods (`listNodes`/`getNode`/
+ * `getOverview`), which made every "just browsing" call write to the database —
+ * including during a migration freeze that is supposed to be read-only, and
+ * while the ledger classifies those endpoints as reads. The sweep now runs on
+ * its own schedule, so reads are honestly read-only.
+ */
+export function createArchiveSweeper(options: {
+  store: SpaceStore;
+  now: () => Date;
+}): { sweep(): Promise<number> } {
+  return {
+    async sweep() {
+      const timestamp = options.now();
+      if (
+        !options.store
+          .read()
+          .nodes.some((node) => needsArchiving(node, timestamp))
+      )
+        return 0;
+      return options.store.update((data) => {
+        let archived = 0;
+        for (const node of data.nodes) {
+          if (!needsArchiving(node, timestamp)) continue;
+          node.archived = true;
+          // Idle auto-archiving is system cleanup on both stacks, never a user
+          // or Alter decision.
+          node.archivedBy = 'system';
+          node.archivedAt = toIso(timestamp);
+          node.activity = 0;
+          node.activityAt = toIso(timestamp);
+          archived += 1;
+        }
+        return archived;
+      });
+    },
+  };
+}
 const HOUR = 3_600_000;
 const HOME_PATH = '~';
 
@@ -368,44 +430,8 @@ export function createContentService(
     return node;
   }
 
-  function activityOf(node: SpaceNode, timestamp: Date) {
-    const elapsed = Math.max(
-      0,
-      timestamp.getTime() - Date.parse(node.activityAt),
-    );
-    return clamp(Math.round(node.activity - (elapsed / DAY) * 8), 0, 100);
-  }
-
   function decorate(node: SpaceNode, timestamp = now()): SpaceNode {
     return { ...clone(node), activity: activityOf(node, timestamp) };
-  }
-
-  function needsArchiving(node: SpaceNode, timestamp: Date) {
-    return (
-      node.kind === 'note' &&
-      !node.deletedAt &&
-      !node.archived &&
-      !node.pinned &&
-      activityOf(node, timestamp) <= 0
-    );
-  }
-
-  async function sweepArchives() {
-    const timestamp = now();
-    if (!store.read().nodes.some((node) => needsArchiving(node, timestamp)))
-      return;
-    await store.update((data) => {
-      for (const node of data.nodes) {
-        if (!needsArchiving(node, timestamp)) continue;
-        node.archived = true;
-        // Idle auto-archiving is system cleanup on both stacks, never a user
-        // or Alter decision.
-        node.archivedBy = 'system';
-        node.archivedAt = toIso(timestamp);
-        node.activity = 0;
-        node.activityAt = toIso(timestamp);
-      }
-    });
   }
 
   function descendantsOf(data: SpaceStoreData, id: string) {
@@ -563,7 +589,6 @@ export function createContentService(
     },
 
     async listNodes(spaceId) {
-      await sweepArchives();
       const timestamp = now();
       return store
         .read()
@@ -572,7 +597,6 @@ export function createContentService(
     },
 
     async getNode(id) {
-      await sweepArchives();
       const node = store
         .read()
         .nodes.find((item) => item.id === id && !item.deletedAt);
@@ -1140,7 +1164,6 @@ export function createContentService(
 
     async getOverview(spaceId) {
       const space = currentSpace(store.read(), spaceId);
-      await sweepArchives();
       const data = store.read();
       const timestamp = now();
       const since = new Date(timestamp);

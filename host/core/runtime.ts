@@ -21,6 +21,8 @@ import {
 } from '../document/asset-store.js';
 import { gcDocumentArtifacts } from '../document/gc.js';
 import { createStructuredSpaceService } from '../document/editors/legacy/notes.js';
+import { createArchiveSweeper } from '../../vendor/service/src/service.js';
+import type { SpaceStoreData } from '../../vendor/service/src/contracts.js';
 import {
   createDocumentService,
   type DocumentService,
@@ -56,7 +58,14 @@ export interface LocalSpaceRuntime {
    * snapshot of the new data, but the day may already hold one of the old data.
    */
   snapshotNow(): Promise<SnapshotOutcome>;
-  /** Close the snapshot scheduler and the database connection. */
+  /**
+   * Sweep idle notes into the archive now.
+   *
+   * Exposed for callers that just changed activity (an Agent or browser session
+   * that ended) rather than waiting for the interval.
+   */
+  sweepArchives(): Promise<number>;
+  /** Close the schedulers and the database connection. */
   close(): Promise<void>;
 }
 
@@ -69,6 +78,16 @@ export interface LocalRuntimeOptions {
   /** Start the daily snapshot scheduler; defaults to `true`. */
   snapshots?: boolean;
 }
+
+/**
+ * How often idle notes are swept into the archive.
+ *
+ * Activity decays by 8 points a day, so a note needs hours to become idle; half
+ * an hour keeps "recently dimmed" documents from lingering in the main list far
+ * longer than the decay itself needs. The sweep is deliberately not tied to
+ * reads: a browse must stay read-only.
+ */
+export const ARCHIVE_SWEEP_INTERVAL_MS = 30 * 60_000;
 
 /** Format one caught error for a single warning line. */
 function describeError(error: unknown): string {
@@ -112,6 +131,29 @@ export async function createLocalSpaceRuntime(
         ? undefined
         : createSnapshotScheduler({ store, directory, now, logger });
     snapshots?.start();
+    // Idle auto-archiving runs on its own clock: reads must not write, and a
+    // migration freeze makes them read-only, so the sweep cannot live in them.
+    const sweeper = createArchiveSweeper({
+      store: {
+        read: () => store.read(),
+        update: <T>(change: (data: SpaceStoreData) => T) =>
+          store.updateAs('user', change),
+        close: () => store.close(),
+      },
+      now,
+    });
+    let sweepTimer: ReturnType<typeof setInterval> | undefined;
+    const runSweep = (): void => {
+      void sweeper.sweep().catch((error: unknown) => {
+        logger.warn?.(
+          `[alter-dsh-space] 闲置归档失败：${describeError(error)}`,
+        );
+      });
+    };
+    runSweep();
+    sweepTimer = setInterval(runSweep, ARCHIVE_SWEEP_INTERVAL_MS);
+    // A timer must not keep the process (or a test worker) alive.
+    sweepTimer.unref?.();
     let closed: Promise<void> | undefined;
     return {
       kind: 'local',
@@ -127,8 +169,10 @@ export async function createLocalSpaceRuntime(
         if (snapshots !== undefined) return snapshots.forceRunNow();
         return forceDailySnapshot({ store, directory, now, logger });
       },
+      sweepArchives: () => sweeper.sweep(),
       close() {
         closed ??= (async () => {
+          if (sweepTimer !== undefined) clearInterval(sweepTimer);
           await snapshots?.dispose();
           await store.close();
         })();
