@@ -12,7 +12,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const root = path.resolve(here, '..');
+const root = path.resolve(here, '..', '..');
 const shell = process.platform === 'win32';
 
 function run(command, args) {
@@ -20,6 +20,6 @@ function run(command, args) {
   if ((result.status ?? 1) !== 0) process.exit(result.status ?? 1);
 }
 
-run('node', [path.join('scripts', 'lint.mjs'), '--strict']);
+run('node', [path.join('scripts', 'gate', 'lint.mjs'), '--strict']);
 run('npx', ['vitest', 'run', '--project', 'nightly']);
-run('node', [path.join('scripts', 'coverage-report.mjs')]);
+run('node', [path.join('scripts', 'coverage', 'report.mjs')]);

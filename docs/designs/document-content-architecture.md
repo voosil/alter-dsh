@@ -32,11 +32,12 @@ updated: 2026-11-11
   规范化之间的 round-trip 保真问题无法回避。
 - **MDX**：可执行 JSX，把「用户/AI 随时编辑的文档」变成代码执行问题，安全与构建成本不可接受。
 
-明确接受的代价：编辑器前端按产品要求 1:1 还原为重构前的旧 UI（DOM/CSS 不改），AST 读写需要
-一层 HTML↔AST 适配（投影、解析、资产物化）；AST 快照比纯文本格式大（对象与资产外置、规范化
+明确接受的代价：编辑器前端与重构前旧 UI 保持视觉与交互 parity（壳层与 CSS 不动，内核可替换）；
+legacy 内核下 AST 读写需要一层 HTML↔AST 适配（投影、解析、资产物化），见
+[内核替换方案](editor-kernel-replacement.md)；AST 快照比纯文本格式大（对象与资产外置、规范化
 序列化缓解）；Agent 工具面比字符串编辑更大（靠统一投影与正交 op 集控制）。
 **正文只有单一 AST 格式**：新建文档即 AST 空文档，正文写入只经 Document Operations；编辑器内部的
-HTML 只是适配投影，不是持久化格式。
+HTML 只是 legacy 内核的适配投影，不是持久化格式。
 
 ## 2. 分层图景
 
@@ -162,9 +163,10 @@ Operations 把一次修改收敛为可校验的意图，才谈得上可审计与
   `host/persistence/store.ts` 用 `PRAGMA user_version` 升级建表；资产二进制放 `dataDir/assets/`，备份必须覆盖该目录。
 - Host：新增 Document Service（projection / validation / ops / audit）与 Schema Registry，
   仍复用 SQLite 单写者队列与事务；RPC 端点与 `src/client/rpc.ts` 映射同步增加。
-- 客户端：文档页是 `vendor/ui-space` 的旧 UI 1:1 还原（DOM/CSS 冻结）；AST 适配层放
-  `src/document/editors/legacy`，经 `@alter-space/legacy-adapter` 别名（`build/build.mjs`、tsconfig paths、
-  `vitest.config.mts` 三处）接进旧 `DocumentView`，保存/恢复/资产/评论锚点都走 document client。
+- 客户端：文档页维持基线 UI 的视觉与交互 parity（壳层与 CSS 不动，内核可替换）；legacy 内核的
+  AST 适配层放 `src/document/editors/legacy`，经 `@alter-space/legacy-adapter` 别名（`build/build.mjs`、
+  tsconfig paths、`vitest.config.mts` 三处）接进旧 `DocumentView`，保存/恢复/资产/评论锚点都走
+  document client。
 - Agent 工具面为 `space_doc_outline` / `space_doc_read` / `space_doc_search` / `space_doc_ops` /
   `space_doc_patch` / `space_doc_generate` / `space_doc_undo`、对象/资产与组件目录工具；正文写入只有
   结构化修改、单块 patch 与新内容生成三类入口，详见 [agent-doc-tools.md](agent-doc-tools.md)。

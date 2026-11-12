@@ -17,21 +17,24 @@ Document Operations。
 
 ## 1. 硬约束（违反即返工）
 
-- **前端外观冻结**：文档页 CSS、编辑器 DOM 与既有 JSX 结构与基线一致，逐字节不做改动；数据层
-  改动不得改变正常状态渲染出的 DOM 结构或样式类名。
+- **前端冻结的是体验，不是实现**：文档页与基线（`c73c3f6` 旧 UI）保持**视觉与交互 parity**——壳层、
+  全部 CSS 与工具栏/slash 菜单/评论轨/历史面板视觉不动，正常状态渲染出的外观与交互不得回归。
+  编辑器内核允许替换（[内核替换方案](../designs/editor-kernel-replacement.md)）：现行默认是 AST 原生
+  内核（`src/document/editors/tiptap`），本节其余条款对两个内核同等生效；legacy 内核保留为回滚路径，
+  退役前其适配层与测试不得删除。
   例外（产品未反对的最小兜底）：加载失败/渲染崩溃的错误页、保存失败态的「导出草稿」按钮、
-  错误边界 fallback 仅错误/失败态出现，使用既有样式类与组件；正常编辑状态 DOM/CSS 不变。
+  错误边界 fallback 仅错误/失败态出现，使用既有样式类与组件。
 - **产品批准的编辑面修复**（2026-11-11《编辑器专题优化》第 1–11 项与后续反馈的第 12–14 项）：允许行为级修复与最小必要 CSS 增量
   （分割线/图片选中态、附件态、placeholder 定位、表格选中与操作条、整行输入 `---` 即时转分割线、
   slash 菜单方向固定、引用标记 `>`/`》`+空格输入、引用行首退格删标记），不得重排 DOM、不得改既有样式类名；
   新增交互态（如 `data-selected`）只存在于编辑面，序列化前剥除、不写入 AST。
-- **数据层唯一入口**：编辑器 HTML 只能经 `@alter-space/legacy-adapter`（`src/document/editors/legacy`）
-  转成 AST 与 Operation 批次；视图不得直接写 `node.content`，也不得绕过 `doc.applyOps` /
-  `doc.restoreVersion`。
+- **数据层唯一入口**：内核只能报 canonical AST blocks，视图不得直接写 `node.content`，也不得绕过
+  `doc.applyOps` / `doc.restoreVersion`；legacy 内核的 HTML 只能经 `@alter-space/legacy-adapter`
+  （`src/document/editors/legacy`）转成 AST 与 Operation 批次，AST 内核直接产出 blocks。
 - **正文单一格式**：正文只有 `alter-doc/1` AST；标题等元数据经 `space.saveNode`，正文写入只经
   Document Operations。
-- **资产**：正文中的 data URL 图片/文件在保存前物化为内容寻址资产；上传失败时保留编辑面内容并
-  提示，不得静默丢图。
+- **资产**：正文中的 data URL 图片/文件在保存前物化为内容寻址资产（AST 内核持有的已是资产引用）；
+  上传失败时保留编辑面内容并提示，不得静默丢图。
 - **新节点呈现**：file / bookmark / docLink 使用旧卡片样式；callout / mindmap / component 在旧 UI
   中显示为对象占位卡（无人工编辑入口），AI 侧仍可读写其对象。
 

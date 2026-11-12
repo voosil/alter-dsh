@@ -10,7 +10,7 @@ import type { SpaceService } from '@alter/protocol';
 
 /**
  * Connection HTTP channel and endpoint used by the Host half; keep in sync
- * with `host/rpc.ts` (`RPC_ROUTE_PATH` / `RPC_ENDPOINT`).
+ * with `host/authority/rpc.ts` (`RPC_ROUTE_PATH` / `RPC_ENDPOINT`).
  */
 export const SPACE_RPC_CHANNEL = '/api';
 export const SPACE_RPC_ENDPOINT = 'alter-space';
@@ -371,6 +371,19 @@ export interface SpaceRemoteTestResult {
   message?: string;
 }
 
+/** One document with queued writes that have not reached the server. */
+export interface SpaceSyncQueueEntry {
+  docId: string;
+  /** `pending` waits for the link; the others need a user decision. */
+  state: 'pending' | 'conflict' | 'failed';
+  /** Number of queue entries for this document. */
+  entries: number;
+  baseRevision: number;
+  /** Last failure message, when the server rejected a replay. */
+  lastError?: string;
+  updatedAt: string;
+}
+
 /** Client mirror of the Host settings/sync endpoints. */
 export interface SpaceSettingsClient {
   get(): Promise<SpaceSettingsSnapshot>;
@@ -384,6 +397,13 @@ export interface SpaceSettingsClient {
     token?: string | null;
   }): Promise<SpaceRemoteTestResult>;
   syncStatus(): Promise<SpaceSettingsSnapshot>;
+  /** Documents whose queued document writes are still unsettled. */
+  syncQueue(): Promise<SpaceSyncQueueEntry[]>;
+  /** Retry or discard one document's queued writes. */
+  resolveSync(
+    docId: string,
+    action: 'retry' | 'discard',
+  ): Promise<{ resolved: number; state: SpaceSettingsSnapshot }>;
   flush(): Promise<SpaceSettingsSnapshot>;
 }
 
@@ -414,6 +434,8 @@ export function createSpaceSettingsClient(
     update: (patch) => request('settings.update', [patch]),
     test: (input) => request('settings.test', [input]),
     syncStatus: () => request('sync.status'),
+    syncQueue: () => request('sync.queue'),
+    resolveSync: (docId, action) => request('sync.resolve', [{ docId, action }]),
     flush: () => request('sync.flush'),
   };
 }

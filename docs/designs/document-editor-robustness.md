@@ -13,9 +13,10 @@ updated: 2026-11-11
 
 ## 1. 判断
 
-- **前端按产品要求冻结**：文档页是重构前旧 UI 的 1:1 还原（DOM/CSS/既有 JSX 结构不改），
-  编辑器内部输入、撤销与渲染由旧 contentEditable 实现承担；数据层经 `src/document/editors/legacy` 适配
-  `alter-doc/1` AST 与 Document Operations。
+- **前端冻结体验而非实现**：文档页与基线旧 UI 保持视觉与交互 parity（壳层与 CSS 不动），
+  编辑器内核可替换；legacy 仍是默认内核，内部输入、撤销与渲染由旧 contentEditable 实现承担，
+  数据层经 `src/document/editors/legacy` 适配 `alter-doc/1` AST 与 Document Operations。
+  内核替换方向见[内核替换方案](editor-kernel-replacement.md)。
 - **已落地并有自动化证据**：自动保存（约 700ms 防抖、成功静默、失败显示「保存失败，重试」）、
   标题经 `saveNode` 落库、版本恢复带 CAS、评论 quote→anchor 生成、data URL 图片/文件保存前物化为
   资产、外部 revision 变化时重载编辑面。
@@ -41,7 +42,7 @@ updated: 2026-11-11
 
 **非目标**
 
-- 不改造文档页前端：CSS、编辑器 DOM 与既有 JSX 结构保持基线一致；健壮性增强只能落在数据层、
+- 不改造文档页的视觉与交互：壳层、CSS 保持基线 parity；legacy 内核退役前，健壮性增强落在数据层、
   外围壳层，或经产品明确批准的前端改动。
 - 不做多人实时协同（CRDT/OT 服务端）与 presence；不做多端同步与移动端编辑。
 - 不重写 AST/Operations 契约（新增 op 必须先升 spec）。

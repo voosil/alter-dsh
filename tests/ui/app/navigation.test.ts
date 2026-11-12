@@ -18,6 +18,7 @@
 import { createElement } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { writeEditorKernelPreference } from '../../../src/document/editors/kernel-preference';
 import type { Space, SpaceNode, SpaceRouter, SpaceService } from '@alter/protocol';
 import { SpaceApp } from '../../../vendor/ui-space/src/SpaceApp';
 import { attachDocumentClient } from '../../../src/document/client-access';
@@ -196,6 +197,8 @@ function titleInput(): HTMLTextAreaElement {
 }
 
 beforeEach(() => {
+  // This file exercises the legacy kernel explicitly (see the frozen-parity design).
+  writeEditorKernelPreference({ current: 'legacy' });
   (globalThis as { ResizeObserver?: unknown }).ResizeObserver = ResizeObserverStub;
 });
 
@@ -273,3 +276,5 @@ describe('新建文档后的路由落点', () => {
     expect(document.activeElement).not.toBe(titleInput());
   });
 });
+
+

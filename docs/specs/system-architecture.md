@@ -26,8 +26,9 @@ updated: 2026-11-11
   客户端不得绕过该链路读写业务数据。
 - 业务数据只存在于 Host 与 SQLite；浏览器 localStorage 只存 UI 偏好，刷新或重开面板后从 Host 重新读取。
 - 插件自有数据放 SQLite 侧表（如空间 ↔ 工作区绑定），不写入 `vendor/` 的实体结构。
-- 文档页是 `vendor/ui-space` 的旧 UI 1:1 还原（DOM/CSS 冻结）；AST 适配层在 `src/document/editors/legacy`，
-  正文仍只经 Document Operations 写入 Host。
+- 文档页与基线（`vendor/ui-space` 旧 UI）保持视觉与交互 parity：壳层与 CSS 不动，编辑器内核可替换，
+  parity 验收前 legacy 仍是默认。legacy 的 AST 适配层在 `src/document/editors/legacy`，正文仍只经
+  Document Operations 写入 Host。
 - 服务端模式的数据流：`SpaceApp` → Connection → 本地 Host bridge → HTTPS + bearer token → 服务端
   `LocalSpaceRuntime` → SQLite。bridge 的读缓存与写队列只存在于本地数据目录，不能作为权威。
 - 模式切换只经显式迁移或显式放弃；两种模式之间不做自动双向同步。
@@ -194,8 +195,9 @@ updated: 2026-11-11
   Workbench 右侧面板不装配。
 - **浏览器路由**：地址栏路由为内存路由，刷新后回到默认文档。
 - **数据文件形态**：SQLite 二进制不如 JSON 直观，备份与恢复按 §4 的方式操作。
-- **文档编辑器还原**：文档页为旧 UI 1:1 还原（CSS/DOM 不改）；callout / mindmap / component 等新
-  AST 节点在旧 UI 中显示为对象占位卡，无人工编辑入口（AI 工具仍可读写，见验收清单）。
+- **文档编辑器**：文档页维持基线 UI 的视觉与交互 parity（壳层与 CSS 不动，内核可替换）；
+  callout / mindmap / component 等新 AST 节点在旧 UI 中显示为对象占位卡，无人工编辑入口
+  （AI 工具仍可读写，见验收清单）。
 - **面板行为**：Space 面板按产品设计始终浅色；其全局快捷键在面板打开时优先于宿主。
 
 ## 相关文档

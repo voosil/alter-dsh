@@ -9,7 +9,7 @@
  * @module @alter-dsh/space/remote/client
  */
 import { randomUUID } from 'node:crypto';
-import type { SpaceServerInfo } from '../protocol.js';
+import type { SpaceServerInfo } from '../core/protocol.js';
 
 /** RPC channel paths shared with the plugin and server. */
 export const REMOTE_RPC_PATH = '/api/alter-space';

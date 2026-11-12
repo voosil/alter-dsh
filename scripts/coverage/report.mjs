@@ -14,10 +14,10 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { COVERAGE_FLOORS } from '../tests/layers.mjs';
+import { COVERAGE_FLOORS } from '../../tests/layers.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const root = path.resolve(here, '..');
+const root = path.resolve(here, '..', '..');
 const summaryFile = path.join(root, 'coverage', 'coverage-summary.json');
 
 function normalize(file) {

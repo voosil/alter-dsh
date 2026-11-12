@@ -26,17 +26,23 @@ import {
   alterDocToEditorHtml,
   anchorForQuote,
   clearLegacyDraft,
+  draftBlocks,
   createLegacySaveController,
   legacyDraftMatchesSnapshot,
   parseDocumentContent,
+  materializeLegacyAssets,
   parseLegacyHtml,
   planCommentAnchorRepairs,
   readDocumentSnapshot,
   readLegacyDraft,
+  readEditorKernelPreference,
+  TiptapBody,
   reportLegacyDocumentError,
   serializeDocument,
   type AlterDoc,
-  type LegacyDocumentDraft,
+  type BlockNode,
+  type EditorKernelKind,
+  type RecoverableDraft,
   type LegacySaveController,
   type LegacySaveSnapshot,
 } from '@alter-space/legacy-adapter';
@@ -92,6 +98,41 @@ interface DocumentLoadFailure {
   message: string;
   /** Original error, kept for structured diagnostics. */
   error: Error;
+}
+
+/**
+ * Render one recoverable draft into the legacy editor's HTML.
+ *
+ * Block drafts (the current format) are projected through the legacy adapter so
+ * the restore path is the same one a server snapshot takes; a legacy HTML draft
+ * is already HTML.
+ */
+function draftToEditorHtml(draft: RecoverableDraft): string {
+  if (!('html' in draft)) {
+    return alterDocToEditorHtml({
+      format: 'alter-doc/1',
+      schemaVersion: 1,
+      revision: draft.baseRevision,
+      blocks: draft.blocks,
+    });
+  }
+  return draft.html;
+}
+
+/** Flat text of a block tree, used for the draft download fallback. */
+function blocksToDraftText(blocks: readonly BlockNode[]): string {
+  const lines: string[] = [];
+  const walk = (nodes: readonly BlockNode[]): void => {
+    for (const node of nodes) {
+      const inline = (node.content ?? [])
+        .map((item) => (item.type === 'text' ? item.text : '\n'))
+        .join('');
+      if (inline.trim() !== '') lines.push(inline);
+      if (node.children !== undefined) walk(node.children);
+    }
+  };
+  walk(blocks);
+  return lines.join('\n\n');
 }
 
 /**
@@ -195,6 +236,16 @@ export function DocumentView({
     hasBodyContent(mountHtml),
   );
   const [comments, setComments] = useState<Comment[]>([]);
+  /**
+   * Comments that carry a quote, as the AST-native body needs them.
+   *
+   * The kernel contract only knows quoted comments; legacy keeps its own
+   * filtering, so this is derived here instead of changing `comments`.
+   */
+  const commentsWithQuote = useMemo(
+    () => comments.filter((item): item is Comment & { quote: string } => typeof item.quote === 'string'),
+    [comments],
+  );
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [footerTab, setFooterTab] = useState<'children' | 'comments'>(
     'children',
@@ -218,15 +269,58 @@ export function DocumentView({
     serverRevision?: number;
   } | null>(null);
   const [draftPrompt, setDraftPrompt] = useState<{
-    draft: LegacyDocumentDraft;
+    draft: RecoverableDraft;
     kind: 'same' | 'conflict';
     latest?: LegacySaveSnapshot;
   } | null>(null);
   const [editorRevision, setEditorRevision] = useState(0);
+  /**
+   * Link being edited from the AST-native body's link bar.
+   *
+   * The kernel reports the link, the page owns the form (the same dialog shape
+   * the frozen editor uses), and the result goes back through the kernel.
+   */
+  const [linkEdit, setLinkEdit] = useState<{
+    kind: 'card' | 'inline';
+    pos: number;
+    href: string;
+    label: string;
+  } | null>(null);
+  /** Imperative handle of the mounted AST-native body (link write-back). */
+  const tiptapHandleRef = useRef<{
+    applyLinkEdit(input: {
+      kind: 'card' | 'inline';
+      pos: number;
+      href: string;
+      label: string;
+    }): void;
+  } | null>(null);
+  /**
+   * Which editor kernel renders the body.
+   *
+   * Read once per document page: switching kernels remounts the body, so the
+   * choice is a mount-time decision (a UI preference, never business data).
+   * `legacy` is the default until the parity checklist is accepted.
+   */
+  const [editorKernel] = useState<EditorKernelKind>(
+    () => readEditorKernelPreference().current,
+  );
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const childrenTabRef = useRef<HTMLButtonElement>(null);
   const commentsTabRef = useRef<HTMLButtonElement>(null);
-  const draftRef = useRef({ title: node.title, content: mountHtml });
+  const draftRef = useRef<{
+    title: string;
+    /** Editor HTML (the legacy kernel's body). */
+    content: string;
+    /**
+     * Canonical AST blocks of the current body.
+     *
+     * The save pipeline is kernel-independent, so blocks are the one shape both
+     * kernels produce. The legacy kernel keeps them in sync through `content`;
+     * an AST-native kernel writes them directly on every edit.
+     */
+    blocks: BlockNode[];
+  }>({ title: node.title, content: mountHtml, blocks: mountDoc.blocks });
   const lastSavedDocRef = useRef<AlterDoc>(mountDoc);
   const baseRevisionRef = useRef(mountDoc.revision);
   const lastSavedTitleRef = useRef(node.title);
@@ -260,7 +354,7 @@ export function DocumentView({
     lastSavedTitleRef.current = snapshot.title;
     loadedContentRef.current = serializeDocument(snapshot.doc);
     const html = editorHtmlOf(snapshot.doc);
-    draftRef.current = { title: snapshot.title, content: html };
+    draftRef.current = { title: snapshot.title, content: html, blocks: snapshot.doc.blocks };
     if (!aliveRef.current) return;
     setRevision(snapshot.revision);
     setEditorHtml(html);
@@ -280,9 +374,34 @@ export function DocumentView({
       },
       getClient: () => documentModelOf(service),
       capture: () => ({
-        html: draftRef.current.content,
+        // Every kernel reports canonical AST blocks. The legacy kernel's body
+        // is HTML, so its blocks are projected here, once, on capture.
+        blocks:
+          editorKernel === 'legacy'
+            ? parseLegacyHtml(draftRef.current.content).blocks
+            : draftRef.current.blocks,
         title: draftRef.current.title,
       }),
+      /**
+       * Before a cycle: upload inline `data:` images/files and rewrite them to
+       * asset references, so no base64 payload ever reaches the Host.
+       *
+       * This lives on the kernel side of the seam: an AST-native kernel holds
+       * assets as asset references already and has nothing to materialize.
+       */
+      prepareCapture: async () => {
+        const client = documentModelOf(service);
+        if (client === undefined) return draftRef.current.content;
+        const materialized = await materializeLegacyAssets(
+          draftRef.current.content,
+          client,
+        );
+        if (materialized.warnings.length > 0) {
+          throw new Error(materialized.warnings[0]);
+        }
+        draftRef.current.content = materialized.html;
+        return materialized.html;
+      },
       onStatus: (status) => {
         if (!aliveRef.current) return;
         setSaveState(
@@ -607,12 +726,16 @@ export function DocumentView({
     controllerRef.current?.persistDraftNow();
   }
 
-  /** Download the current draft as an HTML recovery file. */
+  /** Download the current draft as a recovery file. */
   function downloadDraft(): void {
     const draft = controllerRef.current?.exportDraft();
     if (draft === undefined) return;
-    const blob = new Blob([draft.html], {
-      type: 'text/html;charset=utf-8',
+    // Block drafts are exported as Markdown text (they are AST, not HTML); a
+    // legacy HTML draft keeps exporting as before so nothing becomes unreadable.
+    const isHtml = 'html' in draft;
+    const body = isHtml ? draft.html : blocksToDraftText(draft.blocks);
+    const blob = new Blob([body], {
+      type: isHtml ? 'text/html;charset=utf-8' : 'text/plain;charset=utf-8',
     });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -620,7 +743,7 @@ export function DocumentView({
     link.download = `${(draft.title || '无标题').replace(
       /[\\/:*?"<>|]/g,
       ' ',
-    )}.draft.html`;
+    )}.draft.${isHtml ? 'html' : 'md'}`;
     link.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 0);
   }
@@ -719,6 +842,7 @@ export function DocumentView({
       draftRef.current = {
         title: snapshot.title,
         content: editorHtmlOf(snapshot.doc),
+        blocks: snapshot.doc.blocks,
       };
       controllerRef.current?.adopt(snapshot);
       applyExternalSnapshot(snapshot);
@@ -960,8 +1084,8 @@ export function DocumentView({
     };
     const controller = controllerRef.current;
     controller?.adopt(snapshot);
-    const html = prompt.draft.html;
-    draftRef.current = { title: prompt.draft.title, content: html };
+    const html = draftToEditorHtml(prompt.draft);
+    draftRef.current = { title: prompt.draft.title, content: html, blocks: draftBlocks(prompt.draft) };
     setTitle(prompt.draft.title);
     setBodyHasContent(hasBodyContent(html));
     setEditorHtml(html);
@@ -1005,8 +1129,8 @@ export function DocumentView({
     }
     const controller = controllerRef.current;
     controller?.adoptForOverwrite(latest);
-    const html = prompt.draft.html;
-    draftRef.current = { title: prompt.draft.title, content: html };
+    const html = draftToEditorHtml(prompt.draft);
+    draftRef.current = { title: prompt.draft.title, content: html, blocks: draftBlocks(prompt.draft) };
     setTitle(prompt.draft.title);
     setBodyHasContent(hasBodyContent(html));
     setEditorHtml(html);
@@ -1377,26 +1501,64 @@ export function DocumentView({
 
             <div className={styles.commentAnchorLayout}>
               <div ref={setAnchorRoot} className={styles.body}>
-                <Editor
-                  docId={node.id}
-                  initialHtml={editorHtml}
-                  externalRevision={editorRevision}
-                  findDoc={(id) => nodes.find((item) => item.id === id)}
-                  onOpenWeb={openWeb}
-                  onOpenDoc={(id) => router.navigate(docPath(spaceId, id))}
-                  onChange={(html) => {
-                    draftRef.current.content = html;
-                    setBodyHasContent(hasBodyContent(html));
-                    scheduleSave();
-                  }}
-                  onComment={startComment}
-                  comments={comments}
-                  activeCommentId={activeCommentId}
-                  onCommentAtCaretChange={setCaretCommentId}
-                  onCommentQuotesChange={handleCommentQuotesChange}
-                  onCommentedTextClick={() => setCommentsOpen(true)}
-                  onNotice={(message) => toast(message)}
-                />
+                {editorKernel === 'legacy' ? (
+                  <Editor
+                    docId={node.id}
+                    initialHtml={editorHtml}
+                    externalRevision={editorRevision}
+                    findDoc={(id) => nodes.find((item) => item.id === id)}
+                    onOpenWeb={openWeb}
+                    onOpenDoc={(id) => router.navigate(docPath(spaceId, id))}
+                    onChange={(html) => {
+                      draftRef.current.content = html;
+                      setBodyHasContent(hasBodyContent(html));
+                      scheduleSave();
+                    }}
+                    onComment={startComment}
+                    comments={comments}
+                    activeCommentId={activeCommentId}
+                    onCommentAtCaretChange={setCaretCommentId}
+                    onCommentQuotesChange={handleCommentQuotesChange}
+                    onCommentedTextClick={() => setCommentsOpen(true)}
+                    onNotice={(message) => toast(message)}
+                  />
+                ) : (
+                  <TiptapBody
+                    docId={node.id}
+                    document={lastSavedDocRef.current}
+                    revision={editorRevision}
+                    baseHtml={editorHtml}
+                    caret="none"
+                    comments={commentsWithQuote}
+                    activeCommentId={activeCommentId}
+                    onBlocks={(blocks) => {
+                      draftRef.current.blocks = blocks;
+                      setBodyHasContent(blocks.length > 0);
+                      scheduleSave();
+                    }}
+                    onCommentedTextClick={() => setCommentsOpen(true)}
+                    onCommentRequest={startComment}
+                    onSelectionChange={(selection) => {
+                      // The AST-native body has no comment-caret tracking of
+                      // its own; the selection is what a new comment quotes.
+                      if (!selection.collapsed && selection.quote.trim() !== '') {
+                        setPendingQuote(selection.quote.trim());
+                      }
+                    }}
+                    onLinkEditRequest={(detail) =>
+                      setLinkEdit({
+                        kind: detail.kind,
+                        pos: detail.pos,
+                        href: detail.href,
+                        label: detail.href,
+                      })
+                    }
+                    onReady={(handle) => {
+                      tiptapHandleRef.current = handle;
+                    }}
+                    onNotice={(message) => toast(message)}
+                  />
+                )}
               </div>
 
               {stacked ? (
@@ -1654,7 +1816,62 @@ export function DocumentView({
         <p>{conflictPrompt?.message ?? ''}</p>
         <p>本地内容已写入草稿；选择覆盖会基于最新 revision 重新保存。</p>
       </Dialog>
+      <Dialog
+        open={linkEdit !== null}
+        onClose={() => setLinkEdit(null)}
+        title="编辑链接"
+        size="small"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setLinkEdit(null)}>
+              取消
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => {
+                const current = linkEdit;
+                if (current === null) return;
+                tiptapHandleRef.current?.applyLinkEdit(current);
+                setLinkEdit(null);
+              }}
+            >
+              保存
+            </Button>
+          </>
+        }
+      >
+        <div className={styles.linkForm}>
+          <label className={styles.linkField}>
+            <span>显示文本</span>
+            <input
+              aria-label="显示文本"
+              value={linkEdit?.label ?? ''}
+              onChange={(event) =>
+                setLinkEdit((current) =>
+                  current === null ? current : { ...current, label: event.target.value },
+                )
+              }
+            />
+          </label>
+          <label className={styles.linkField}>
+            <span>链接地址</span>
+            <input
+              aria-label="链接地址"
+              value={linkEdit?.href ?? ''}
+              onChange={(event) =>
+                setLinkEdit((current) =>
+                  current === null ? current : { ...current, href: event.target.value },
+                )
+              }
+            />
+          </label>
+        </div>
+      </Dialog>
       </DocumentErrorBoundary>
     </section>
   );
 }
+
+
+
+

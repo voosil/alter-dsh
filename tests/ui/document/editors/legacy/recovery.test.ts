@@ -14,6 +14,7 @@ import {
   within,
 } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { writeEditorKernelPreference } from '../../../../../src/document/editors/kernel-preference';
 import type { SpaceNode } from '@alter/protocol';
 import { SpaceContext } from '../../../../../vendor/ui-space/src/runtime';
 import { DocumentView } from '../../../../../vendor/ui-space/src/views/DocumentView';
@@ -23,7 +24,9 @@ import {
   legacyDraftStorageKey,
   readLegacyDraft,
   serializeDocument,
+  draftBlocks,
   type LegacyDocumentDraft,
+  type RecoverableDraft,
 } from '../../../../../src/document/editors/legacy';
 import { applyOperations as applyHostOperations } from '../../../../../host/document/ast/operations.js';
 import type {
@@ -268,7 +271,7 @@ function seedDraft(
   return draft;
 }
 
-function storedDraft(): LegacyDocumentDraft | undefined {
+function storedDraft(): RecoverableDraft | undefined {
   return readLegacyDraft('doc-1');
 }
 
@@ -287,10 +290,13 @@ async function tick(ms: number): Promise<void> {
 }
 
 beforeEach(() => {
+  // This file exercises the legacy kernel explicitly (see the frozen-parity design).
   blockSequence = 0;
   objectSequence = 0;
   versions.clear();
   localStorage.clear();
+  // After the clear: this file exercises the legacy kernel explicitly.
+  writeEditorKernelPreference({ current: 'legacy' });
   (globalThis as { ResizeObserver?: unknown }).ResizeObserver =
     ResizeObserverStub;
 });
@@ -469,7 +475,7 @@ describe('legacy crash safety', () => {
       document.dispatchEvent(new Event('visibilitychange'));
       const draft = storedDraft();
       expect(draft).toBeDefined();
-      expect(draft!.html).toContain('页面隐藏前的内容');
+      expect(JSON.stringify(draftBlocks(draft!))).toContain('页面隐藏前的内容');
       expect(draft!.baseRevision).toBe(7);
     } finally {
       if (visibility === undefined) {
@@ -500,7 +506,7 @@ describe('legacy crash safety', () => {
     await settle();
     const draft = storedDraft();
     expect(draft).toBeDefined();
-    expect(draft!.html).toContain('切换文档前的内容');
+    expect(JSON.stringify(draftBlocks(draft!))).toContain('切换文档前的内容');
 
     // Reopen the same document: the draft is offered and can be restored.
     const second = mountView(node, client);
@@ -613,7 +619,9 @@ describe('legacy save conflicts', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: '导出草稿' }));
     expect(createObjectUrl).toHaveBeenCalledTimes(1);
     const blob = createObjectUrl.mock.calls[0]![0] as Blob;
-    expect(blob.type).toContain('text/html');
+    // Drafts are stored as AST blocks; the recovery file is plain text.
+    expect(blob.type).toContain('text/plain');
+    await expect(blob.text()).resolves.toContain('本地编辑内容');
     expect(clickSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -741,10 +749,12 @@ describe('legacy version restore guard', () => {
     // The unsaved edits were persisted as a crash draft before restoring and
     // the draft is kept afterwards for a later recovery.
     expect(storedDraft()).toBeDefined();
-    expect(storedDraft()!.html).toContain('未保存的本地内容');
+    expect(JSON.stringify(draftBlocks(storedDraft()!))).toContain('未保存的本地内容');
     await waitFor(() =>
       expect(view.surface().textContent).toContain('历史版本内容'),
     );
     expect(storedDraft()).toBeDefined();
   });
 });
+
+

@@ -1,0 +1,13 @@
+# The documentation, build and verification tooling parses files line by line
+# and assumes LF. Normalise the whole repository so a Windows checkout with
+# core.autocrlf=true behaves the same as CI.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary

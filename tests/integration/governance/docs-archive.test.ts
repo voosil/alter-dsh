@@ -52,6 +52,9 @@ function archiveFixture(
       cpSync(join(repoRoot, file), join(dir, file));
     }
     cpSync(join(repoRoot, 'docs'), join(dir, 'docs'), { recursive: true });
+    // The repository itself keeps a seal manifest (created by `pnpm check`);
+    // a fixture must start from an unsealed archive or it tests the wrong thing.
+    rmSync(join(dir, 'docs', 'archive', 'manifest.json'), { force: true });
     mkdirSync(join(dir, 'vendor'));
     cpSync(join(repoRoot, 'vendor', 'README.md'), join(dir, 'vendor', 'README.md'));
     mkdirSync(join(dir, 'scripts', 'docs'), { recursive: true });

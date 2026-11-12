@@ -9,28 +9,29 @@
  * @module @alter-dsh/space/remote/bridge
  */
 import { randomUUID } from 'node:crypto';
-import type { BackendConnectionStatus } from '../backend.js';
-import { isImageMime } from '../document/assets.js';
+import type { BackendConnectionStatus } from '../core/backend.js';
+import { isImageMime } from '../document/asset-store.js';
 import {
   applyOperations,
-} from '../document/ops.js';
-import { parseMarkdownBlocks } from '../document/markdown.js';
+} from '../document/ast/operations.js';
+import { parseMarkdownBlocks } from '../document/editors/legacy/markdown.js';
 import type {
   DocumentToolApi,
   DocumentToolAssetApi,
-} from '../document/tools.js';
+} from '../document/editors/legacy/tools.js';
 import {
   DocumentError,
   type AlterDoc,
   type Operation,
-} from '../document/types.js';
-import { isReadEndpoint } from '../endpoints.js';
-import { SPACE_PROTOCOL_VERSION } from '../protocol.js';
-import { SPACE_DB_FORMAT_VERSION } from '../store.js';
+} from '../document/editors/legacy/types.js';
+import { isReadEndpoint } from '../authority/endpoints.js';
+import { SPACE_PROTOCOL_VERSION } from '../core/protocol.js';
+import { SPACE_DB_FORMAT_VERSION } from '../persistence/store.js';
 import {
   openRemoteCache,
   newOutboxIdempotencyKey,
   type RemoteCache,
+  type ShadowDocument,
 } from './cache.js';
 import type { RemoteClientOptions } from './client.js';
 import { RemoteClientError, RemoteSpaceClient } from './client.js';
@@ -108,6 +109,22 @@ function writeInput(payload: unknown): Record<string, unknown> | undefined {
 }
 
 /**
+ * One document with queued writes that have not reached the server.
+ * The settings page renders one row per document and offers retry/discard.
+ */
+export interface SyncQueueEntry {
+  docId: string;
+  /** `pending` waits for the link; the others need a user decision. */
+  state: 'pending' | 'conflict' | 'failed';
+  /** Number of queue entries for this document. */
+  entries: number;
+  baseRevision: number;
+  /** Last failure message, when the server rejected a replay. */
+  lastError?: string;
+  updatedAt: string;
+}
+
+/**
  * One bridge instance; `close` releases the cache and the heartbeat.
  */
 export interface RemoteBridge {
@@ -120,6 +137,13 @@ export interface RemoteBridge {
   readonly document: DocumentToolApi;
   readonly assets: DocumentToolAssetApi;
   readonly status: BackendConnectionStatus;
+  /** Documents whose queued writes are unsettled, one row per document. */
+  queueEntries(): SyncQueueEntry[];
+  /** Retry or discard one document's unsettled writes (explicit user action). */
+  resolveQueue(
+    docId: string,
+    action: 'retry' | 'discard',
+  ): Promise<{ resolved: number }>;
   refresh(): Promise<void>;
   flush(): Promise<void>;
   close(): Promise<void>;
@@ -172,8 +196,14 @@ export function createRemoteBridge(
   function markOnline(version?: string, protocolVersion?: number): void {
     link = {
       state: 'online',
-      ...(version === undefined ? {} : { serverVersion: version }),
-      ...(protocolVersion === undefined ? {} : { protocolVersion }),
+      // Preserve previously learned facts: a refresh without a version
+      // answer must not make the settings page forget the server version.
+      ...((version ?? (link.serverVersion)) === undefined
+        ? {}
+        : { serverVersion: version ?? link.serverVersion }),
+      ...((protocolVersion ?? link.protocolVersion) === undefined
+        ? {}
+        : { protocolVersion: protocolVersion ?? link.protocolVersion }),
     };
   }
 
@@ -230,6 +260,50 @@ export function createRemoteBridge(
     }
   }
 
+  /**
+   * Fetch the authoritative document and store it as the local shadow.
+   *
+   * This is the only way a shadow is refreshed against the server, so the
+   * local view always matches a real server revision. A stale local tree is
+   * never used to reconstruct it.
+   */
+  async function refreshShadow(docId: string): Promise<ShadowDocument | undefined> {
+    let result: unknown;
+    try {
+      result = await client.call<{ docId: string; revision: number; title: string; doc: unknown }>(
+        'doc.get',
+        [docId],
+      );
+    } catch (error) {
+      if (isTransportError(error) || isUnauthorizedError(error)) return undefined;
+      // A deleted document has no shadow to keep.
+      cache.deleteShadow(docId);
+      return undefined;
+    }
+    if (!isPlainObject(result)) return undefined;
+    const { revision, title, doc } = result as {
+      revision?: unknown;
+      title?: unknown;
+      doc?: unknown;
+    };
+    if (typeof revision !== 'number' || typeof title !== 'string' || !isPlainObject(doc))
+      return undefined;
+    if (cache.hasUnsettled(docId)) {
+      // A queued/conflicting write owns the local view until it is replayed or
+      // resolved; an online read must not replace it with the older tree.
+      const existing = cache.getShadow(docId);
+      if (existing !== undefined) return existing;
+    }
+    const shadow: ShadowDocument = {
+      docId,
+      revision,
+      title,
+      doc: doc as unknown as AlterDoc,
+    };
+    cache.putShadow(shadow);
+    return shadow;
+  }
+
   function rememberShadow(result: unknown): void {
     const value = valueOf(result);
     if (!isPlainObject(value)) return;
@@ -257,6 +331,15 @@ export function createRemoteBridge(
     });
   }
 
+  /**
+   * Queue one document write that could not reach the server.
+   *
+   * The optimistic tree is produced by applying the batch to the local
+   * shadow. `rpc` refreshes that shadow from the server before falling back
+   * here, so a first edit on a fresh link or on a document never read on this
+   * device normally has a usable baseline; `offline-uncached` is reserved for
+   * the case where the server stayed unreachable through that retry.
+   */
   function applyQueuedWrite(
     endpoint: string,
     input: Record<string, unknown>,
@@ -348,43 +431,25 @@ export function createRemoteBridge(
     };
   }
 
-  /** Apply one successful direct write to an existing shadow snapshot. */
-  function syncShadowAfterWrite(endpoint: string, input: Record<string, unknown>, result: unknown): void {
+  /**
+   * Refresh the local shadow after one successful direct write.
+   *
+   * The write answer only carries the new revision, not the resulting tree,
+   * so the shadow must be rebuilt from the server document. Re-applying the
+   * batch to the old local tree produced a shadow that looked current
+   * (same revision) but silently dropped every concurrent edit made by
+   * another device; when the refresh fails the shadow is removed instead of
+   * being left with a stale tree.
+   */
+  async function syncShadowAfterWrite(endpoint: string, input: Record<string, unknown>): Promise<void> {
     if (endpoint !== 'doc.applyOps') return;
     const docId = input.docId;
     if (typeof docId !== 'string') return;
-    const shadow = cache.getShadow(docId);
-    const value = valueOf(result);
-    if (shadow === undefined || !isPlainObject(value)) return;
-    const revision = (value as { revision?: unknown }).revision;
-    if (typeof revision !== 'number') return;
-    try {
-      const applied = applyOperations(
-        shadow.doc,
-        Array.isArray(input.ops) ? (input.ops as Operation[]) : [],
-        {
-          docId,
-          nowIso: () => now().toISOString(),
-          createBlockId: () => `blk_${randomUUID().replaceAll('-', '')}`,
-          parseMarkdown: (source, parseOptions) =>
-            parseMarkdownBlocks(source, {
-              createBlockId: parseOptions.createBlockId,
-              hasAsset: (id) => cache.getAsset(id) !== undefined,
-            }),
-          createObject: () => {
-            throw new DocumentError('object/invalid', '不支持离线对象写入');
-          },
-        },
-      );
-      cache.putShadow({
-        docId,
-        revision,
-        title: shadow.title,
-        doc: { ...applied.doc, revision },
-      });
-    } catch {
-      cache.deleteShadow(docId);
-    }
+    // A queued or conflicting entry owns the local view; re-reading the
+    // server now would throw that pending content away.
+    if (cache.hasUnsettled(docId)) return;
+    const shadow = await refreshShadow(docId);
+    if (shadow === undefined) cache.deleteShadow(docId);
   }
 
   async function rpc(
@@ -440,7 +505,7 @@ export function createRemoteBridge(
       const result = await client.rpc(endpoint, outgoingPayload, signal);
       if (!isPlainObject(result) || result.error === undefined) {
         if (queueable && input !== undefined)
-          syncShadowAfterWrite(endpoint, input, result);
+          await syncShadowAfterWrite(endpoint, input);
         markOnline(link.serverVersion, link.protocolVersion);
         lastSyncedAt = now().toISOString();
       }
@@ -448,8 +513,15 @@ export function createRemoteBridge(
     } catch (error) {
       if (!isTransportError(error)) return errorOf(error);
       markOffline(error);
-      if (queueable && input !== undefined)
+      if (queueable && input !== undefined && typeof input.docId === 'string') {
+        const docId = input.docId;
+        // Without a shadow the queued batch has no baseline to apply to. One
+        // more attempt to read the document covers the common "the link just
+        // dropped before this device ever opened the doc" case.
+        if (cache.getShadow(docId) === undefined && !cache.hasUnsettled(docId))
+          await refreshShadow(docId);
         return applyQueuedWrite(endpoint, input, error, queuedKey);
+      }
       return errorOf(error);
     }
   }
@@ -651,8 +723,82 @@ export function createRemoteBridge(
     return result;
   }
 
+  /**
+   * List the documents whose queued writes have not reached the server.
+   * One row per document so the settings page can offer one action per doc.
+   */
+  function queueEntries(): SyncQueueEntry[] {
+    const grouped = new Map<string, SyncQueueEntry>();
+    for (const entry of cache.listUnsettled()) {
+      const existing = grouped.get(entry.docId);
+      const state: SyncQueueEntry['state'] =
+        entry.state === 'pending'
+          ? 'pending'
+          : entry.state === 'conflict'
+            ? 'conflict'
+            : 'failed';
+      if (existing === undefined) {
+        grouped.set(entry.docId, {
+          docId: entry.docId,
+          state,
+          entries: 1,
+          baseRevision: entry.baseRevision,
+          ...(entry.lastError === null ? {} : { lastError: entry.lastError }),
+          updatedAt: new Date(entry.updatedAt).toISOString(),
+        });
+        continue;
+      }
+      existing.entries += 1;
+      // A document with any conflict or failure is not merely pending.
+      if (state !== 'pending') existing.state = state;
+      if (entry.lastError !== null) existing.lastError = entry.lastError;
+      if (entry.updatedAt > new Date(existing.updatedAt).getTime())
+        existing.updatedAt = new Date(entry.updatedAt).toISOString();
+    }
+    return [...grouped.values()];
+  }
+
+  /**
+   * Resolve one document's unsettled queue entries.
+   *
+   * `retry` re-arms conflicts/failures against the server's current revision
+   * and replays; `discard` drops the pending content and its shadow so the
+   * next read comes from the server. Both are explicit user decisions: the
+   * bridge never resolves a conflict on its own.
+   */
+  async function resolveQueue(
+    docId: string,
+    action: 'retry' | 'discard',
+  ): Promise<{ resolved: number }> {
+    if (action === 'discard') {
+      const resolved = cache.discard(docId);
+      cache.deleteMatching(`${'doc.get'}\u0000${JSON.stringify([docId])}`);
+      return { resolved };
+    }
+    let revision: number | undefined;
+    try {
+      const server = await client.call<{ revision?: unknown }>('doc.get', [docId]);
+      if (isPlainObject(server) && typeof server.revision === 'number')
+        revision = server.revision;
+    } catch (error) {
+      markOffline(error);
+      throw new RemoteClientError(
+        'remote/unavailable',
+        '重试需要连接服务端以确认最新版本；请恢复连接后重试',
+      );
+    }
+    if (revision === undefined)
+      throw new RemoteClientError('remote/protocol', '服务端返回的文档版本无效');
+    const resolved = cache.requeue(docId, revision, now().getTime());
+    markOnline(link.serverVersion, link.protocolVersion);
+    await flush();
+    return { resolved };
+  }
+
   return {
     rpc,
+    queueEntries,
+    resolveQueue,
     async fetchAsset(request: Request): Promise<Response> {
       const url = new URL(request.url);
       const assetId = url.searchParams.get('id') ?? '';

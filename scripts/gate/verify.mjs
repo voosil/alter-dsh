@@ -15,7 +15,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const pluginRoot = path.resolve(here, '..');
+const pluginRoot = path.resolve(here, '..', '..');
 const failures = [];
 const notes = [];
 

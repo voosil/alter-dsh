@@ -114,7 +114,7 @@ export default defineConfig({
       include: ['host/**/*.ts', 'src/**/*.ts', 'src/**/*.tsx', 'server/**/*.ts'],
       exclude: ['**/*.test.ts', 'src/entry.js', 'src/app/**', 'src/settings/**'],
       // Vitest only takes whole-project thresholds, so the directory floors in
-      // `tests/layers.mjs` are enforced by `scripts/coverage-report.mjs`.
+      // `tests/layers.mjs` are enforced by `scripts/coverage/report.mjs`.
     },
   },
 });

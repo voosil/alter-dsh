@@ -28,7 +28,7 @@
  * 1 unexpected, 2 usage, 3 GUI/auth, 4 browser/CDP, 5 Space RPC/business failure,
  * 6 Space database, 7 measurement timeout/failure.
  *
- * Usage: node scripts/measure-legacy-editor-perf.mjs [options]
+ * Usage: node scripts/perf/editor-perf.mjs [options]
  *   --help                print usage
  *   --url <url>           DSH GUI URL (default http://127.0.0.1:51041)
  *   --doc-id <id>         measure an existing document instead of creating one
@@ -46,7 +46,7 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-const SCRIPT_NAME = 'measure-legacy-editor-perf.mjs';
+const SCRIPT_NAME = 'editor-perf.mjs';
 const RESULT_VERSION = 1;
 const DEFAULT_URL = 'http://127.0.0.1:51041';
 
@@ -175,7 +175,7 @@ real restored editor with headless Chrome via agent-browser, prints JSON to
 stdout and moves the temporary document to the trash afterwards.
 
 Usage:
-  node scripts/${SCRIPT_NAME} [options]
+  node scripts/perf/${SCRIPT_NAME} [options]
 
 Options:
   --help                 Show this help.

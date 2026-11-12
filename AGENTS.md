@@ -23,9 +23,12 @@ Host 半侧（`host/` → `lib/`）是 Cordis 插件，持有 SQLite 与业务�
   绑定只落 `workspace_links` 侧表，**不要写进 Space 实体**。
 - **文档正文单一格式**：所有 Space note 正文只有 `alter-doc/1` AST 一种格式；正文写入必须经
   Document Operations，`space.saveNode` 只更新元数据、不接受正文。
-- **文档编辑面冻结**：产品文档页是 `vendor/ui-space` 的旧 UI 1:1 还原（CSS、编辑器 DOM 与既有
-  JSX 结构不得改动）；AST 适配层在 `src/document/editors/legacy`（别名 `@alter-space/legacy-adapter`），
-  正文只经 Document Operations；组件目录在 `vendor/protocol`，声明式组件暂以对象占位卡呈现。
+- **文档编辑面冻结的是体验，不是实现**：文档页与基线（`vendor/ui-space` 旧 UI）保持**视觉与交互
+  parity**——壳层、全部 CSS 与工具栏/菜单/评论轨/历史面板视觉不动，编辑器内核允许替换（见
+  [内核替换方案](docs/designs/editor-kernel-replacement.md)）；现行默认是 AST 原生内核
+  （`src/document/editors/tiptap`），legacy 内核与其适配层保留为回滚路径、退役前不得删除。
+  正文只经 Document Operations（legacy 走 `@alter-space/legacy-adapter`）；组件目录在 `vendor/protocol`，
+  声明式组件暂以对象占位卡呈现。
 - **文档有预算与生命周期**：上限在 `scripts/docs/doc-budgets.json`；过期文档自动退场（归档即冻结，
   一次性记录直接删），见 docs/README.md。超预算先搬迁再压缩，最后才调上限。
 - **版本历史与快照**是恢复底线：改动写入路径时必须保留归属（`me` / `alter`）、事务与裁剪语义。

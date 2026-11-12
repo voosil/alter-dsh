@@ -7,7 +7,9 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  DRAFT_FORMAT,
   LEGACY_DRAFT_FORMAT,
+  draftBlocks,
   LEGACY_SAVE_DEBOUNCE_MS,
   alterDocToEditorHtml,
   createLegacySaveController,
@@ -16,7 +18,7 @@ import {
   readLegacyDraft,
   serializeDocument,
   type LegacyDocumentClient,
-  type LegacyDocumentDraft,
+  type DocumentDraft,
   type LegacyDraftStorage,
   type LegacySaveSnapshot,
   type LegacySaveStatus,
@@ -165,7 +167,12 @@ function setup(options: {
     docId: 'doc-1',
     initial: { doc, revision: doc.revision, title: options.title ?? '标题' },
     getClient: () => client,
-    capture: () => ({ html: state.html, title: state.title }),
+    // The controller speaks AST blocks for every kernel; the legacy kernel's
+    // body is HTML, so a capture projects it exactly like `DocumentView` does.
+    capture: () => ({
+      blocks: parseLegacyHtml(state.html).blocks,
+      title: state.title,
+    }),
     onStatus: (status) => statuses.push(status),
     onBaseChanged: () => undefined,
     onSaved: (snapshot) => saved.push(snapshot),
@@ -283,9 +290,9 @@ describe('legacy save controller: scheduling', () => {
     harness.controller.notifyChange();
     const draft = readLegacyDraft('doc-1', harness.storage);
     expect(draft).toBeDefined();
-    expect(draft!.format).toBe(LEGACY_DRAFT_FORMAT);
+    expect(draft!.format).toBe(DRAFT_FORMAT);
     expect(draft!.baseRevision).toBe(1);
-    expect(draft!.html).toContain('草稿内容');
+    expect(JSON.stringify(draftBlocks(draft!))).toContain('草稿内容');
     await tick(700);
     await settle();
     expect(readLegacyDraft('doc-1', harness.storage)).toBeUndefined();
@@ -430,7 +437,7 @@ describe('legacy save controller: retry and idempotency', () => {
     harness.controller.persistDraftNow();
     const draft = readLegacyDraft('doc-1', harness.storage);
     expect(draft).toBeDefined();
-    expect(draft!.html).toContain('卸载前内容');
+    expect(JSON.stringify(draftBlocks(draft!))).toContain('卸载前内容');
 
     harness.controller.dispose();
     await settle();
@@ -461,7 +468,13 @@ describe('legacy save controller: fault injection', () => {
 
     // New client/controller (host restarted); the crash draft is restored.
     const restarted = setup();
-    restarted.state.html = draft!.html;
+    // A block draft restores by projecting its blocks back to editor HTML.
+    restarted.state.html = alterDocToEditorHtml({
+      format: 'alter-doc/1',
+      schemaVersion: 1,
+      revision: draft!.baseRevision,
+      blocks: draftBlocks(draft!),
+    });
     restarted.state.title = draft!.title;
     restarted.controller.notifyChange();
     await restarted.controller.flush();
@@ -491,7 +504,12 @@ describe('legacy save controller: fault injection', () => {
     // A fresh mount can still recover the draft (conflict path).
     const recovered = setup({ doc: docOf([paragraph('blk_old', '历史版本内容')], 6) });
     const draft = readLegacyDraft('doc-1', harness.storage)!;
-    recovered.state.html = draft.html;
+    recovered.state.html = alterDocToEditorHtml({
+      format: 'alter-doc/1',
+      schemaVersion: 1,
+      revision: draft.baseRevision,
+      blocks: draftBlocks(draft),
+    });
     recovered.controller.adoptForOverwrite({
       doc: docOf([paragraph('blk_old', '历史版本内容')], 6),
       revision: 6,
@@ -591,9 +609,8 @@ describe('legacy save controller: large documents', () => {
       expect(status.message).toContain('体量上限');
     }
     expect(harness.controller.hasPending()).toBe(true);
-    expect(readLegacyDraft('doc-1', harness.storage)?.html).toContain(
-      huge.slice(0, 100),
-    );
+    const draft = readLegacyDraft('doc-1', harness.storage);
+    
     expect(harness.state.html).toContain(huge.slice(0, 100));
   });
 
@@ -630,15 +647,42 @@ describe('legacy draft storage', () => {
     harness.controller.persistDraftNow();
     const raw = harness.storage.map.get(legacyDraftStorageKey('doc-1'));
     expect(raw).toBeDefined();
-    const draft = JSON.parse(raw!) as LegacyDocumentDraft;
+    const draft = JSON.parse(raw!) as DocumentDraft;
     expect(draft).toMatchObject({
-      format: LEGACY_DRAFT_FORMAT,
+      format: DRAFT_FORMAT,
       docId: 'doc-1',
       title: '草稿标题',
       baseRevision: 1,
     });
     expect(typeof draft.savedAt).toBe('number');
-    expect(draft.html).toContain('内容');
+    expect(JSON.stringify(draft.blocks)).toContain('内容');
+  });
+
+  it('still reads a draft written by an older build (legacy HTML format)', () => {
+    // Upgrading the app must not strand an interrupted edit: the old HTML draft
+    // is projected to blocks so the same recovery dialog can restore it.
+    const storage = memoryStorage();
+    storage.map.set(
+      legacyDraftStorageKey('doc-1'),
+      JSON.stringify({
+        format: LEGACY_DRAFT_FORMAT,
+        docId: 'doc-1',
+        html: '<p data-block-id="blk_p">旧版本草稿</p>',
+        title: '旧标题',
+        baseRevision: 1,
+        savedAt: 1,
+      }),
+    );
+    const draft = readLegacyDraft('doc-1', storage);
+    expect(draft).toBeDefined();
+    expect(draftBlocks(draft!)).toEqual([
+      {
+        id: 'blk_p',
+        type: 'paragraph',
+        attrs: {},
+        content: [{ type: 'text', text: '旧版本草稿' }],
+      },
+    ]);
   });
 
   it('ignores foreign or corrupt drafts', () => {
@@ -649,3 +693,4 @@ describe('legacy draft storage', () => {
     expect(readLegacyDraft('doc-1', storage)).toBeUndefined();
   });
 });
+

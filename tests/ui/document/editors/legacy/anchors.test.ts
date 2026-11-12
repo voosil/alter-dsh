@@ -13,6 +13,7 @@ import {
   waitFor,
 } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { writeEditorKernelPreference } from '../../../../../src/document/editors/kernel-preference';
 import type { Comment, SpaceNode } from '@alter/protocol';
 import { SpaceContext } from '../../../../../vendor/ui-space/src/runtime';
 import { DocumentView } from '../../../../../vendor/ui-space/src/views/DocumentView';
@@ -63,6 +64,8 @@ const originalResizeObserver = (
 ).ResizeObserver;
 
 beforeEach(() => {
+  // This file exercises the legacy kernel explicitly (see the frozen-parity design).
+  writeEditorKernelPreference({ current: 'legacy' });
   (globalThis as { ResizeObserver?: unknown }).ResizeObserver =
     ResizeObserverStub;
 });
@@ -516,3 +519,4 @@ describe('comment anchor repair in DocumentView (E4)', () => {
     ]);
   });
 });
+

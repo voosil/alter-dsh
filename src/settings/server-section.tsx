@@ -13,6 +13,7 @@ import type {
   SpaceRemoteTestResult,
   SpaceSettingsClient,
   SpaceSettingsSnapshot,
+  SpaceSyncQueueEntry,
 } from '../client/rpc.js';
 import styles from './settings.module.css';
 
@@ -72,6 +73,8 @@ export function ServerSettingsSection({ client }: ServerSettingsSectionProps) {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<SpaceRemoteTestResult | null>(null);
+  const [queue, setQueue] = useState<SpaceSyncQueueEntry[]>([]);
+  const [resolving, setResolving] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [copied, setCopied] = useState(false);
@@ -122,6 +125,56 @@ export function ServerSettingsSection({ client }: ServerSettingsSectionProps) {
     const timer = window.setTimeout(() => setNotice(''), NOTICE_MS);
     return () => window.clearTimeout(timer);
   }, [notice]);
+
+  // The queue is only meaningful while the server owns the data; a failed
+  // poll keeps the last rows so the user can still act on them.
+  async function refreshQueue(): Promise<void> {
+    try {
+      const entries = await client.syncQueue();
+      if (mounted.current) setQueue(entries);
+    } catch {
+      // The status poll already surfaces link failures.
+    }
+  }
+
+  useEffect(() => {
+    if (snapshot?.mode !== 'server') {
+      setQueue([]);
+      return;
+    }
+    void refreshQueue();
+    const timer = window.setInterval(() => {
+      void refreshQueue();
+    }, STATUS_POLL_MS);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client, snapshot?.mode]);
+
+  async function resolveEntry(
+    docId: string,
+    action: 'retry' | 'discard',
+  ): Promise<void> {
+    setResolving(docId);
+    setError('');
+    try {
+      const result = await client.resolveSync(docId, action);
+      applySnapshot(result.state);
+      setNotice(
+        action === 'retry'
+          ? `已重新提交 ${result.resolved} 条写入`
+          : `已丢弃 ${result.resolved} 条本地写入，内容以服务端为准`,
+      );
+      await refreshQueue();
+    } catch (cause) {
+      setError(
+        `${
+          action === 'retry' ? '重试' : '丢弃'
+        }失败：${describeError(cause, '请重试')}`,
+      );
+    } finally {
+      setResolving('');
+    }
+  }
 
   async function copySetupPrompt(): Promise<void> {
     try {
@@ -335,6 +388,48 @@ export function ServerSettingsSection({ client }: ServerSettingsSectionProps) {
         {error ? (
           <div className={styles.errorBar}>
             <span role="alert">{error}</span>
+          </div>
+        ) : null}
+
+        {serverMode && queue.length > 0 ? (
+          <div className={`${styles.row} ${styles.rowSetting}`}>
+            <span className={styles.rowLabel}>待同步写入</span>
+            <div className={`${styles.rowControl} ${styles.queueList}`}>
+              {queue.map((entry) => (
+                <div className={styles.queueItem} key={entry.docId}>
+                  <span className={styles.queueMeta}>
+                    <span className={styles.rowValue}>{entry.docId}</span>
+                    <span className={styles.rowMeta}>
+                      {entry.entries} 条 ·{' '}
+                      {entry.state === 'pending'
+                        ? '等待连接'
+                        : entry.state === 'conflict'
+                          ? '与服务端冲突'
+                          : '提交失败'}
+                      {entry.lastError ? ` · ${entry.lastError}` : ''}
+                    </span>
+                  </span>
+                  <span className={styles.queueActions}>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={resolving === entry.docId || entry.state === 'pending'}
+                      onClick={() => void resolveEntry(entry.docId, 'retry')}
+                    >
+                      重试
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={resolving === entry.docId}
+                      onClick={() => void resolveEntry(entry.docId, 'discard')}
+                    >
+                      丢弃本地写入
+                    </Button>
+                  </span>
+                </div>
+              ))}
+            </div>
           </div>
         ) : null}
 

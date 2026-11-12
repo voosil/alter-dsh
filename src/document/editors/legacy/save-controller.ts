@@ -1,15 +1,14 @@
 /**
- * Save lifecycle controller for the legacy (restored) document UI.
+ * Save lifecycle controller for the document page (kernel-independent).
  *
- * The pre-rebuild editor keeps its 700ms silent autosave and its
+ * Both editor kernels keep the 700ms silent autosave and its
  * 「保存失败，重试」button; this controller owns the state machine behind that
  * UI on top of the AST backend:
  *
  * - 700ms debounce, single-flight saves; edits made during a request mark the
  *   controller dirty and are saved by the next cycle (A3);
- * - every cycle captures the editor HTML + title, materializes inline `data:`
- *   assets, parses the legacy DOM into blocks and applies the block diff
- *   through Document Operations;
+ * - every cycle captures canonical AST blocks + title (the kernel decides how
+ *   it produces them) and applies the block diff through Document Operations;
  * - retries of the same pending content reuse the same idempotency key (A5);
  * - a `doc/conflict` is reconciled against `doc.get` first: when the Host
  *   already stores the intended content the cycle counts as saved, otherwise
@@ -29,18 +28,16 @@ import {
 } from './operations';
 import type { LegacyDocumentClient } from './client-types';
 import {
-  LEGACY_DRAFT_FORMAT,
+  DRAFT_FORMAT,
   blocksContentEquivalent,
   clearLegacyDraft,
   defaultDraftStorage,
   normalizeTitle,
-  writeLegacyDraft,
-  type LegacyDocumentDraft,
-  type LegacyDocumentDraftPayload,
+  writeDocumentDraft,
+  type DocumentDraftPayload,
   type LegacyDraftStorage,
+  type RecoverableDraft,
 } from './draft';
-import { parseLegacyHtml } from './html-parser';
-import { materializeLegacyAssets } from './materialize';
 import {
   readDocumentSnapshot,
   readRevisionOf,
@@ -81,8 +78,21 @@ export interface LegacySaveControllerOptions {
   initial: LegacySaveSnapshot;
   /** Document client getter (undefined while the model is not assembled). */
   getClient(): LegacyDocumentClient | undefined;
-  /** Capture the live editor HTML + title. */
-  capture(): { html: string; title: string };
+  /**
+   * Capture the live editor body as canonical AST blocks + title.
+   *
+   * Kernels differ in how they produce blocks (legacy: HTML → `parseLegacyHtml`
+   * after asset materialization; AST-native: direct capture), never in shape.
+   */
+  capture(): { blocks: BlockNode[]; title: string };
+  /**
+   * Optional pre-save step (awaitable) run before `capture`.
+   *
+   * The legacy kernel uses it to materialize inline `data:` assets; an
+   * AST-native kernel needs no equivalent. Throwing fails the cycle with the
+   * message and keeps the draft, exactly like a capture failure.
+   */
+  prepareCapture?(): Promise<unknown>;
   onStatus(status: LegacySaveStatus): void;
   /** Base revision/doc changed (own save, adoption, conflict rebase). */
   onBaseChanged?(snapshot: LegacySaveSnapshot): void;
@@ -129,7 +139,7 @@ export interface LegacySaveController {
   /** Conflict path: keep local edits and save them over the latest revision. */
   keepLocalOverwrite(): Promise<void>;
   /** Snapshot of the current draft for "download draft" recovery. */
-  exportDraft(): LegacyDocumentDraft | undefined;
+  exportDraft(): RecoverableDraft | undefined;
   /** Persist a final draft and try one last save (unmount). */
   dispose(): void;
 }
@@ -243,13 +253,13 @@ export function createLegacySaveController(
     }
   }
 
-  function captureDraftPayload(): LegacyDocumentDraftPayload | undefined {
+  function captureDraftPayload(): DocumentDraftPayload | undefined {
     try {
       const capture = options.capture();
       return {
-        format: LEGACY_DRAFT_FORMAT,
+        format: DRAFT_FORMAT,
         docId: options.docId,
-        html: capture.html,
+        blocks: capture.blocks,
         title: capture.title,
         baseRevision: base.revision,
       };
@@ -263,7 +273,7 @@ export function createLegacySaveController(
     const payload = captureDraftPayload();
     if (payload === undefined) return;
     try {
-      writeLegacyDraft({ ...payload, savedAt: now() }, storage);
+      writeDocumentDraft({ ...payload, savedAt: now() }, storage);
     } catch {
       // Draft writes must never break editing.
     }
@@ -343,7 +353,14 @@ export function createLegacySaveController(
     };
   }
 
-  /** One save cycle: capture → materialize → parse → diff → apply → title. */
+  /**
+   * One save cycle: capture → diff → apply → title.
+   *
+   * `capture` is kernel-agnostic: every kernel reports canonical AST blocks,
+   * so the save state machine is identical for the legacy HTML editor and an
+   * AST-native one. Inline `data:` assets are materialized by the caller (the
+   * legacy kernel's HTML path), never here.
+   */
   async function saveOnce(): Promise<LegacySaveOutcome> {
     const client = options.getClient();
     if (client === undefined) {
@@ -352,8 +369,10 @@ export function createLegacySaveController(
         message: '文档模型客户端未装配：请刷新页面或重新安装插件',
       };
     }
-    let capture: { html: string; title: string };
+    let capture: { blocks: BlockNode[]; title: string };
     try {
+      // Materialize kernel-side assets first (no-op for AST-native kernels).
+      await options.prepareCapture?.();
       capture = options.capture();
     } catch (error) {
       return { kind: 'failed', message: describeLegacySaveError(error) };
@@ -361,34 +380,11 @@ export function createLegacySaveController(
     const title = normalizeTitle(capture.title);
     const titleChanged = title !== lastSavedTitle;
 
-    let materialized: { html: string; warnings: string[] };
-    try {
-      materialized = await materializeLegacyAssets(capture.html, client);
-    } catch (error) {
-      return { kind: 'failed', message: describeLegacySaveError(error) };
-    }
-    if (materialized.warnings.length > 0) {
-      return {
-        kind: 'failed',
-        message: materialized.warnings[0]!,
-      };
-    }
-
-    let blocks: BlockNode[];
-    try {
-      blocks = parseLegacyHtml(materialized.html).blocks;
-    } catch (error) {
-      return {
-        kind: 'failed',
-        message: `无法解析编辑器内容：${describeLegacySaveError(error)}`,
-      };
-    }
-
     const target: AlterDoc = {
       format: 'alter-doc/1',
       schemaVersion: 1,
       revision: base.revision,
-      blocks,
+      blocks: capture.blocks,
     };
     let ops: ReturnType<typeof computeOperations>;
     try {
@@ -629,7 +625,7 @@ export function createLegacySaveController(
     await flush();
   }
 
-  function exportDraft(): LegacyDocumentDraft | undefined {
+  function exportDraft(): RecoverableDraft | undefined {
     const payload = captureDraftPayload();
     return payload === undefined ? undefined : { ...payload, savedAt: now() };
   }
@@ -683,3 +679,4 @@ export function createLegacySaveController(
 
 /** Re-export the snapshot type for consumers of the controller. */
 export type { LegacyDocumentSnapshot };
+

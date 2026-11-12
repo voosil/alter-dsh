@@ -49,7 +49,7 @@ export const PR_EXCLUDE = ['tests/integration/document/fuzz.test.ts'];
 /**
  * Coverage floors per source directory (percent, line and statement).
  *
- * Enforced by `scripts/coverage-report.mjs` over the JSON summary the coverage
+ * Enforced by `scripts/coverage/report.mjs` over the JSON summary the coverage
  * run writes. Measured values sit ~10 points above each floor so ordinary
  * refactors do not trip it; raise a floor when the measured value stays higher.
  */

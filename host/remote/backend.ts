@@ -4,7 +4,7 @@
  *
  * @module @alter-dsh/space/remote/backend
  */
-import type { SpaceBackend } from '../backend.js';
+import type { SpaceBackend } from '../core/backend.js';
 import { createRemoteBridge } from './bridge.js';
 
 interface LoggerLike {
@@ -54,6 +54,8 @@ export function createRemoteBackend(
     fetchAsset: (request) => bridge.fetchAsset(request),
     document: bridge.document,
     assets: bridge.assets,
+    queueEntries: () => bridge.queueEntries(),
+    resolveQueue: (docId, action) => bridge.resolveQueue(docId, action),
     refresh: () => bridge.refresh(),
     flush: () => bridge.flush(),
     close: () => bridge.close(),

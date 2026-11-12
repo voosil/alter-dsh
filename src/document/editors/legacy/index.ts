@@ -36,6 +36,7 @@ export {
   type MaterializedLegacyHtml,
 } from './materialize';
 export {
+  DRAFT_FORMAT,
   LEGACY_DRAFT_FORMAT,
   LEGACY_DRAFT_STORAGE_PREFIX,
   blocksContentEquivalent,
@@ -46,12 +47,16 @@ export {
   legacyDraftMatchesSnapshot,
   legacyDraftStorageKey,
   normalizeTitle,
+  parseDocumentDraft,
   parseLegacyDraft,
   readLegacyDraft,
+  writeDocumentDraft,
   writeLegacyDraft,
+  type DocumentDraft,
+  type DocumentDraftPayload,
   type LegacyDocumentDraft,
-  type LegacyDocumentDraftPayload,
   type LegacyDraftStorage,
+  type RecoverableDraft,
 } from './draft';
 export {
   LEGACY_DRAFT_WRITE_INTERVAL_MS,
@@ -95,6 +100,37 @@ export {
   type LegacyDocumentErrorReport,
   type LegacyDocumentErrorScope,
 } from './errors';
+export {
+  LEGACY_KERNEL_ATTRIBUTE_VALUE,
+  LEGACY_KERNEL_KIND,
+  captureLegacyBlocks,
+  createLegacyKernel,
+  normalizeCapturedBlocks,
+  normalizeKernelSelection,
+  type LegacyEditorProps,
+  type LegacyKernelOptions,
+  type MountedLegacyKernel,
+} from './kernel';
+// Kernel-neutral surface the document page (a frozen vendor component) reaches
+// through this single adapter alias: the contract types and the preference.
+export {
+  DEFAULT_EDITOR_KERNEL,
+  EDITOR_KERNEL_PREFERENCE_KEY,
+  parseEditorKernelPreference,
+  readEditorKernelPreference,
+  writeEditorKernelPreference,
+  type EditorKernelPreference,
+} from '../kernel-preference';
+export type {
+  EditorKernel,
+  EditorKernelKind,
+  EditorKernelListener,
+  EditorKernelProps,
+  EditorKernelSelection,
+} from '../kernel';
+// The AST-native body, mounted by the frozen page when the preference selects
+// it. The page never imports a kernel module directly.
+export { TiptapBody, type TiptapBodyProps } from '../tiptap/body';
 
 /** Block-level Document-Operations diff used for one legacy save. */
 export function computeAstOperations(

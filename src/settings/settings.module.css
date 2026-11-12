@@ -570,3 +570,40 @@
   background: var(--alter-accent);
   transition: width var(--alter-duration-fast) ease;
 }
+
+/* Sync queue: one row per document with unsettled queued writes. */
+.queueList {
+  flex: 1;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  min-width: 0;
+}
+
+.queueItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.queueMeta {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.queueMeta > .rowValue {
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queueActions {
+  display: inline-flex;
+  flex-shrink: 0;
+  gap: 6px;
+}

@@ -99,7 +99,7 @@ save,recovery,input,resilience,anchors}.test.ts`、`tests/nightly/document/fuzz.
 - [x] **F3 保存延迟**：上限文档保存 → 本地往返 ≤1s，过程中无连续超过 100ms 的长任务卡顿（暂定）。
 - [x] **F4 内存**：同一文档反复打开、关闭 20 次 → 内存无显著增长或泄漏。
 
-- **F 组实测与复跑**：`node scripts/measure-legacy-editor-perf.mjs`（开发期脚本，不在 CI 运行；默认从 Electron Cookies 取认证、用 Host RPC 建临时文档并清理）。HEAD ef93946 实测（headless Chrome 157，4990 顶层块 / 509.7 KiB，点击→就绪口径）：F1 273ms（3 次 260/273/282）；F2 输入 p50 9.5ms / p95 15.0ms；F3 保存 762ms（含 700ms 防抖，applyOps 19.7ms，无 >100ms 长任务）；F4 20 次开→关 GC 后 +247KB/+0.82%，DOM 节点/监听器计数恒定；`verdicts.all=true`。预算锁定：F1 ≤3s、F2 p95 ≤50ms、F3 ≤1s、F4 无显著泄漏。限制：headless、CDP 合成输入（无真实 IME/键盘）、F1 不含面板冷启动、F3 轮询 20ms、F4 仅 20 次循环；5000 块与 512KiB 是独立上限（任一），非空段落无法同时逼近，脚本用“3100 段文本+1890 空段”贴近双上限。
+- **F 组实测与复跑**：`node scripts/perf/editor-perf.mjs`（开发期脚本，不在 CI 运行；默认从 Electron Cookies 取认证、用 Host RPC 建临时文档并清理）。HEAD ef93946 实测（headless Chrome 157，4990 顶层块 / 509.7 KiB，点击→就绪口径）：F1 273ms（3 次 260/273/282）；F2 输入 p50 9.5ms / p95 15.0ms；F3 保存 762ms（含 700ms 防抖，applyOps 19.7ms，无 >100ms 长任务）；F4 20 次开→关 GC 后 +247KB/+0.82%，DOM 节点/监听器计数恒定；`verdicts.all=true`。预算锁定：F1 ≤3s、F2 p95 ≤50ms、F3 ≤1s、F4 无显著泄漏。限制：headless、CDP 合成输入（无真实 IME/键盘）、F1 不含面板冷启动、F3 轮询 20ms、F4 仅 20 次循环；5000 块与 512KiB 是独立上限（任一），非空段落无法同时逼近，脚本用“3100 段文本+1890 空段”贴近双上限。
 
 ## G. 回归与自动化（P1）
 

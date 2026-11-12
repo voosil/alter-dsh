@@ -6,8 +6,8 @@
  *
  * @module @alter-dsh/space/remote/test
  */
-import { SPACE_PROTOCOL_VERSION } from '../protocol.js';
-import { SPACE_DB_FORMAT_VERSION } from '../store.js';
+import { SPACE_PROTOCOL_VERSION } from '../core/protocol.js';
+import { SPACE_DB_FORMAT_VERSION } from '../persistence/store.js';
 import { RemoteClientError, RemoteSpaceClient } from './client.js';
 
 /** Outcome of one probe; `ok` is false for transport, auth or version errors. */

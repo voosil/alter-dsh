@@ -40,8 +40,9 @@
 
 - **正文只有 AST**：文档正文只有 `alter-doc/1` AST 一种格式，正文写入只经 Document Operations，
   `space.saveNode` 只改标题等元数据。
-- **文档编辑面冻结**：产品文档页是 `vendor/ui-space` 的旧 UI 1:1 还原（CSS、编辑器 DOM、既有 JSX
-  结构与基线一致，不改）；数据层经 `@alter-space/legacy-adapter` → Document Operations。
+- **文档编辑面冻结体验、不冻结实现**：文档页与基线（本目录旧 UI）保持视觉与交互 parity——壳层、CSS
+  与各面板视觉不改，编辑器内核可替换（见 [内核替换方案](../docs/designs/editor-kernel-replacement.md)），
+  parity 验收前 legacy 仍是默认并经 `@alter-space/legacy-adapter` → Document Operations。
   组件目录在 `vendor/protocol`（Host 校验），旧 UI 暂把 callout/mindmap/component 显示为对象占位卡。
 - **设计 token**：圆角统一走 `--alter-radius-xs/control/panel/overlay/pill` 五级 token，
   不写字面量；宿主容器内的样式必须限定作用域，不泄漏到文档根。

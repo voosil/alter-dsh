@@ -4,7 +4,7 @@
  *
  * Runs the same transfer the settings wizard and Agent tool use, without DSH:
  *
- *   SPACE_SERVER_URL=... SPACE_TOKEN=... node scripts/space-migrate.mjs \
+ *   SPACE_SERVER_URL=... SPACE_TOKEN=... node scripts/ops/space-migrate.mjs \
  *     --direction to-server [--overwrite] [--trim-history]
  *
  * Data directory defaults to `${DSH_HOME:-~/.dsh}/data/space` and can be
@@ -35,7 +35,7 @@ function parseArgs(argv) {
 const options = parseArgs(process.argv.slice(2));
 if (options.help) {
   console.log(`用法：
-  SPACE_SERVER_URL=<url> SPACE_TOKEN=<token> node scripts/space-migrate.mjs \\
+  SPACE_SERVER_URL=<url> SPACE_TOKEN=<token> node scripts/ops/space-migrate.mjs \\
     --direction to-server|from-server [--overwrite] [--trim-history] [--data-dir <dir>]`);
   process.exit(0);
 }

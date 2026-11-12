@@ -12,7 +12,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { AlterDoc } from '../document/types.js';
+import type { AlterDoc } from '../document/editors/legacy/types.js';
 
 /** Bump when the disposable cache layout changes; old files are recreated. */
 const CACHE_SCHEMA_VERSION = 1;
@@ -80,11 +80,21 @@ export interface RemoteCache {
   nextPending(): OutboxEntry | undefined;
   pendingFor(docId: string): OutboxEntry[];
   counts(): QueueCounts;
+  /** Documents with at least one unsettled queue entry, oldest first. */
+  listUnsettled(): OutboxEntry[];
   markConflict(docId: string, message: string, now: number): void;
   fail(seq: number, message: string, now: number): void;
   remove(seq: number): void;
   touch(seq: number, now: number): void;
   clearConflicts(docId: string): void;
+  /**
+   * Re-arm every conflict/failed entry of one document for replay against a
+   * fresh baseline. The caller is responsible for lowering `base_revision`
+   * once the server's current revision is known.
+   */
+  requeue(docId: string, baseRevision: number, now: number): number;
+  /** Drop every queue entry and the shadow of one document. */
+  discard(docId: string): number;
   /** Whether one document has pending/conflict/failed writes. */
   hasUnsettled(docId: string): boolean;
   close(): void;
@@ -113,26 +123,103 @@ function rowToEntry(row: Record<string, unknown>): OutboxEntry {
   };
 }
 
+/**
+ * Recreate the disposable tables after a layout change.
+ *
+ * The outbox is deliberately *not* dropped: its rows are user content that
+ * has not reached the authority yet, and a cache-format bump must never
+ * silently lose them. When the stored row layout is unknowable the surviving
+ * rows are marked `failed` so the user can retry or discard them instead of
+ * having them replayed against a different schema.
+ */
+function recreateDisposableTables(db: DatabaseSync, previous: number): void {
+  for (const table of ['cache', 'asset', 'doc_shadow', 'sync_state']) {
+    db.exec(`DROP TABLE IF EXISTS ${table}`);
+  }
+  const hasOutbox =
+    db
+      .prepare("SELECT 1 AS present FROM sqlite_master WHERE type='table' AND name='outbox'")
+      .get() !== undefined;
+  if (hasOutbox && previous !== CACHE_SCHEMA_VERSION) {
+    db.exec("ALTER TABLE outbox RENAME TO outbox_legacy");
+    db.exec('PRAGMA user_version = 0');
+    createTables(db);
+    db.exec(`
+      INSERT INTO outbox
+        (doc_id, endpoint, payload, idempotency_key, base_revision,
+         state, attempts, last_error, created_at, updated_at)
+      SELECT doc_id, endpoint, payload, idempotency_key, base_revision,
+             'failed', attempts,
+             '缓存结构升级后需人工确认重放', created_at, updated_at
+      FROM outbox_legacy
+    `);
+    db.exec('DROP TABLE outbox_legacy');
+    return;
+  }
+  if (hasOutbox && previous === CACHE_SCHEMA_VERSION) {
+    // Same layout: keep every row untouched.
+    createTables(db);
+    return;
+  }
+  db.exec('DROP TABLE IF EXISTS outbox');
+  createTables(db);
+}
+
+function createTables(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS cache (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS asset (
+      id TEXT PRIMARY KEY,
+      mime TEXT NOT NULL,
+      bytes INTEGER NOT NULL,
+      data BLOB NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS doc_shadow (
+      doc_id TEXT PRIMARY KEY,
+      revision INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      doc_json TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS outbox (
+      seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      doc_id TEXT NOT NULL,
+      endpoint TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      base_revision INTEGER NOT NULL,
+      state TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS sync_state (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+  `);
+}
+
 function openDatabase(file: string): DatabaseSync {
   const db = new DatabaseSync(file);
   db.exec('PRAGMA busy_timeout = 5000');
   db.exec('PRAGMA journal_mode = WAL');
   db.exec('PRAGMA synchronous = NORMAL');
-  const version = (
-    db.prepare('PRAGMA user_version').get() as { user_version?: unknown }
-  ).user_version;
+  const version = Number(
+    (
+      db.prepare('PRAGMA user_version').get() as { user_version?: unknown }
+    ).user_version ?? 0,
+  );
   if (version !== CACHE_SCHEMA_VERSION) {
-    // The cache is disposable; a layout change starts from an empty file.
-    for (const table of [
-      'cache',
-      'asset',
-      'doc_shadow',
-      'outbox',
-      'sync_state',
-    ]) {
-      db.exec(`DROP TABLE IF EXISTS ${table}`);
-    }
+    recreateDisposableTables(db, version);
     db.exec(`PRAGMA user_version = ${CACHE_SCHEMA_VERSION}`);
+    return db;
   }
   db.exec(`
     CREATE TABLE IF NOT EXISTS cache (
@@ -197,6 +284,8 @@ export function openRemoteCache(
   const file = join(directory, cacheFileName(scope));
   const db = openDatabase(file);
   let closed = false;
+  /** Running byte total of the asset table (see `putAsset`). */
+  let assetBytes = 0;
 
   function prune(): void {
     const count = (
@@ -282,22 +371,41 @@ export function openRemoteCache(
     },
     putAsset(assetId, mime, data) {
       if (data.byteLength > MAX_CACHED_ASSET_BYTES) return;
-      const total = (
-        db.prepare('SELECT COALESCE(SUM(bytes), 0) AS c FROM asset').get() as {
-          c: number;
-        }
-      ).c;
-      if (total + data.byteLength > MAX_CACHED_ASSET_TOTAL_BYTES) {
+      // The running total avoids a full-table SUM on every asset fetch.
+      const existing =
+        (
+          db.prepare('SELECT bytes FROM asset WHERE id = ?').get(assetId) as
+            | { bytes: number }
+            | undefined
+        )?.bytes ?? 0;
+      let total = assetBytes;
+      if (existing === 0) {
+        // First row here (or a value lost to a crash): trust the stored sum.
+        total =
+          total > 0
+            ? total
+            : Number(
+                (
+                  db
+                    .prepare('SELECT COALESCE(SUM(bytes), 0) AS c FROM asset')
+                    .get() as { c: number }
+                ).c,
+              );
+      }
+      const projected = total - Number(existing) + data.byteLength;
+      if (projected > MAX_CACHED_ASSET_TOTAL_BYTES) {
         // Evict the oldest cached assets until the new row fits the budget.
-        let over = total + data.byteLength - MAX_CACHED_ASSET_TOTAL_BYTES;
+        let over = projected - MAX_CACHED_ASSET_TOTAL_BYTES;
         const oldest = db
           .prepare('SELECT id, bytes FROM asset ORDER BY updated_at ASC')
           .all() as { id: string; bytes: number }[];
         const drop = db.prepare('DELETE FROM asset WHERE id = ?');
         for (const row of oldest) {
           if (over <= 0) break;
+          if (row.id === assetId) continue;
           drop.run(row.id);
           over -= Number(row.bytes);
+          total -= Number(row.bytes);
         }
       }
       db.prepare(
@@ -306,6 +414,7 @@ export function openRemoteCache(
            mime = excluded.mime, bytes = excluded.bytes,
            data = excluded.data, updated_at = excluded.updated_at`,
       ).run(assetId, mime, data.byteLength, data, Date.now());
+      assetBytes = Math.max(0, total - Number(existing) + data.byteLength);
     },
     enqueue(entry) {
       const total = (
@@ -390,6 +499,34 @@ export function openRemoteCache(
     clearConflicts(docId) {
       db.prepare('DELETE FROM outbox WHERE doc_id = ?').run(docId);
       db.prepare('DELETE FROM doc_shadow WHERE doc_id = ?').run(docId);
+    },
+    listUnsettled() {
+      return (
+        db
+          .prepare(
+            `SELECT * FROM outbox WHERE state IN ('pending','conflict','failed')
+             ORDER BY doc_id, seq`,
+          )
+          .all() as Record<string, unknown>[]
+      ).map(rowToEntry);
+    },
+    requeue(docId, baseRevision, now) {
+      const result = db
+        .prepare(
+          `UPDATE outbox
+              SET state = 'pending', base_revision = ?, attempts = 0,
+                  last_error = NULL, updated_at = ?
+            WHERE doc_id = ? AND state IN ('conflict','failed')`,
+        )
+        .run(baseRevision, now, docId);
+      // A requeued document must not keep showing a stale optimistic tree.
+      db.prepare('DELETE FROM doc_shadow WHERE doc_id = ?').run(docId);
+      return Number(result.changes);
+    },
+    discard(docId) {
+      const result = db.prepare('DELETE FROM outbox WHERE doc_id = ?').run(docId);
+      db.prepare('DELETE FROM doc_shadow WHERE doc_id = ?').run(docId);
+      return Number(result.changes);
     },
     hasUnsettled(docId) {
       return (
