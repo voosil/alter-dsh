@@ -223,6 +223,21 @@ describe('host plugin apply', () => {
     await reopened.close();
   });
 
+  it('keeps the control-plane tools registered after attach', async () => {
+    const dir = await tempDir();
+    const fake = fakeTools();
+    const harness = createHarness({ tools: fake.tools });
+    await apply(harness.ctx, { dataDir: dir });
+    // The settings effect must RETURN its teardown instead of disposing while
+    // attaching: a regression here silently unregisters both control tools.
+    expect([...fake.definitions.keys()]).toEqual(
+      expect.arrayContaining(['space_settings', 'space_migrate']),
+    );
+    await harness.teardown();
+    expect(fake.definitions.has('space_settings')).toBe(false);
+    expect(fake.definitions.has('space_migrate')).toBe(false);
+  });
+
   it('registers document tools and serves the document RPC endpoints', async () => {
     const dir = await tempDir();
     const fake = fakeTools();
@@ -230,6 +245,7 @@ describe('host plugin apply', () => {
     await apply(harness.ctx, { dataDir: dir });
     expect([...fake.definitions.keys()].sort()).toEqual([
       'space_asset_import',
+      'space_browse',
       'space_component_catalog',
       'space_doc_generate',
       'space_doc_ops',
@@ -238,8 +254,11 @@ describe('host plugin apply', () => {
       'space_doc_read',
       'space_doc_search',
       'space_doc_undo',
+      'space_migrate',
       'space_object_get',
       'space_object_update',
+      'space_settings',
+      'space_tree',
     ]);
 
     const generated = (await harness.call('doc.generate', [

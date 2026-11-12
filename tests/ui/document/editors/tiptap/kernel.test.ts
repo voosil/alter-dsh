@@ -149,6 +149,121 @@ describe('kernel mounts and captures its own body', () => {
   });
 });
 
+describe('block-type conversion (文本类型 menu)', () => {
+  /** Mount one body and put the caret inside its first paragraph. */
+  function mountAtCaret(blocks: BlockNode[]) {
+    const { kernel } = mount(blocks);
+    const $from = kernel.editor.state.doc.resolve(2);
+    kernel.editor.commands.setTextSelection(
+      kernel.editor.state.doc.resolve($from.pos),
+    );
+    return kernel;
+  }
+
+  it('reports the block type at the caret', () => {
+    const kernel = mountAtCaret([
+      block('blk_p', 'paragraph', {}, {
+        content: [{ type: 'text', text: '正文' }],
+      }),
+    ]);
+    expect(kernel.activeBlockType()).toBe('p');
+  });
+
+  it('converts the caret paragraph into headings, lists, quotes and code', () => {
+    const page = () => [
+      block('blk_p', 'paragraph', {}, {
+        content: [{ type: 'text', text: '正文' }],
+      }),
+    ];
+    for (const [type, expected] of [
+      ['h1', 'heading'],
+      ['h2', 'heading'],
+      ['h3', 'heading'],
+      ['bullet', 'bulletList'],
+      ['ordered', 'orderedList'],
+      ['todo', 'taskList'],
+      ['quote', 'blockquote'],
+      ['code', 'codeBlock'],
+    ] as const) {
+      const kernel = mountAtCaret(page());
+      kernel.applyBlockType(type);
+      const captured = pmDocToBlocks(kernel.capture());
+      expect(captured.value.map((item) => item.type), type).toContain(expected);
+      if (type === 'h2') {
+        expect(kernel.activeBlockType()).toBe('h2');
+      }
+    }
+  });
+
+  it('converts a converted block back to a paragraph', () => {
+    const kernel = mountAtCaret([
+      block('blk_h', 'heading', { level: 2 }, {
+        content: [{ type: 'text', text: '标题' }],
+      }),
+    ]);
+    kernel.applyBlockType('p');
+    expect(pmDocToBlocks(kernel.capture()).value[0]?.type).toBe('paragraph');
+  });
+});
+
+describe('page-owned lookups for doc links', () => {
+  it('writes the page route into doc-link hrefs', () => {
+    const element = document.createElement('div');
+    document.body.append(element);
+    const kernel = createKernelEditor({
+      element,
+      doc: doc([
+        block('blk_link', 'docLink', { docId: 'doc_9', title: '另一篇' }),
+      ]),
+      docPath: (docId) => `#/space/sp-1/doc/${docId}`,
+    });
+    destroyed.push(() => {
+      kernel.destroy();
+      element.remove();
+    });
+    const link = element.querySelector('a[data-doc-link]');
+    expect(link?.getAttribute('href')).toBe('#/space/sp-1/doc/doc_9');
+  });
+
+  it('paints the frozen archived badge from the page catalog', () => {
+    const element = document.createElement('div');
+    document.body.append(element);
+    const kernel = createKernelEditor({
+      element,
+      doc: doc([
+        block('blk_link', 'docLink', { docId: 'doc_9', title: '另一篇' }),
+      ]),
+      resolveDoc: (docId) => (docId === 'doc_9' ? { archived: true } : undefined),
+    });
+    destroyed.push(() => {
+      kernel.destroy();
+      element.remove();
+    });
+    const link = element.querySelector('a[data-doc-link]');
+    expect(link?.hasAttribute('data-archived')).toBe(true);
+    expect(link?.querySelector('[data-doc-archived-icon]')).not.toBeNull();
+  });
+});
+
+describe('block identity', () => {
+  it('assigns ids to new blocks once and keeps them across captures', () => {
+    const { kernel } = mount([
+      block('blk_p', 'paragraph', {}, {
+        content: [{ type: 'text', text: '正文' }],
+      }),
+    ]);
+    // Split the paragraph: the new block starts without an id.
+    kernel.editor.commands.setTextSelection(3);
+    kernel.editor.commands.splitBlock();
+    const first = pmDocToBlocks(kernel.capture()).value;
+    const second = pmDocToBlocks(kernel.capture()).value;
+    expect(first.map((item) => item.id)).toEqual(second.map((item) => item.id));
+    for (const item of first) {
+      expect(item.id.startsWith('blk_')).toBe(true);
+    }
+  });
+});
+
 describe('extension coverage', () => {
   it('declares every manifest node (native or kernel-owned)', () => {
     const declared = new Set([...NATIVE_NODE_NAMES, ...MANIFEST_NODE_NAMES]);

@@ -1,21 +1,21 @@
 /**
- * Editor-kernel contract: the seam between the document page shell and one
- * editor kernel implementation.
+ * Editor-kernel contract: the seam between the document page shell and the
+ * AST-native editor kernel.
  *
- * The shell (`vendor/ui-space` `DocumentView`) owns chrome, CSS and routes; a
- * kernel owns only the editable body. Kernels may keep any internal document
- * state (legacy: contentEditable HTML; ProseMirror: its node tree), but they
- * speak AST at this boundary:
+ * The shell (`vendor/ui-space` `DocumentView`) owns chrome, CSS, routes and the
+ * save lifecycle; the kernel owns only the editable body. Its internal state is
+ * a ProseMirror tree, but it speaks AST at this boundary:
  *
- * - {@link EditorKernel.load} replaces the whole document body;
+ * - {@link EditorKernel.load} replaces the whole document body (external reload,
+ *   version restore, draft recovery);
  * - {@link EditorKernel.capture} reports the current body as `alter-doc/1`
  *   blocks (this is what the save controller diffs against the base revision);
  * - {@link EditorKernel.subscribe} reports dirty/composing/selection events,
  *   which the shell turns into save scheduling and comment anchors.
  *
- * Mounting is deliberately React-shaped rather than imperative: every kernel is
- * a component that receives the same props, mounts through `createElement` and
- * exposes a handle through the callback ref. React is the only allowed external
+ * Mounting is deliberately React-shaped rather than imperative: the kernel is a
+ * component that receives props, mounts through `createElement` and exposes a
+ * handle through the callback ref. React is the only allowed external
  * dependency of the client bundle, so this contract stays dependency-free to
  * keep it usable from unit tests without a DOM.
  *
@@ -23,8 +23,8 @@
  */
 import type { AlterDoc, BlockNode } from '../types';
 
-/** Kernel identifiers selectable through the UI-preference switch. */
-export type EditorKernelKind = 'legacy' | 'tiptap';
+/** The editor-kernel implementation in use (the AST-native kernel). */
+export type EditorKernelKind = 'tiptap';
 
 /** Comments rendered inside the editable body (marks/rings on quoted text). */
 export interface EditorKernelComment {
@@ -38,11 +38,10 @@ export interface EditorKernel {
   /**
    * Document the body was loaded from, plus its base revision.
    *
-   * Replacing the body is a remount by `revision` (the shell passes a new
-   * `document`), not a method: a kernel that reloads a live body in place would
-   * have to reset its own undo stack, selection and comment anchors, and those
-   * rules are the kernel's. The shell therefore reloads through props and keeps
-   * this handle purely for reads and caret placement.
+   * The shell reloads the body through props (`document` + `revision`); the
+   * kernel rebuilds its editor in place, which resets the undo stack, the
+   * selection and the comment anchors. This handle stays for reads and caret
+   * placement.
    */
   readonly base: { doc: AlterDoc; revision: number };
   /** Current body as AST blocks (canonical: empty `content`/`children` omitted). */
@@ -79,12 +78,26 @@ export interface EditorKernelListener {
    */
   onCommentedTextClick?(): void;
   /**
+   * The comment under the caret changed, or `null` when it left every comment.
+   *
+   * The page keeps the hovered/caret comment active, so the rail card and the
+   * text tint follow the cursor, matching the frozen editor.
+   */
+  onCommentAtCaretChange?(commentId: string | null): void;
+  /**
    * The user asked to comment on the current selection.
    *
    * `quote` is the selected plain text; the page opens the comment composer
    * with it, exactly as the frozen editor's toolbar button does.
    */
   onCommentRequest?(quote: string): void;
+  /**
+   * Comment quotes changed because the commented text was edited.
+   *
+   * The kernel maintains comment ranges as flat-text anchors (exactly like the
+   * frozen editor); the page owns persistence and debounces the update.
+   */
+  onCommentQuotesChange?(updates: readonly { id: string; quote: string }[]): void;
   /**
    * The user asked to edit a link's fields.
    *
@@ -95,8 +108,39 @@ export interface EditorKernelListener {
     kind: 'card' | 'inline';
     href: string;
     pos: number;
+    /** Current display text (the frozen dialog prefills it). */
+    label?: string;
   }): void;
+  /**
+   * The user activated an external link (web-link card, inline web link).
+   *
+   * The page owns browser integration: it opens the URL in the host browser
+   * (the frozen page routes this through the workbench's `openWeb`).
+   */
+  onOpenWeb?(url: string): void;
+  /** The user activated an in-app document link: the page navigates. */
+  onOpenDoc?(docId: string): void;
+  /**
+   * The toolbar's 文本类型 button asked for the block-type menu.
+   *
+   * The page renders the frozen `Menu` component anchored at `anchor`; the
+   * chosen conversion is written back through the kernel handle's
+   * `applyBlockType`.
+   */
+  onTextTypeRequest?(anchor: HTMLElement): void;
 }
+
+/** Block conversions the page's 文本类型 menu can request. */
+export type EditorBlockType =
+  | 'p'
+  | 'h1'
+  | 'h2'
+  | 'h3'
+  | 'bullet'
+  | 'ordered'
+  | 'todo'
+  | 'quote'
+  | 'code';
 
 /** One reported selection. */
 export interface EditorKernelSelection {
@@ -121,17 +165,37 @@ export interface EditorKernelProps {
   document: AlterDoc;
   /** Base revision of `document`; a change means "reload the body". */
   revision: number;
-  /**
-   * Legacy kernels render HTML instead of reading the AST directly; the shell
-   * projects `document` once and passes the result here. AST-native kernels
-   * ignore it.
-   */
-  baseHtml: string;
   /** Initial caret placement (`end` only for the new-document flow). */
   caret: 'none' | 'end';
   comments: readonly EditorKernelComment[];
   activeCommentId?: string | null;
   disabled?: boolean;
+  /**
+   * Upload one pasted/dropped file and return its content-addressed reference.
+   *
+   * AST-native kernels cannot keep a `data:` payload in the body (the AST has
+   * no such field; the Host rejects base64 blobs), so a pasted image is
+   * uploaded before insertion. Legacy kernels ignore it: they keep the `data:`
+   * URL in the DOM and materialize it at save time.
+   */
+  importAsset?(input: {
+    kind: 'image' | 'file';
+    mime: string;
+    dataBase64: string;
+    name?: string;
+  }): Promise<{ assetId: string; mime: string; bytes: number; name?: string }>;
+  /**
+   * Whether a document id exists in the current space.
+   *
+   * Pasting an in-app document URL becomes a doc-link card only when the target
+   * exists (the frozen editor passes `findDoc`); without this the kernel inserts
+   * the card-shaped link anyway.
+   */
+  hasDoc?(docId: string): boolean;
+  /** In-app path of a document id (doc-link card href). */
+  docPath?(docId: string): string;
+  /** Archived state of a document id (doc-link card badge). */
+  resolveDoc?(docId: string): { archived: boolean } | undefined;
 }
 
 /**

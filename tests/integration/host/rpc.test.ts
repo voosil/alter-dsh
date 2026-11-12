@@ -47,11 +47,11 @@ async function createHandler(
   const home = join(dir, 'home');
   await mkdir(home, { recursive: true });
   const store = await openSpaceStore({ directory: dir, now: fixedNow });
-  const document = createDocumentService({ store, now: fixedNow });
-  const service = createStructuredSpaceService(
-    createSpaceAuthority(store, fixedNow),
-    document,
-  );
+  const stacks = createSpaceAuthority(store, fixedNow);
+  const document = createDocumentService({ store, now: fixedNow, actor: 'user' });
+  const agentDocument = createDocumentService({ store, now: fixedNow, actor: 'alter' });
+  const service = createStructuredSpaceService(stacks.user, document);
+  const agentService = createStructuredSpaceService(stacks.alter, agentDocument);
   const storage = createSpaceStorage({ store, directory: dir });
   const assets =
     options.assets === false
@@ -70,9 +70,11 @@ async function createHandler(
   }
   const handler = createSpaceRpc({
     service,
+    agentService,
     storage,
     workspaceSync: sync === undefined ? undefined : () => sync,
     document,
+    agentDocument,
     assets,
   });
   return {
@@ -80,8 +82,10 @@ async function createHandler(
     home,
     store,
     service,
+    agentService,
     storage,
     document,
+    agentDocument,
     assets,
     handler,
     registry,
@@ -252,7 +256,7 @@ describe('Space RPC dispatch', () => {
   it('serves the Connection fetch-route envelope', async () => {
     const dir = await tempDir();
     const store = await openSpaceStore({ directory: dir, now: fixedNow });
-    const service = createSpaceAuthority(store, fixedNow);
+    const service = createSpaceAuthority(store, fixedNow).user;
     const storage = createSpaceStorage({ store, directory: dir });
     const assets = createDocumentAssets({ store, directory: dir, now: fixedNow });
     const route = createSpaceFetchRoute({ service, storage, assets });
@@ -613,21 +617,45 @@ describe('doc.importFile RPC', () => {
     await store.close();
   });
 
-  it('rejects non-whitelisted mime, malformed base64 and bad arguments', async () => {
-    const { store, handler } = await createHandler();
-    const importFile = (args: unknown) =>
-      handler('doc.importFile', { args: [args] }, signal, {});
-
-    for (const mime of [
+  it('downgrades unknown or executable mime to a generic attachment', async () => {
+    const { store, handler, assets } = await createHandler();
+    const mimes = [
       'text/html',
       'image/svg+xml',
       'application/javascript',
       'application/octet-stream',
-    ]) {
-      const bad = await importFile({ mime, dataBase64: PDF_BASE64 });
-      expect(errorOf(bad)?.code).toBe('object/invalid');
-      expect(errorOf(bad)?.message).toContain('不支持的文件类型');
+      'application/x-sketch',
+    ];
+    for (const [index, mime] of mimes.entries()) {
+      const result = await handler(
+        'doc.importFile',
+        {
+          args: [
+            {
+              mime,
+              name: `设计稿-${index}.sketch`,
+              dataBase64: Buffer.from([index + 1, 9, 4]).toString('base64'),
+            },
+          ],
+        },
+        signal,
+        {},
+      );
+      expect(errorOf(result)).toBeUndefined();
+      const file = valueOf(result) as Record<string, unknown>;
+      expect(file['mime']).toBe('application/octet-stream');
+      expect(file['name']).toBe(`设计稿-${index}.sketch`);
+      const stored = await assets!.read(String(file['assetId']));
+      expect(stored?.record.mime).toBe('application/octet-stream');
+      expect(stored?.record.name).toBe(`设计稿-${index}.sketch`);
     }
+    await store.close();
+  });
+
+  it('rejects malformed base64 and bad arguments', async () => {
+    const { store, handler } = await createHandler();
+    const importFile = (args: unknown) =>
+      handler('doc.importFile', { args: [args] }, signal, {});
 
     for (const dataBase64 of ['', 'abc', 'not base64!!', 'AAA A', 'A===']) {
       const bad = await importFile({ mime: 'application/pdf', dataBase64 });
@@ -763,15 +791,17 @@ describe('document write attribution', () => {
     let clock = new Date('2026-11-06T00:00:00.000Z');
     const now = () => clock;
     const store = await openSpaceStore({ directory: dir, now });
-    const document = createDocumentService({ store, now });
-    const service = createStructuredSpaceService(
-      createSpaceAuthority(store, now),
-      document,
-    );
+    const stacks = createSpaceAuthority(store, now);
+    const document = createDocumentService({ store, now, actor: 'user' });
+    const agentDocument = createDocumentService({ store, now, actor: 'alter' });
+    const service = createStructuredSpaceService(stacks.user, document);
+    const agentService = createStructuredSpaceService(stacks.alter, agentDocument);
     const handler = createSpaceRpc({
       service,
+      agentService,
       storage: createSpaceStorage({ store, directory: dir }),
       document,
+      agentDocument,
       ...(actorPolicy === undefined ? {} : { actorPolicy }),
     });
     return { dir, store, handler, advance: () => (clock = new Date(clock.getTime() + 10 * 60_000)) };

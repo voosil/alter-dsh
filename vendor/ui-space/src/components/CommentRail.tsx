@@ -8,7 +8,7 @@ import {
   useState,
 } from 'react';
 import type { Comment } from '@alter/protocol';
-import { findQuoteOffsets, findQuoteRange } from './editor/editor-utils';
+import { findQuoteOffsets, findQuoteRange } from '../utils/editor-text';
 import { CommentCard } from './CommentCard';
 import { CommentComposer } from './CommentComposer';
 import styles from './CommentRail.module.css';

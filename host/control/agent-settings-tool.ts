@@ -15,6 +15,7 @@ import {
   type ConnectionSettingsStore,
 } from './connection-settings.js';
 import type { SpaceModeController } from '../core/mode.js';
+import { STORAGE_LIMITS } from '../persistence/settings.js';
 import { testRemoteServer } from '../remote/test.js';
 import type {
   ToolDefinitionLike,
@@ -47,6 +48,30 @@ export interface AgentSettingsToolDeps {
   audit: ConnectionAudit;
   /** Lazily resolves the approval service; may appear after registration. */
   approval?: () => ApprovalLike | undefined;
+}
+
+/** `historyLimit` → `history_limit` for messages written in the tool vocabulary. */
+function snakeOf(key: string): string {
+  return key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+}
+
+/**
+ * Whether a storage patch keeps fewer versions or snapshots than today.
+ *
+ * Lowering either limit deletes recovery points on the next write/snapshot, so
+ * it is treated like the other sensitive changes and needs the user's approval;
+ * raising a limit only adds recovery points.
+ */
+async function shrinksRecoveryWindow(
+  current: Record<string, unknown> | null,
+  patch: Record<string, number>,
+): Promise<boolean> {
+  if (current === null) return false;
+  for (const [key, value] of Object.entries(patch)) {
+    const before = current[key];
+    if (typeof before === 'number' && value < before) return true;
+  }
+  return false;
 }
 
 async function storageOf(
@@ -305,6 +330,18 @@ export function registerAgentSettingsTool(
             );
           storagePatch.snapshotKeep = input.snapshot_keep;
         }
+        // The Host validates these again, but a rejected value only surfaces as
+        // a bare error; checking the same bounds here keeps the model inside the
+        // range and says which value is wrong.
+        for (const [key, bounds] of Object.entries(STORAGE_LIMITS)) {
+          const value = storagePatch[key];
+          if (value === undefined) continue;
+          if (value < bounds.min || value > bounds.max)
+            throw new ConnectionSettingsError(
+              'settings/invalid',
+              `${snakeOf(key)} 必须在 ${bounds.min}–${bounds.max} 之间，收到 ${String(value)}`,
+            );
+        }
         // One shared helper owns the migration lock, the mode-switch/
         // unsettled-queue guards, approval, backend switch/rollback and audit
         // for both the settings page and this tool.
@@ -346,6 +383,33 @@ export function registerAgentSettingsTool(
         );
         if (Object.keys(storagePatch).length > 0) {
           assertMigrationIdle(deps);
+          // Keeping fewer snapshots deletes recovery points. That is the same
+          // class of change as a mode switch, so it goes through the same
+          // approval; raising the limit only adds recovery points and needs no
+          // gate.
+          if (await shrinksRecoveryWindow(await storageOf(deps), storagePatch)) {
+            const approval = deps.approval?.();
+            if (approval === undefined)
+              throw new ConnectionSettingsError(
+                'settings/approval-required',
+                '降低版本历史或每日快照的保留数量会删除现有恢复点；当前宿主没有审批服务',
+              );
+            const outcome = await approval.request({
+              agent: exec.agent,
+              toolName: exec.name,
+              callId: exec.callId,
+              reason: `将降低版本历史或每日快照的保留数量（${JSON.stringify(storagePatch)}），这会删除现有恢复点`,
+              signal: exec.signal,
+            });
+            if (outcome !== 'allowed-once') {
+              deps.audit.record({
+                actor: 'agent',
+                action: 'test',
+                result: 'rejected',
+              });
+              throw new Error(`用户未批准降低恢复点保留数量（${outcome}）`);
+            }
+          }
           const stored = (await deps.mode.current().rpc('storage.set', {
             op: 'storage.set',
             args: [storagePatch],

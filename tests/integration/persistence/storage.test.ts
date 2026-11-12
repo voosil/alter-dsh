@@ -20,7 +20,7 @@ import {
   listSnapshots,
   snapshotFileName,
 } from '../../../host/persistence/backup.js';
-import { trimAllVersions, withVersionRetention } from '../../../host/persistence/retention.js';
+import { trimAllVersions } from '../../../host/persistence/retention.js';
 import { DEFAULT_STORAGE_SETTINGS } from '../../../host/persistence/settings.js';
 import { createSpaceStorage } from '../../../host/persistence/storage.js';
 import { DEFAULT_SPACE_ID, openSpaceStore } from '../../../host/persistence/store.js';
@@ -105,8 +105,8 @@ describe('bounded version history', () => {
     const dir = await tempDir();
     const store = await openSpaceStore({ directory: dir, now });
     await store.setStorageSettings({ historyLimit: 2, snapshotKeep: 3 });
-    const retained = withVersionRetention(store, () => store.getStorageSettings());
-    const service = createSpaceAuthority(retained, now);
+    // The composer applies version retention to each identity stack.
+    const service = createSpaceAuthority(store, now).user;
     const node = await service.createNode({
       spaceId: DEFAULT_SPACE_ID,
       kind: 'note',
@@ -129,7 +129,7 @@ describe('bounded version history', () => {
     const now = () => new Date(clock);
     const dir = await tempDir();
     const store = await openSpaceStore({ directory: dir, now });
-    const service = createSpaceAuthority(store, now);
+    const service = createSpaceAuthority(store, now).user;
     const node = await service.createNode({
       spaceId: DEFAULT_SPACE_ID,
       kind: 'note',
@@ -183,7 +183,7 @@ describe('daily snapshots', () => {
     const dir = await tempDir();
     const store = await openSpaceStore({ directory: dir, now });
     await store.setStorageSettings({ historyLimit: 10, snapshotKeep: 2 });
-    await store.update((data) => {
+    await store.updateAs('user', (data) => {
       (data.nodes as unknown as Array<Record<string, unknown>>).push(
         note('doc-1', DEFAULT_SPACE_ID, 'hello'),
       );
@@ -233,7 +233,7 @@ describe('daily snapshots', () => {
   it('copies committed data out of the WAL while the store stays open', async () => {
     const dir = await tempDir();
     const store = await openSpaceStore({ directory: dir, now: fixedNow });
-    await store.update((data) => {
+    await store.updateAs('user', (data) => {
       (data.nodes as unknown as Array<Record<string, unknown>>).push(
         note('doc-wal', DEFAULT_SPACE_ID, 'in the wal'),
       );
@@ -261,7 +261,7 @@ describe('storage estimate', () => {
   it('reports the current data and a policy-dependent upper bound', async () => {
     const dir = await tempDir();
     const store = await openSpaceStore({ directory: dir, now: fixedNow });
-    await store.update((data) => {
+    await store.updateAs('user', (data) => {
       for (let index = 0; index < 3; index += 1)
         (data.nodes as unknown as Array<Record<string, unknown>>).push(
           note(`doc-${index}`, DEFAULT_SPACE_ID, 'y'.repeat(2000)),

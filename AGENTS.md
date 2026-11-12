@@ -15,6 +15,9 @@ Host 半侧（`host/` → `lib/`）是 Cordis 插件，持有 SQLite 与业务�
 - **新增 RPC 端点**必须同时改 `host/authority/rpc.ts` 白名单与 `src/client/rpc.ts` 映射
   （`storage.*` 映射在 `src/client/storage.ts`）；通道常量 `('/api', 'alter-space')` 两处保持同步。
   传输信封与端点语义以 spec 为准。
+- **新操作必须声明 Agent 暴露面**：同一变更在能力台账 `host/authority/capabilities.ts` 声明暴露
+  （工具/action）或排除（理由）；工具与浏览器 RPC 调用同一权威栈服务方法，白名单、读写分类、
+  浏览器映射与工具注册四处一致由 parity 门禁强制。
 - **`vendor/` 可改但克制**：新增逻辑优先放 `host/`、`src/`；确实要改 `vendor/` 时保持行为与
   既有约定一致。构建期覆盖与别名集中在 `build/build.mjs`，当前生效的清单写在 `vendor/README.md`。
 - **客户端 bundle 自包含**：外置依赖仅限 react 族；新增第三方库必须打进 bundle。
@@ -24,11 +27,11 @@ Host 半侧（`host/` → `lib/`）是 Cordis 插件，持有 SQLite 与业务�
 - **文档正文单一格式**：所有 Space note 正文只有 `alter-doc/1` AST 一种格式；正文写入必须经
   Document Operations，`space.saveNode` 只更新元数据、不接受正文。
 - **文档编辑面冻结的是体验，不是实现**：文档页与基线（`vendor/ui-space` 旧 UI）保持**视觉与交互
-  parity**——壳层、全部 CSS 与工具栏/菜单/评论轨/历史面板视觉不动，编辑器内核允许替换（见
-  [内核替换方案](docs/designs/editor-kernel-replacement.md)）；现行默认是 AST 原生内核
-  （`src/document/editors/tiptap`），legacy 内核与其适配层保留为回滚路径、退役前不得删除。
-  正文只经 Document Operations（legacy 走 `@alter-space/legacy-adapter`）；组件目录在 `vendor/protocol`，
-  声明式组件暂以对象占位卡呈现。
+  parity**——壳层、全部 CSS（含冻结的 `Editor.module.css`）与工具栏/菜单/评论轨/历史面板视觉不动。
+  编辑器内核**唯一**为 AST 原生 Tiptap（`src/document/editors/tiptap`）；旧 contentEditable 内核已退役，
+  不存在内核切换或应用内回滚路径（见 [内核替换方案](docs/designs/editor-kernel-replacement.md)）。
+  正文只经 Document Operations（客户端经 `@alter-space/document-runtime` 接 Host）；组件目录在
+  `vendor/protocol`，声明式组件暂以对象占位卡呈现。
 - **文档有预算与生命周期**：上限在 `scripts/docs/doc-budgets.json`；过期文档自动退场（归档即冻结，
   一次性记录直接删），见 docs/README.md。超预算先搬迁再压缩，最后才调上限。
 - **版本历史与快照**是恢复底线：改动写入路径时必须保留归属（`me` / `alter`）、事务与裁剪语义。
@@ -45,7 +48,7 @@ pnpm typecheck     # 客户端与 Host 两套 tsconfig
 pnpm lint          # oxlint（测试层边界与测试互引在此强制）
 pnpm test          # vitest 分层门禁（unit + integration + ui，不含 fuzz 全量）
 pnpm test:unit     # 秒级快循环
-pnpm test:nightly  # 夜间：严格 lint + 全量 fuzz + 覆盖率下限
+pnpm test:nightly  # 夜间：覆盖率下限 + 全量 fuzz + 严格 lint
 pnpm check         # lint + build + verify + 自动归档 + docs:check + typecheck + test（提交前全绿）
 ```
 

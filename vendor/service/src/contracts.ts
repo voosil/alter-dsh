@@ -7,6 +7,7 @@ import type {
   HubSnapshot,
   Milestone,
   Space,
+  SpaceActor,
   SpaceNode,
   SpaceTask,
   Thought,
@@ -52,10 +53,18 @@ export interface SpaceContentServiceOptions {
   store: SpaceStore;
   hub: import('@alter/protocol').SpaceHubService;
   now: () => Date;
+  /**
+   * Write identity this service instance speaks for. Every attribution field
+   * (creator/author/archivedBy/event source) is derived from it; callers select
+   * a stack instead of passing per-call identities.
+   */
+  actor: SpaceActor;
 }
 
 export interface SpaceHubServiceOptions {
   store: SpaceStore;
   reader: SpaceHubReader;
   now: () => Date;
+  /** Write identity this hub instance speaks for (same rule as content). */
+  actor: SpaceActor;
 }

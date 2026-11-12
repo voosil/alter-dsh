@@ -25,7 +25,6 @@ import {
   createDocumentService,
   type DocumentService,
 } from '../document/editors/legacy/service.js';
-import { withVersionRetention } from '../persistence/retention.js';
 import { createSpaceStorage, type SpaceStorageApi } from '../persistence/storage.js';
 import {
   openSpaceStore,
@@ -40,8 +39,14 @@ export interface LocalSpaceRuntime {
   readonly directory: string;
   /** Raw store; callers that need persistence seams read it directly. */
   readonly store: SpaceStoreHandle;
+  /** User-identity stack: the browser RPC entrance. */
   readonly service: SpaceService;
+  /** Alter-identity stack: the Agent tool entrance (same authority). */
+  readonly agentService: SpaceService;
+  /** User-identity document service for the browser RPC. */
   readonly document: DocumentService;
+  /** Alter-identity document service for Agent tool ports. */
+  readonly agentDocument: DocumentService;
   readonly assets: DocumentAssets;
   readonly storage: SpaceStorageApi;
   /**
@@ -83,18 +88,16 @@ export async function createLocalSpaceRuntime(
   const logger = options.logger ?? {};
   const store = await openSpaceStore({ directory, now, logger });
   try {
-    // The business service only sees a store that keeps version history
-    // within the user's policy; the raw store keeps the persistence seams.
-    const retainedStore = withVersionRetention(store, () =>
-      store.getStorageSettings(),
-    );
-    const document = createDocumentService({ store, now });
+    // One authority, two write-identity stacks; each stack's store enforces
+    // its identity inside every persistence transaction (version retention
+    // is applied per stack by the composer).
+    const stacks = createSpaceAuthority(store, now);
+    const document = createDocumentService({ store, now, actor: 'user' });
+    const agentDocument = createDocumentService({ store, now, actor: 'alter' });
     // Notes are AST-backed documents: creation and body writes go through the
     // document service while every other Space method delegates unchanged.
-    const service = createStructuredSpaceService(
-      createSpaceAuthority(retainedStore, now),
-      document,
-    );
+    const service = createStructuredSpaceService(stacks.user, document);
+    const agentService = createStructuredSpaceService(stacks.alter, agentDocument);
     const storage = createSpaceStorage({ store, directory });
     const assets = createDocumentAssets({ store, directory, now });
     void gcDocumentArtifacts({ store, directory, logger }).catch(
@@ -115,7 +118,9 @@ export async function createLocalSpaceRuntime(
       directory,
       store,
       service,
+      agentService,
       document,
+      agentDocument,
       assets,
       storage,
       snapshotNow() {

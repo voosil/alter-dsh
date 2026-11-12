@@ -5,33 +5,16 @@
  * during a migration freeze; every other endpoint mutates state and must reach
  * the active authority.
  *
+ * The read set is derived from the capability ledger
+ * (`host/authority/capabilities.ts`), the single source of truth for the
+ * operation surface; the parity gate keeps ledger and whitelists in sync.
+ *
  * @module @alter-dsh/space/authority/endpoints
  */
+import { businessReadEndpoints } from './capabilities.js';
 
 /** Business endpoints that never mutate the authority. */
-export const READ_ENDPOINTS: ReadonlySet<string> = new Set([
-  'space.listSpaces',
-  'space.getSpace',
-  'space.listArchivedSpaces',
-  'space.listNodes',
-  'space.getNode',
-  'space.listComments',
-  'space.listVersions',
-  'space.listThoughts',
-  'space.listDeleted',
-  'space.search',
-  'space.getOverview',
-  'space.listAgents',
-  'space.listDirectories',
-  'hub.get',
-  'storage.get',
-  'storage.estimate',
-  'doc.get',
-  'doc.outline',
-  'doc.read',
-  'doc.search',
-  'object.get',
-]);
+export const READ_ENDPOINTS: ReadonlySet<string> = businessReadEndpoints();
 
 /** Whether one endpoint only reads authority state. */
 export function isReadEndpoint(endpoint: string): boolean {

@@ -24,7 +24,7 @@ afterEach(async () => {
 describe('document artifact GC', () => {
   it('removes unreferenced objects while keeping current and version references', async () => {
     const { dir, store } = await setup();
-    const service = createDocumentService({ store, now: fixedNow });
+    const service = createDocumentService({ store, now: fixedNow, actor: 'user' });
     const created = await service.generate({
       spaceId: DEFAULT_SPACE_ID,
       markdown: ':::mindmap{objectId="obj_seed"}\n:::\n',
@@ -56,7 +56,7 @@ describe('document artifact GC', () => {
         createdAt: fixedNow().toISOString(),
       });
     });
-    await store.update((data) => {
+    await store.updateAs('user', (data) => {
       data.versions.push({
         id: 'ver_gc',
         docId: created.docId,
@@ -99,7 +99,7 @@ describe('document artifact GC', () => {
       data: new Uint8Array([4, 5, 6]),
       mime: 'image/png',
     });
-    const service = createDocumentService({ store, now: fixedNow });
+    const service = createDocumentService({ store, now: fixedNow, actor: 'user' });
     await service.generate({
       spaceId: DEFAULT_SPACE_ID,
       markdown: `# 图\n\n![图](space-asset://${keep.id})\n`,
@@ -116,7 +116,7 @@ describe('document artifact GC', () => {
 
   it('skips non-AST content instead of failing GC', async () => {
     const { dir, store } = await setup();
-    await store.update((data) => {
+    await store.updateAs('user', (data) => {
       (data.nodes as unknown as Array<Record<string, unknown>>).push({
         id: 'doc-plain',
         spaceId: DEFAULT_SPACE_ID,

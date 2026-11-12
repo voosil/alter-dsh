@@ -1,6 +1,23 @@
 export type Creator = 'me' | 'alter';
 export type NodeKind = 'folder' | 'note';
-export type ArchiveSource = 'agent' | 'user';
+export type ArchiveSource = 'agent' | 'user' | 'system';
+
+/**
+ * Write identity at the authority boundary: the browser speaks for `user`,
+ * Agent tool ports are bound to `alter`. Attribution is derived from this
+ * identity at creation time and is never transferable afterwards.
+ */
+export type SpaceActor = 'user' | 'alter';
+
+/** Entity creator vocabulary derived from the write identity (one mapping). */
+export function creatorOf(actor: SpaceActor): Creator {
+  return actor === 'alter' ? 'alter' : 'me';
+}
+
+/** Archive/event source vocabulary derived from the write identity. */
+export function archiveSourceOf(actor: SpaceActor): ArchiveSource {
+  return actor === 'alter' ? 'agent' : 'user';
+}
 
 export interface Space {
   id: string;
@@ -70,6 +87,8 @@ export interface Thought {
   id: string;
   spaceId: string;
   content: string;
+  /** Write-identity attribution; rows persisted before it load as `me`. */
+  creator: Creator;
   createdAt: string;
   updatedAt: string;
   archived: boolean;
@@ -107,9 +126,17 @@ export interface Comment {
   body: string;
   quote: string | null;
   anchor: CommentAnchor | null;
-  status: 'open' | 'resolved';
+  /**
+   * `deleted` is a soft delete: the row stays in `listComments` as a tombstone
+   * (body/quote/supplements kept) and the UI moves it to the history panel.
+   * A comment is only removed physically when deleting its document block
+   * cascades, which drops the tombstone with that block.
+   */
+  status: 'open' | 'resolved' | 'deleted';
   createdAt: string;
   resolvedAt: string | null;
+  /** When the soft delete happened; `null` for every other status. */
+  deletedAt: string | null;
   editedAt: string | null;
   supplements: CommentSupplement[];
 }
@@ -131,6 +158,11 @@ export interface AgentEvent {
   at: string;
   docId: string | null;
   taskId: string | null;
+  /**
+   * Who produced the event, in the archive-source vocabulary. Rows persisted
+   * before it load as `agent` (events historically summarized Alter's work).
+   */
+  source: ArchiveSource;
 }
 
 export interface SpaceTask {

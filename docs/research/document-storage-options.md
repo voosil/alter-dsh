@@ -118,7 +118,7 @@ MDX（可执行 JSX，安全与构建成本不可接受）。
 - 单一 Schema Registry 同时产出存储 schema、编辑器节点、Agent 工具 JSON Schema、投影器与迁移函数，
   避免多套定义漂移。
 - 落地基准：[文档模型 v0](../specs/document-model-v0.md)、[Operations v0](../specs/document-operations-v0.md)、
-  [Agent 文档工具契约](../specs/agent-doc-tools-v0.md)；方向与取舍理由见
+  [Agent 文档工具契约](../specs/agent-tools-v1.md)；方向与取舍理由见
   [文档内容架构](../designs/document-content-architecture.md)。
 
 ## 参考链接

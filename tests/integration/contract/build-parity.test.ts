@@ -194,19 +194,19 @@ describe('Docker deployment parity', () => {
 describe('module alias parity', () => {
   /**
    * The alias name appears as a regex source in build/vitest
-   * (`/^@alter-space\/legacy-adapter$/`) and as a literal key in tsconfig
-   * (`"@alter-space/legacy-adapter"`), so compare the unescaped form.
+   * (`/^@alter-space\/document-runtime$/`) and as a literal key in tsconfig
+   * (`"@alter-space/document-runtime"`), so compare the unescaped form.
    */
-  const ALIAS = '@alter-space/legacy-adapter';
+  const ALIAS = '@alter-space/document-runtime';
   const unescape = (text: string): string => text.replace(/\\\//g, '/');
 
-  it('declares the legacy adapter seam in build, tsconfig and vitest', async () => {
+  it('declares the document-runtime seam in build, tsconfig and vitest', async () => {
     const [build, tsconfig, vitest] = await Promise.all([
       readFile(join(root, 'build', 'build.mjs'), 'utf8'),
       readFile(join(root, 'tsconfig.json'), 'utf8'),
       readFile(join(root, 'vitest.config.mts'), 'utf8'),
     ]);
-    const expectedSegments = ['src', 'document', 'editors', 'legacy', 'index.ts'];
+    const expectedSegments = ['src', 'document', 'runtime', 'index.ts'];
     for (const [name, text] of [
       ['build/build.mjs', build],
       ['tsconfig.json', tsconfig],

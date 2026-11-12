@@ -46,7 +46,7 @@ export async function createSyncHarness(): Promise<SyncHarness> {
     directory: join(root, 'data'),
     now: FIXED_NOW,
   });
-  const service = createSpaceAuthority(store, FIXED_NOW);
+  const service = createSpaceAuthority(store, FIXED_NOW).user;
   const registry = new FakeWorkspaceRegistry();
   const sync = createSpaceWorkspaceSync({
     registry,

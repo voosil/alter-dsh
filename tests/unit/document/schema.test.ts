@@ -367,3 +367,84 @@ describe('document schema', () => {
     expect(canTransform('mindmap', 'paragraph')).toBe(false);
   });
 });
+
+describe('merged table cells', () => {
+  /** One table with a merged first cell and the row it spans into. */
+  function mergedTable(colspan: number, rowspan: number): AlterDoc {
+    return doc([
+      {
+        id: 'blk_table',
+        type: 'table',
+        attrs: { headerRows: 1 },
+        children: [
+          {
+            id: 'blk_row1',
+            type: 'tableRow',
+            attrs: {},
+            children: [
+              {
+                id: 'blk_cell1',
+                type: 'tableCell',
+                attrs: { colspan, rowspan },
+                content: [{ type: 'text', text: '合并' }],
+              },
+            ],
+          },
+          // Covered by the rowspan above: the merge model leaves it cell-less.
+          { id: 'blk_row2', type: 'tableRow', attrs: {} },
+        ],
+      },
+    ]);
+  }
+
+  it('accepts spans from 1 to 50', () => {
+    for (const [colspan, rowspan] of [
+      [1, 1],
+      [2, 2],
+      [50, 50],
+      [3, 1],
+    ]) {
+      const value = mergedTable(colspan!, rowspan!);
+      expect(() => validateAlterDoc(value), `${colspan}x${rowspan}`).not.toThrow();
+    }
+  });
+
+  it('rejects zero, negative, fractional and oversized spans', () => {
+    for (const [colspan, rowspan] of [
+      [0, 1],
+      [1, 0],
+      [-1, 1],
+      [51, 1],
+      [1, 51],
+      [1.5, 1],
+    ]) {
+      expect(
+        () => validateAlterDoc(mergedTable(colspan!, rowspan!)),
+        `${colspan}x${rowspan}`,
+      ).toThrow(/colspan|rowspan/);
+    }
+  });
+
+  it('keeps spans off nodes that may not merge', () => {
+    expect(() =>
+      validateAlterDoc(
+        doc([
+          {
+            id: 'blk_p',
+            type: 'paragraph',
+            attrs: { colspan: 2 },
+          },
+        ]),
+      ),
+    ).toThrow(/不支持属性/);
+  });
+
+  it('round-trips merged spans through serialization', () => {
+    const value = mergedTable(2, 2);
+    const parsed = parseAlterDoc(serializeAlterDoc(value));
+    expect(parsed?.blocks[0]?.children?.[0]?.children?.[0]?.attrs).toEqual({
+      colspan: 2,
+      rowspan: 2,
+    });
+  });
+});

@@ -102,6 +102,12 @@ export function MigrationSettingsSection({
       });
       setState(next);
       setPreflight(null);
+      // The starting direction and its confirmations must not survive the run:
+      // leaving them set let the next click start a transfer with the previous
+      // acknowledgement already ticked.
+      setOverwrite(false);
+      setConfirmReplace(false);
+      setTrimHistory(false);
     } catch (cause) {
       setError(`启动失败：${describeError(cause, '请重试')}`);
     } finally {
@@ -194,6 +200,12 @@ export function MigrationSettingsSection({
                   覆盖服务端现有数据（服务端会先备份）
                 </span>
               </label>
+            ) : null}
+            {direction === 'to-server' && preflight.overwriteDropsServerData ? (
+              <p className={styles.errorBar} role="alert">
+                服务端的数据比本地多：覆盖后服务端多出的文档、评论或版本只会留在服务端备份里，
+                迁移完成前请先确认是否需要先在服务端导出。
+              </p>
             ) : null}
             {direction === 'to-server' ? (
               <label className={styles.row}>

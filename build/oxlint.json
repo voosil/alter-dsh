@@ -30,7 +30,7 @@
         "**/build/**",
         "**/server/**",
         "**/*.mjs",
-        "**/src/document/editors/legacy/errors.ts",
+        "**/src/document/runtime/errors.ts",
         "**/vendor/ui-space/src/**",
         "**/tests/**/adapter.test.ts"
       ],

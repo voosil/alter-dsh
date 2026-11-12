@@ -55,15 +55,14 @@ const alias = [
     replacement: path.join(vendorSrc('ui-system'), 'index.ts'),
   },
   {
-    // Plugin-owned adapter seam: the restored legacy document UI keeps its
-    // pre-rebuild DOM/CSS and delegates AST parsing/serialization here.
-    find: /^@alter-space\/legacy-adapter$/,
+    // Plugin-owned document-runtime seam: the frozen document page keeps its
+    // DOM/CSS and delegates saving, drafts, snapshots and HTML projection here.
+    find: /^@alter-space\/document-runtime$/,
     replacement: path.join(
       pluginRoot,
       'src',
       'document',
-      'editors',
-      'legacy',
+      'runtime',
       'index.ts',
     ),
   },

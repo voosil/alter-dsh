@@ -66,13 +66,13 @@ describe('AST content text extraction', () => {
     const dir = await mkdtemp(join(tmpdir(), 'alter-space-text-'));
     dirs.push(dir);
     const store = await openSpaceStore({ directory: dir, now: fixedNow });
-    await store.update((data) => {
+    await store.updateAs('alter', (data) => {
       (data.nodes as unknown as Array<Record<string, unknown>>).push(
         node('doc-ast', '结构化文档', astContent('token 刷新策略')),
         node('doc-plain', '非结构化内容', '<p>token 纯文本内容</p>'),
       );
     });
-    const service = createSpaceAuthority(store, fixedNow);
+    const service = createSpaceAuthority(store, fixedNow).user;
     const results = await service.search(DEFAULT_SPACE_ID, 'token');
     const astHit = results.find((result) => result.id === 'doc-ast');
     expect(astHit).toBeDefined();
@@ -88,12 +88,12 @@ describe('AST content text extraction', () => {
     const dir = await mkdtemp(join(tmpdir(), 'alter-space-text-'));
     dirs.push(dir);
     const store = await openSpaceStore({ directory: dir, now: fixedNow });
-    await store.update((data) => {
+    await store.updateAs('alter', (data) => {
       (data.nodes as unknown as Array<Record<string, unknown>>).push(
         node('doc-ast', '', astContent('正文内容')),
       );
     });
-    const service = createSpaceAuthority(store, fixedNow);
+    const service = createSpaceAuthority(store, fixedNow).user;
     const overview = await service.getOverview(DEFAULT_SPACE_ID);
     const titles = overview.activity.flatMap((day) =>
       day.events.map((event) => event.title),

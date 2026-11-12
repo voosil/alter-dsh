@@ -1,4 +1,4 @@
-import { normalizeBlocks } from '../components/editor/editor-utils';
+import { normalizeBlocks } from './editor-text';
 
 export type DiffKind = 'same' | 'added' | 'removed';
 

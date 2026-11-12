@@ -1,9 +1,11 @@
 /**
  * Slash-menu command table.
  *
- * The frozen editor answers `/` at the start of a line with the same eleven
- * block commands; parity means the same ids, labels, search keywords and order,
- * so a user's muscle memory and typed query keep working after the kernel swap.
+ * The frozen editor answers `/` at the start of a line with the same block
+ * commands; parity means the same ids, labels, search keywords and order, so a
+ * user's muscle memory and typed query keep working after the kernel swap.
+ * `table-plain` (表格（无表头）) is the one deliberate addition: the frozen
+ * editor could only insert a table with a header row.
  *
  * This table is data only: what a command *does* is the kernel's job
  * (`editors/tiptap/slash.ts`), and how it looks is the frozen stylesheet's
@@ -37,6 +39,13 @@ export interface SlashCommand {
     | 'divider';
   /** Heading level when `node === 'heading'`. */
   level?: number;
+  /**
+   * Header rows of an inserted table (`kind === 'table'`).
+   *
+   * `1` is the frozen table (one header row + two body rows); `0` inserts a
+   * plain 3x3 table whose cells are all body cells.
+   */
+  headerRows?: number;
 }
 
 /** The command list, in the frozen editor's display order. */
@@ -51,7 +60,8 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
   { id: 'quote', label: '引用', keywords: ['quote', 'blockquote', '引用', '>', '》'], kind: 'block', node: 'blockquote' },
   { id: 'code', label: '代码块', keywords: ['code', '代码'], kind: 'block', node: 'codeBlock' },
   { id: 'divider', label: '分割线', keywords: ['divider', 'hr', '分割线'], kind: 'block', node: 'divider' },
-  { id: 'table', label: '表格', keywords: ['table', '表格'], kind: 'table' },
+  { id: 'table', label: '表格', keywords: ['table', '表格'], kind: 'table', headerRows: 1 },
+  { id: 'table-plain', label: '表格（无表头）', keywords: ['table', 'plain', '无表头', '表格'], kind: 'table', headerRows: 0 },
   { id: 'image', label: '图片', keywords: ['image', 'img', '图片'], kind: 'image' },
   { id: 'file', label: '文件', keywords: ['file', 'attachment', '文件', '附件'], kind: 'file' },
 ] as const;

@@ -155,12 +155,14 @@ export function createSpaceHttpServer(
   function buildRpcRoute(runtime: LocalSpaceRuntime) {
     return createSpaceFetchRoute({
       service: runtime.service,
+      agentService: runtime.agentService,
       storage: runtime.storage,
       document: runtime.document,
+      agentDocument: runtime.agentDocument,
       assets: runtime.assets,
       workspaceSync: () => undefined,
-      // The bridge speaks for a user browser or an Agent tool; honor its
-      // explicit `alter` so version attribution survives the hop.
+      // The bridge speaks for a user browser or an Agent tool; its stamped
+      // actor selects the identity stack so attribution survives the hop.
       actorPolicy: 'passthrough',
     });
   }

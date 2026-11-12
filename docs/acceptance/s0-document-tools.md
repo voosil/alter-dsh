@@ -1,7 +1,7 @@
 ---
 type: acceptance
 status: active
-updated: 2026-11-11
+updated: 2026-11-12
 ---
 
 # Agent 文档工具 v0 · 验收记录
@@ -9,8 +9,9 @@ updated: 2026-11-11
 验收对象：`@alter-dsh/space` 的 Host 文档工具面在真实 DSH desktop profile 中的注册与读写链路。
 结论：**PASS（安装 / 工具注册 / 端到端读写）**。当前工具面为 11 个文档工具（控制面工具
 `space_settings` / `space_migrate` 的验收见 [dual-mode.md](dual-mode.md)）；契约与质量基线见
-[agent-doc-tools-v0.md](../specs/agent-doc-tools-v0.md)。文档前端已按产品要求还原为旧 UI 并经
-legacy adapter 接 AST，前端验收见 [editor-experience-p0-p6.md](editor-experience-p0-p6.md)。
+[agent-tools-v1.md](../specs/agent-tools-v1.md)。文档前端已按产品要求与冻结 UI 保持 parity；
+唯一内核为 AST 原生 Tiptap，经 `@alter-space/document-runtime` 接 AST。前端验收见
+[editor-experience-p0-p6.md](editor-experience-p0-p6.md)。
 
 ## 工具面
 
@@ -81,6 +82,6 @@ S0 Host 工具面、评论/历史、资产、撤销、GC、备份与 AST 搜索�
 
 - [document-model-v0](../specs/document-model-v0.md)
 - [document-operations-v0](../specs/document-operations-v0.md)
-- [agent-doc-tools-v0](../specs/agent-doc-tools-v0.md)
+- [agent-tools-v1](../specs/agent-tools-v1.md)
 - [编辑器前端还原与 AST 适配验收](editor-experience-p0-p6.md)
 - [验收索引](README.md)

@@ -6,7 +6,12 @@
  * the Host/Origin fence. Requests carry `{ op, args }`; a result is
  * `{ value }` or `{ error: { code, message } }`.
  */
-import type { NewSpaceInput, SpacePatch, SpaceService } from '@alter/protocol';
+import type {
+  NewSpaceInput,
+  SpaceActor,
+  SpacePatch,
+  SpaceService,
+} from '@alter/protocol';
 import {
   MAX_ASSET_BYTES,
   MAX_FILE_BYTES,
@@ -182,7 +187,10 @@ export type SpaceRpcHandler = (
 ) => Promise<unknown>;
 
 export interface SpaceRpcOptions {
+  /** User-identity stack: the browser entrance. */
   service: SpaceService;
+  /** Alter-identity stack: required for passthrough `alter` requests. */
+  agentService?: SpaceService;
   storage: SpaceStorageApi;
   /**
    * Lazy resolver for the Space ↔ DSH workspace bridge. It is absent while
@@ -191,15 +199,18 @@ export interface SpaceRpcOptions {
    * loads, hence the resolver form.
    */
   workspaceSync?: () => SpaceWorkspaceSync | undefined;
-  /** Document-model service; absent when the feature is disabled. */
+  /** User-identity document service; absent when the feature is disabled. */
   document?: DocumentService;
+  /** Alter-identity document service for passthrough `alter` doc writes. */
+  agentDocument?: DocumentService;
   /** Document asset store; absent disables `doc.importAsset` / `doc.importFile`. */
   assets?: DocumentAssets;
   /**
-   * Who the browser-facing route speaks for. The local Host route is a user
-   * browser, so it forces `user` and ignores any caller-supplied actor. The
-   * standalone server accepts the bridge's explicit `alter` for Agent tools
-   * and attributes everything else to `user`.
+   * How the route selects the write-identity stack. The local Host route is a
+   * user browser (`browser`): it always selects the user stack and ignores any
+   * caller-supplied actor. The standalone server (`passthrough`) trusts the
+   * bridge's stamped actor to select the stack, then strips the actor from
+   * the arguments — services never see per-call identities.
    */
   actorPolicy?: 'browser' | 'passthrough';
 }
@@ -387,21 +398,53 @@ async function importDocumentFile(
 }
 
 /**
+ * Read the write identity the bridge stamped onto a passthrough request.
+ * The stamp lives on the payload envelope (structure writes) or on the first
+ * argument (document writes, whose queued replays carry it inline). Only an
+ * explicit `alter` escalates; anything else stays `user`.
+ */
+function stampedActor(payload: unknown): SpaceActor {
+  const record = isPlainObject(payload) ? payload : {};
+  // An explicit envelope stamp is authoritative: the bridge overwrites any
+  // caller claim, so a forged inline actor can never outrank it.
+  if (record.actor === 'alter') return 'alter';
+  if (record.actor === 'user') return 'user';
+  // No envelope stamp: queued document replays carry the identity inline.
+  const args = Array.isArray(record.args) ? record.args : [];
+  const first = args[0];
+  if (isPlainObject(first) && first.actor === 'alter') return 'alter';
+  return 'user';
+}
+
+/** Identity is stack-bound: arguments never carry an actor into services. */
+function stripActor(args: unknown[]): unknown[] {
+  const first = args[0];
+  if (!isPlainObject(first) || first.actor === undefined) return args;
+  const cleaned = { ...first };
+  delete cleaned.actor;
+  return [cleaned, ...args.slice(1)];
+}
+
+/**
  * Create the RPC handler for one opened authority.
  * @param options - the composed business service.
  */
 export function createSpaceRpc(options: SpaceRpcOptions): SpaceRpcHandler {
   const { service, storage } = options;
-  const forceUserActor = (options.actorPolicy ?? 'browser') === 'browser';
-  /** Strip caller-supplied actors and stamp the authenticated origin. */
-  const attributed = <T>(input: unknown): T => {
-    const record = isPlainObject(input) ? input : {};
-    const actor =
-      forceUserActor || record.actor !== 'alter' ? 'user' : 'alter';
-    return { ...record, actor } as T;
-  };
+  const passthrough = options.actorPolicy === 'passthrough';
   return async (endpoint, payload) => {
-    const args = normalizeArgs(payload);
+    // Select the write-identity stack per request, then strip the actor from
+    // the arguments. Browser routes always speak for the user regardless of
+    // what the request body claims.
+    const actor: SpaceActor = passthrough ? stampedActor(payload) : 'user';
+    if (actor === 'alter' && options.agentService === undefined)
+      return {
+        error: { code: 'space/failed', message: 'Agent 权威栈未配置' },
+      };
+    const activeService = actor === 'alter' ? options.agentService! : service;
+    const activeDocument =
+      actor === 'alter' ? options.agentDocument : options.document;
+    const args = stripActor(normalizeArgs(payload));
     try {
       const [group, method] = endpoint.split('.');
       if (method === undefined) {
@@ -422,29 +465,29 @@ export function createSpaceRpc(options: SpaceRpcOptions): SpaceRpcHandler {
         if (sync !== undefined) {
           if (method === 'createSpace') {
             const value = await sync.createSpace(
-              service,
+              activeService,
               args[0] as NewSpaceInput,
             );
             return { value: value === undefined ? null : value };
           }
           if (method === 'updateSpace') {
             const value = await sync.updateSpace(
-              service,
+              activeService,
               String(args[0]),
               args[1] as SpacePatch,
             );
             return { value: value === undefined ? null : value };
           }
           if (method === 'unarchiveSpace') {
-            const value = await sync.unarchiveSpace(service, String(args[0]));
+            const value = await sync.unarchiveSpace(activeService, String(args[0]));
             return { value: value === undefined ? null : value };
           }
           if (method === 'deleteSpace') {
-            await sync.deleteSpace(service, String(args[0]));
+            await sync.deleteSpace(activeService, String(args[0]));
             return { value: null };
           }
         }
-        const target = service as unknown as Record<
+        const target = activeService as unknown as Record<
           string,
           (...callArgs: unknown[]) => unknown
         >;
@@ -456,7 +499,7 @@ export function createSpaceRpc(options: SpaceRpcOptions): SpaceRpcHandler {
           return { value: await importDocumentAsset(options.assets, args[0]) };
         if (method === 'importFile')
           return { value: await importDocumentFile(options.assets, args[0]) };
-        const document = options.document;
+        const document = activeDocument;
         if (document === undefined)
           throw new SpaceRpcError('doc/unavailable', '文档模型服务未启用');
         switch (method) {
@@ -480,35 +523,31 @@ export function createSpaceRpc(options: SpaceRpcOptions): SpaceRpcHandler {
           case 'applyOps':
             return {
               value: await document.applyOperations(
-                attributed<ApplyOperationsInput>(args[0]),
+                args[0] as ApplyOperationsInput,
               ),
             };
           case 'undo':
             return {
               value: await document.undo(
-                attributed<Parameters<DocumentService['undo']>[0]>(args[0]),
+                args[0] as Parameters<DocumentService['undo']>[0],
               ),
             };
           case 'restoreVersion':
             return {
               value: await document.restoreVersion(
-                attributed<
-                  Parameters<DocumentService['restoreVersion']>[0]
-                >(args[0]),
+                args[0] as Parameters<DocumentService['restoreVersion']>[0],
               ),
             };
           case 'generate':
             return {
               value: await document.generate(
-                attributed<GenerateDocumentInput>(args[0]),
+                args[0] as GenerateDocumentInput,
               ),
             };
           case 'updateObject':
             return {
               value: await document.updateObject(
-                attributed<
-                  Parameters<DocumentService['updateObject']>[0]
-                >(args[0]),
+                args[0] as Parameters<DocumentService['updateObject']>[0],
               ),
             };
           default:
@@ -516,14 +555,14 @@ export function createSpaceRpc(options: SpaceRpcOptions): SpaceRpcHandler {
         }
       }
       if (group === 'object' && OBJECT_METHOD_SET.has(method)) {
-        const document = options.document;
+        const document = activeDocument;
         if (document === undefined)
           throw new SpaceRpcError('doc/unavailable', '文档模型服务未启用');
         if (method === 'get')
           return { value: (await document.getObject(String(args[0]))) ?? null };
       }
       if (group === 'hub' && HUB_METHOD_SET.has(method)) {
-        const target = service.hub as unknown as Record<
+        const target = activeService.hub as unknown as Record<
           string,
           (...callArgs: unknown[]) => unknown
         >;

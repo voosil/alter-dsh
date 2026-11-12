@@ -1,0 +1,169 @@
+/**
+ * Kernel-owned structural normalization.
+ *
+ * The frozen stylesheet stays untouched; it is written for the legacy DOM
+ * (`<li>text</li>`, `<td>text</td>`, `<blockquote>text</blockquote>`). An AST
+ * editor must keep block content as real ProseMirror blocks, so its DOM nests
+ * one extra `<p>` inside list items, table cells, quotes and task rows.
+ *
+ * These rules only neutralize that extra wrapper's margins so the rendered
+ * rhythm matches the frozen DOM. Everything visual — typography, spacing of
+ * blocks, colors, card shells, selection colors — remains the frozen
+ * `Editor.module.css`: this file adds no new visual language.
+ *
+ * Scoped to `.kernelSurface` (the kernel's editable root), so the legacy DOM
+ * is never affected.
+ */
+
+/* ProseMirror's own editor baseline (from prosemirror-view's stylesheet); the
+   frozen page never imported it because contentEditable handled this natively. */
+.kernelSurface {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-variant-ligatures: none;
+  -webkit-font-variant-ligatures: none;
+}
+
+/* A list item's first paragraph is inline text in the frozen DOM: `<li>文本</li>`.
+   Its margins would otherwise add 10px below every row. */
+.kernelSurface li > p {
+  margin: 0;
+}
+.kernelSurface li > p + p {
+  margin-top: 10px;
+}
+.kernelSurface li > :is(ul, ol) {
+  margin-top: 4px;
+}
+
+/* Table cells: frozen cells hold inline content (`<td>文本</td>`). */
+.kernelSurface :is(td, th) > p {
+  margin: 0;
+}
+.kernelSurface :is(td, th) > p + p {
+  margin-top: 10px;
+}
+
+/* Quotes: the frozen `<blockquote>` puts its first paragraph inline. */
+.kernelSurface blockquote > p {
+  margin: 0;
+}
+.kernelSurface blockquote > p + p {
+  margin-top: 10px;
+}
+
+/* Task rows: the frozen DOM is a flex row of [box, text]; the text span holds
+   the editable paragraph, whose margins must not grow the row. */
+.kernelSurface [data-todo-text] > p {
+  margin: 0;
+}
+.kernelSurface [data-todo-text] > p + p {
+  margin-top: 10px;
+}
+/* The task-list grouping node is structural only: frozen rows are flat. */
+.kernelSurface [data-task-list] {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.kernelSurface [data-task-list] > [data-todo] {
+  display: flex;
+}
+
+/* ProseMirror's table node view wraps tables in an unstyled scroll box; the
+   frozen DOM has no wrapper. Keep the wrapper out of the layout rhythm. */
+.kernelSurface .tableWrapper {
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+}
+
+/* Atom blocks (cards, images, dividers) are selected through the kernel's own
+   `data-selected` state, not ProseMirror's default node-selection outline. */
+.kernelSurface .ProseMirror-selectednode {
+  outline: none;
+}
+/* ------------------------------------------------------------------------- */
+/* Block handle (hover-only block menu + drag reorder, Notion-style)          */
+/* ------------------------------------------------------------------------- */
+
+/* The handle floats in the left gutter of the hovered top-level block. It is
+   body-level DOM (never inside the editable root), so it must not inherit the
+   surface typography. Colors follow the frozen UI tokens. */
+.kernelBlockHandle {
+  position: fixed;
+  z-index: 47;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--alter-radius-xs);
+  background: transparent;
+  color: var(--alter-text-muted);
+  cursor: grab;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity var(--alter-duration-fast),
+    background-color var(--alter-duration-fast);
+}
+.kernelBlockHandle[data-visible='true'] {
+  opacity: 1;
+  pointer-events: auto;
+}
+.kernelBlockHandle:hover,
+.kernelBlockHandle:focus-visible {
+  background: var(--alter-surface-hover);
+  color: var(--alter-text);
+}
+.kernelBlockHandle:active {
+  cursor: grabbing;
+}
+.kernelBlockHandle svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+/* Insertion line shown while dragging a block. */
+.kernelDropIndicator {
+  position: fixed;
+  z-index: 47;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--alter-action-background);
+  pointer-events: none;
+}
+
+/* Block selected through the handle: a light outline, editing-surface only. */
+.kernelSurface [data-block-selected] {
+  outline: 2px solid var(--alter-focus-ring);
+  outline-offset: 3px;
+  border-radius: var(--alter-radius-xs);
+}
+
+/* Product review: the frozen active-comment tint reads too heavy over text, so
+   the kernel keeps the underline and softens only the background. Scoped to the
+   editable surface and more specific than the frozen bare `::highlight` rule. */
+.kernelSurface::highlight(alter-comment-active) {
+  background-color: color-mix(in srgb, var(--alter-accent-soft) 40%, transparent);
+}
+
+/* Table toolbar states: the frozen bar has no active/disabled styling, but the
+   richer table tools need both (header toggle on/off, unavailable row/column
+   operations). Buttons carry `data-table-action`; states stay inside the bar. */
+[data-table-action][data-active='true'] {
+  background: #ffffff2b;
+}
+
+[data-table-action]:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+[data-table-action]:disabled:hover {
+  background: transparent;
+}

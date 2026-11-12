@@ -10,7 +10,8 @@
  * - `contentModel: 'inline'` -> `content: 'inline*'` (a block that holds text);
  * - `contentModel: 'blocks'` -> `'<children>+'` from the registry declaration,
  *   or `'block*'` when the registry declares no restriction;
- * - `contentModel: 'table'` -> `'tableRow+'` (rows contain `tableCell+`);
+ * - `contentModel: 'table'` -> `'tableRow+'` (rows hold `tableHeader`/`tableCell`
+ *   and may be empty when a cell above spans into them);
  * - `contentModel: 'none'` -> an atom leaf block;
  * - every node carries its stable `id` attribute (the AST block id) so a
  *   capture can map ProseMirror positions back to comment anchors.
@@ -46,8 +47,55 @@ export const BLOCK_GROUP = 'block';
  */
 export const ROOT_GROUP = 'rootBlock';
 
-/** Node types that are table parts and never appear at the root. */
-const TABLE_PART = new Set(['tableRow', 'tableCell']);
+/** Node types that only exist inside another node and never at the root. */
+const INTERNAL_ONLY = new Set([
+  'taskItem',
+  'tableRow',
+  'tableHeader',
+  'tableCell',
+]);
+
+/**
+ * Content expressions where the editor schema differs from the AST's structural
+ * model, because ProseMirror needs real container nodes:
+ *
+ * - a `taskList` holds `taskItem` rows (the AST calls them `listItem`);
+ * - table cells hold blocks (the AST stores inline content);
+ * - a row holds header cells before body cells (the AST always says
+ *   `tableCell`; `headerRows` on the table decides the rendering).
+ */
+const CONTENT_OVERRIDES: Readonly<Record<string, string>> = {
+  taskList: 'taskItem+',
+  table: 'tableRow+',
+  // A row can be empty when a cell from above spans into it (rowspan).
+  tableRow: '(tableHeader | tableCell)*',
+  tableCell: 'block+',
+};
+
+/**
+ * Nodes the ProseMirror schema needs but the AST registry does not declare.
+ *
+ * `taskItem` is the editor's row node inside a `taskList`; `tableHeader` is the
+ * `<th>` half of a table row. Both map back to a registry node on capture
+ * (`listItem` / `tableCell`), so no Host contract changes.
+ */
+const INTERNAL_NODE_SPECS: Readonly<Record<string, NodeSpec>> = {
+  taskItem: {
+    group: BLOCK_GROUP,
+    content: 'paragraph block*',
+    defining: true,
+    attrs: { id: { default: null }, checked: { default: false } },
+  },
+  tableHeader: {
+    group: BLOCK_GROUP,
+    content: 'block+',
+    attrs: {
+      id: { default: null },
+      colspan: { default: 1 },
+      rowspan: { default: 1 },
+    },
+  },
+};
 
 /** The `doc` root content expression: one or more root blocks. */
 const DOC_CONTENT = `${ROOT_GROUP}+`;
@@ -87,25 +135,30 @@ function containerContent(entry: NodeManifestEntry): string {
 /** ProseMirror node spec for one manifest entry. */
 export function nodeSpecOf(entry: NodeManifestEntry): NodeSpec {
   const spec: NodeSpec = {
-    group: TABLE_PART.has(entry.type)
+    group: INTERNAL_ONLY.has(entry.type)
       ? BLOCK_GROUP
       : `${BLOCK_GROUP} ${ROOT_GROUP}`,
     attrs: attrsFor(entry),
   };
-  switch (entry.contentModel) {
-    case 'inline':
-      spec.content = 'inline*';
-      break;
-    case 'blocks':
-      spec.content = containerContent(entry);
-      break;
-    case 'table':
-      spec.content = containerContent(entry);
-      break;
-    case 'none':
-      spec.atom = true;
-      spec.selectable = true;
-      break;
+  const override = CONTENT_OVERRIDES[entry.type];
+  if (override !== undefined) {
+    spec.content = override;
+  } else {
+    switch (entry.contentModel) {
+      case 'inline':
+        spec.content = 'inline*';
+        break;
+      case 'blocks':
+        spec.content = containerContent(entry);
+        break;
+      case 'table':
+        spec.content = containerContent(entry);
+        break;
+      case 'none':
+        spec.atom = true;
+        spec.selectable = true;
+        break;
+    }
   }
   // A node that allows no marks must reject them outright (code blocks).
   if (entry.marks.length === 0) spec.marks = '';
@@ -148,6 +201,9 @@ export function buildEditorSchema(): SchemaType {
   };
   for (const entry of Object.values(NODE_MANIFEST)) {
     nodes[entry.type] = nodeSpecOf(entry);
+  }
+  for (const [name, spec] of Object.entries(INTERNAL_NODE_SPECS)) {
+    nodes[name] = spec;
   }
   const allMarks = markSpecs();
   const marks: Record<string, MarkSpec> = {};

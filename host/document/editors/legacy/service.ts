@@ -8,13 +8,15 @@
  * @module @alter-dsh/space/document/editors/legacy/service
  */
 import { randomUUID } from 'node:crypto';
-import type { SpaceNode } from '@alter/protocol';
+import { creatorOf } from '../../../../vendor/protocol/src/space.js';
+import type { SpaceActor, SpaceNode } from '@alter/protocol';
 import { trimTouchedVersions } from '../../../persistence/retention.js';
 import type {
   SpaceStoreData,
   SpaceStoreHandle,
 } from '../../../persistence/store.js';
 import { applyOperations } from '../../ast/operations.js';
+import { cascadeDeletedComments } from '../../comments.js';
 import { parseMarkdownBlocks } from './markdown.js';
 import { projectDocument } from '../../ast/projection.js';
 import {
@@ -27,6 +29,7 @@ import {
   ALTER_DOC_FORMAT,
   ALTER_DOC_SCHEMA_VERSION,
   DocumentError,
+  MAX_DOCUMENT_BYTES,
   MAX_OPERATION_BATCH,
   parseAlterDoc,
   serializeAlterDoc,
@@ -94,7 +97,6 @@ export interface ApplyOperationsInput {
   docId: string;
   baseRevision: number;
   ops: Operation[];
-  actor?: DocumentActor;
   dryRun?: boolean;
   idempotencyKey?: string;
 }
@@ -115,7 +117,6 @@ export interface GenerateDocumentInput {
   parent?: string | null;
   after?: string;
   markdown: string;
-  actor?: DocumentActor;
 }
 
 export interface GenerateDocumentResult {
@@ -127,6 +128,12 @@ export interface GenerateDocumentResult {
 
 export interface DocumentServiceOptions {
   store: SpaceStoreHandle;
+  /**
+   * Write identity this instance speaks for: `user` for the browser RPC,
+   * `alter` for Agent tool ports. Attribution is derived from it; per-call
+   * actor parameters do not exist.
+   */
+  actor: DocumentActor;
   /** Business clock; tests pin it. */
   now?: () => Date;
 }
@@ -149,7 +156,6 @@ export interface UndoDocumentInput {
   docId: string;
   baseRevision: number;
   undoToken?: string;
-  actor?: DocumentActor;
 }
 
 export interface DocumentService {
@@ -168,7 +174,6 @@ export interface DocumentService {
     docId: string;
     versionId: string;
     baseRevision: number;
-    actor?: DocumentActor;
   }): Promise<ApplyOperationsResult>;
   generate(input: GenerateDocumentInput): Promise<GenerateDocumentResult>;
   /** Create an empty AST-backed note (revision 1) in a Space. */
@@ -183,7 +188,6 @@ export interface DocumentService {
     blockId: string;
     baseRevision: number;
     payload: JsonValue;
-    actor?: DocumentActor;
   }): Promise<ApplyOperationsResult & { objectId: string }>;
 }
 
@@ -304,11 +308,18 @@ function recordVersion(
   at: string,
   settings: ReturnType<SpaceStoreHandle['getStorageSettings']>,
 ): void {
-  // Keep the vendor service's five-minute version throttle on the AST path too.
+  // User writes keep the vendor service's five-minute version throttle.
+  // Alter writes force a version in the same transaction even inside the
+  // throttle window, so every Agent edit stays recoverable; the regular
+  // count/byte trimming still applies.
   const latest = data.versions
     .filter((version) => version.docId === node.id)
     .sort((left, right) => Date.parse(right.at) - Date.parse(left.at))[0];
-  if (latest !== undefined && Date.parse(at) - Date.parse(latest.at) < 300_000)
+  if (
+    actor !== 'alter' &&
+    latest !== undefined &&
+    Date.parse(at) - Date.parse(latest.at) < 300_000
+  )
     return;
   const previousLength = data.versions.length;
   data.versions.push({
@@ -320,6 +331,36 @@ function recordVersion(
     at,
   });
   trimTouchedVersions(data, previousLength, settings);
+}
+
+/**
+ * Commit one body write: persist the AST, touch node activity/versions and
+ * cascade soft-deletion of comments whose quote no longer occurs in the body.
+ *
+ * Shared by every body write (`applyOperations`, `undo`, `restoreVersion`,
+ * `generate`) so the cascade lives inside the same store transaction as the
+ * body. The cascade only runs when the serialized body actually changed: a
+ * metadata-only write can never orphan a comment.
+ */
+function writeDocumentBody(
+  data: SpaceStoreData,
+  node: SpaceNode,
+  doc: AlterDoc,
+  actor: DocumentActor,
+  at: string,
+  settings: ReturnType<SpaceStoreHandle['getStorageSettings']>,
+): void {
+  const previous = node.content;
+  const content = serializeAlterDoc(doc);
+  node.content = content;
+  touchNodeContent(data, node, actor, at, settings);
+  if (content === previous) return;
+  cascadeDeletedComments(
+    data.comments,
+    node.id,
+    doc.blocks,
+    at,
+  );
 }
 
 function touchNodeContent(
@@ -427,9 +468,33 @@ export function createDocumentService(
 ): DocumentService {
   const { store } = options;
   const now = options.now ?? (() => new Date());
+  // The write identity is bound at construction; `system` is an op-log
+  // provenance value, not a writable identity.
+  if (options.actor !== 'user' && options.actor !== 'alter')
+    throw new Error('DocumentService 需要明确的写入身份（user/alter）');
+  const actor: SpaceActor = options.actor;
+  const creator = creatorOf(actor);
 
   function topLevelOf(node: SpaceNode): AlterDoc {
     return loadDocument(node);
+  }
+
+  /**
+   * Refuse to hand out a stored document above the write limit.
+   *
+   * The limit is enforced when content is written, but content can grow past it
+   * by repeated appends (each save is checked against its own new size, and a
+   * legacy/hand-edited row can be larger still). Returning such a document puts
+   * the editor in a state where every further save fails for good; failing the
+   * read instead keeps the failure explicit and recoverable.
+   */
+  function assertReadableSize(docId: string, content: string): void {
+    const bytes = Buffer.byteLength(content, 'utf8');
+    if (bytes > MAX_DOCUMENT_BYTES)
+      throw new DocumentError(
+        'doc/too-large',
+        `文档 ${docId} 序列化后 ${bytes} 字节超过上限 ${MAX_DOCUMENT_BYTES}；请用版本历史恢复到更小的版本，或从备份恢复`,
+      );
   }
 
   const api: DocumentService = {
@@ -437,6 +502,7 @@ export function createDocumentService(
       const node = findNode(store.read(), docId);
       if (node === undefined) throw new DocumentError('doc/not-found', '文档不存在');
       const doc = loadDocument(node);
+      assertReadableSize(docId, node.content);
       return { docId, revision: doc.revision, title: node.title, doc };
     },
 
@@ -548,7 +614,6 @@ export function createDocumentService(
     },
 
     async applyOperations(input) {
-      const actor = input.actor ?? 'alter';
       const at = nowIsoOf(now);
       const settings = store.getStorageSettings();
 
@@ -596,10 +661,14 @@ export function createDocumentService(
           actor,
         });
         const revision = doc.revision + 1;
-        const nextDoc: AlterDoc = { ...result.doc, revision };
-        const content = serializeAlterDoc(nextDoc);
-        node.content = content;
-        touchNodeContent(data, node, actor, at, settings);
+        writeDocumentBody(
+          data,
+          node,
+          { ...result.doc, revision },
+          actor,
+          at,
+          settings,
+        );
         const op: DocumentOpRecord = {
           id: newOperationId(),
           docId: input.docId,
@@ -633,11 +702,10 @@ export function createDocumentService(
         };
         if (op.result !== undefined) op.result = response as unknown as JsonValue;
         return response;
-      });
+      }, actor);
     },
 
     async undo(input) {
-      const actor = input.actor ?? 'alter';
       const at = nowIsoOf(now);
       const settings = store.getStorageSettings();
       return store.transactDocument((data, sidecar) => {
@@ -669,9 +737,7 @@ export function createDocumentService(
           { sidecar, actor, trusted: true },
         );
         const revision = doc.revision + 1;
-        const content = serializeAlterDoc({ ...result.doc, revision });
-        node.content = content;
-        touchNodeContent(data, node, actor, at, settings);
+        writeDocumentBody(data, node, { ...result.doc, revision }, actor, at, settings);
         const op: DocumentOpRecord = {
           id: newOperationId(),
           docId: input.docId,
@@ -692,11 +758,10 @@ export function createDocumentService(
           undoToken: op.id,
           warnings: [],
         };
-      });
+      }, actor);
     },
 
     async restoreVersion(input) {
-      const actor = input.actor ?? 'alter';
       const at = nowIsoOf(now);
       const settings = store.getStorageSettings();
       return store.transactDocument((data, sidecar) => {
@@ -741,10 +806,8 @@ export function createDocumentService(
           trusted: true,
         });
         const revision = doc.revision + 1;
-        const content = serializeAlterDoc({ ...result.doc, revision });
-        node.content = content;
         node.title = version.title;
-        touchNodeContent(data, node, actor, at, settings);
+        writeDocumentBody(data, node, { ...result.doc, revision }, actor, at, settings);
         sidecar.appendOp({
           id: newOperationId(),
           docId: input.docId,
@@ -763,11 +826,10 @@ export function createDocumentService(
           diff: result.diff,
           warnings: [],
         };
-      });
+      }, actor);
     },
 
     async generate(input) {
-      const actor = input.actor ?? 'alter';
       const at = nowIsoOf(now);
       const settings = store.getStorageSettings();
 
@@ -792,11 +854,9 @@ export function createDocumentService(
             { sidecar, actor },
           );
           const revision = doc.revision + 1;
-          const content = serializeAlterDoc({ ...result.doc, revision });
-          node.content = content;
           if (typeof input.title === 'string' && input.title.trim() !== '')
             node.title = input.title.trim();
-          touchNodeContent(data, node, actor, at, settings);
+          writeDocumentBody(data, node, { ...result.doc, revision }, actor, at, settings);
           sidecar.appendOp({
             id: newOperationId(),
             docId: documentId,
@@ -814,7 +874,7 @@ export function createDocumentService(
             changedBlockIds: result.diff.changedBlockIds,
             title: node.title,
           };
-        });
+        }, actor);
       }
 
       if (input.spaceId === undefined || input.spaceId.trim() === '')
@@ -836,7 +896,7 @@ export function createDocumentService(
           spaceId,
           title: input.title?.trim() ?? '',
           parentId: input.parent ?? null,
-          creator: actor === 'alter' ? 'alter' : 'me',
+          creator,
           blocks,
           actor,
           at,
@@ -848,7 +908,7 @@ export function createDocumentService(
           changedBlockIds: blocks.map((block) => block.id),
           title: node.title,
         };
-      });
+      }, actor);
     },
 
     async createNote(input) {
@@ -859,14 +919,14 @@ export function createDocumentService(
           spaceId: input.spaceId,
           title: input.title?.trim() ?? '',
           parentId: input.parentId ?? null,
-          creator: 'me',
+          creator,
           blocks: [],
-          actor: 'user',
+          actor,
           at,
           settings,
         });
         return { ...node };
-      });
+      }, actor);
     },
 
     async getObject(objectId) {
@@ -884,7 +944,6 @@ export function createDocumentService(
             payload: input.payload,
           },
         ],
-        ...(input.actor === undefined ? {} : { actor: input.actor }),
       });
       const node = findNode(store.read(), input.docId);
       const block =

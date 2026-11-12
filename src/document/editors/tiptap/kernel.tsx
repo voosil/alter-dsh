@@ -1,18 +1,16 @@
 /**
- * React mount for the Tiptap kernel + the kernel-selection preference.
+ * React mount for the AST-native editor kernel.
  *
- * Both kernels mount through the same shape (`EditorKernelProps`), so the shell
- * only decides which one to render. The choice is a UI preference and lives in
- * localStorage — business data never does (Host is the only authority).
- *
- * The new kernel is **off by default**: `legacy` stays the default until the
- * parity checklist is signed off (design §6). The switch exists so the parity
- * review can compare both kernels side by side on the same document.
+ * This is the only kernel the document page mounts (`EditorKernelProps` is the
+ * whole seam). The mount keeps the page-facing handle and lifecycle: a prop
+ * revision change rebuilds the editor in place (external reload), comment
+ * updates repaint without editing, and unmount destroys everything.
  *
  * @module @alter-dsh/space/document/editors/tiptap/kernel
  */
 import { useEffect, useRef, type ReactElement } from 'react';
 import type {
+  EditorBlockType,
   EditorKernel,
   EditorKernelListener,
   EditorKernelProps,
@@ -38,6 +36,15 @@ export interface MountedTiptapKernel {
       href: string;
       label: string;
     }): void;
+    /**
+     * Apply one block conversion chosen from the page's 文本类型 menu.
+     *
+     * The menu is a page-owned frozen component (it needs the React `Menu`
+     * from `@alter/ui-system`), so the page sends the choice back here.
+     */
+    applyBlockType(type: EditorBlockType): void;
+    /** Block type at the caret, for the menu's active item. */
+    activeBlockType(): EditorBlockType;
   };
 }
 
@@ -47,12 +54,18 @@ export type TiptapKernelMount = MountedTiptapKernel;
 /**
  * Mount the Tiptap kernel for one document body.
  *
+ * `getProps` is read on every render instead of capturing the first props: the
+ * page reloads the body by passing a new `document`/`revision` (version
+ * restore, conflict reload, draft recovery), and a frozen snapshot would leave
+ * the live body stale — the next save would then overwrite the restored
+ * content with what the kernel kept showing.
+ *
  * The component renders an empty host element; the ProseMirror view is created
  * in an effect (it needs a real DOM node) and destroyed on unmount. `load`
  * replaces the body when the base revision changes, without reporting a change.
  */
 export function mountTiptapKernel(
-  props: EditorKernelProps,
+  getProps: () => EditorKernelProps,
   hooks: {
     /** Extra surface class the frozen stylesheet expects (`.surface`). */
     surfaceClassName?: string;
@@ -80,9 +93,17 @@ export function mountTiptapKernel(
 
   const kernel: EditorKernel = {
     kind: 'tiptap',
-    base: { doc: props.document, revision: props.revision },
+    // Live view of the body identity: the page may reload the same doc.
+    base: {
+      get doc() {
+        return getProps().document;
+      },
+      get revision() {
+        return getProps().revision;
+      },
+    },
     capture() {
-      if (mounted === null) return props.document.blocks;
+      if (mounted === null) return getProps().document.blocks;
       const captured = pmDocToBlocks(mounted.instance.capture());
       for (const warning of captured.warnings) notify('onNotice', warning);
       return captured.value;
@@ -108,6 +129,9 @@ export function mountTiptapKernel(
 
   const Component = function TiptapEditorKernel(): ReactElement {
     const hostRef = useRef<HTMLDivElement>(null);
+    // Fresh props for this render: `revision`/`comments` changes are handled by
+    // the effects below instead of being frozen at mount time.
+    const props = getProps();
 
     useEffect(() => {
       const host = hostRef.current;
@@ -136,23 +160,48 @@ export function mountTiptapKernel(
         onLinkEdit: (detail) => {
           for (const listener of listeners) listener.onLinkEditRequest?.(detail);
         },
+        onCommentQuotesChange: (updates) => {
+          for (const listener of listeners) {
+            listener.onCommentQuotesChange?.(updates);
+          }
+        },
+        onCommentAtCaretChange: (commentId) => {
+          for (const listener of listeners) {
+            listener.onCommentAtCaretChange?.(commentId);
+          }
+        },
+        onOpenWeb: (url) => {
+          for (const listener of listeners) listener.onOpenWeb?.(url);
+        },
+        onOpenDoc: (docId) => {
+          for (const listener of listeners) listener.onOpenDoc?.(docId);
+        },
+        onTextType: (anchor) => {
+          for (const listener of listeners) listener.onTextTypeRequest?.(anchor);
+        },
+        ...(props.importAsset === undefined
+          ? {}
+          : { importAsset: props.importAsset }),
+        ...(props.hasDoc === undefined ? {} : { hasDoc: props.hasDoc }),
+        ...(props.docPath === undefined ? {} : { docPath: props.docPath }),
+        ...(props.resolveDoc === undefined
+          ? {}
+          : { resolveDoc: props.resolveDoc }),
+        ...(hooks.surfaceClassName === undefined
+          ? {}
+          : { surfaceClassName: hooks.surfaceClassName }),
+        ...(hooks.placeholder === undefined
+          ? {}
+          : { placeholder: hooks.placeholder }),
       });
-      if (hooks.surfaceClassName !== undefined) {
-        // The ProseMirror view creates its own editable element inside the
-        // host; both carry the frozen surface class so the stylesheet applies.
-        host.classList.add(hooks.surfaceClassName);
-        instance.editor.view.dom.classList.add(hooks.surfaceClassName);
-      }
-      if (hooks.placeholder !== undefined) {
-        instance.editor.view.dom.setAttribute(
-          'data-placeholder',
-          hooks.placeholder,
-        );
-      }
       mounted = { instance, host };
       // Expose the live view for diagnostics and wiring tests; it is a DOM
-      // property, never serialized and never part of the document AST.
-      (host as HTMLElement & { pmView?: unknown }).pmView = instance.editor.view;
+      // property, never serialized and never part of the document AST. It is a
+      // getter because an external reload rebuilds the editor (new view).
+      Object.defineProperty(host, 'pmView', {
+        configurable: true,
+        get: () => mounted?.instance.editor.view,
+      });
       return () => {
         instance.destroy();
         if (mounted?.instance === instance) mounted = null;
@@ -161,16 +210,35 @@ export function mountTiptapKernel(
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [props.docId]);
 
+    // The body was created from the first document; only a *changed* identity
+    // reloads it. Reloading on the first effect run would reset the undo stack
+    // and the caret right after mount.
+    const loadedKeyRef = useRef<string | null>(null);
     useEffect(() => {
       // A new base revision means "external reload": replace the body without
       // reporting an edit (the save controller owns the base revision).
       if (mounted === null) return;
+      const key = `${props.docId}:${props.revision}`;
+      if (loadedKeyRef.current === null) {
+        loadedKeyRef.current = key;
+        return;
+      }
+      if (loadedKeyRef.current === key) return;
+      loadedKeyRef.current = key;
       mounted.instance.load(props.document);
     }, [props.docId, props.revision]);
 
+    // Comment updates are view-only repaints; an unchanged list (the page
+    // re-renders on every edit) must not dispatch a transaction per keystroke.
+    const commentSignatureRef = useRef<string | null>(null);
     useEffect(() => {
-      // Comment list / active id changes are decoration updates, not edits.
       if (mounted === null) return;
+      const signature = JSON.stringify([
+        props.activeCommentId ?? null,
+        props.comments.map((comment) => [comment.id, comment.quote]),
+      ]);
+      if (commentSignatureRef.current === signature) return;
+      commentSignatureRef.current = signature;
       updateCommentExtensionOptions(
         mounted.instance.editor.view,
         props.comments,
@@ -188,6 +256,12 @@ export function mountTiptapKernel(
     editorApi: {
       applyLinkEdit(input) {
         mounted?.instance.applyLinkEdit(input);
+      },
+      applyBlockType(type) {
+        mounted?.instance.applyBlockType(type);
+      },
+      activeBlockType() {
+        return mounted?.instance.activeBlockType() ?? 'p';
       },
     },
   };

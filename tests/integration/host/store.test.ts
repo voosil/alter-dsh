@@ -68,7 +68,7 @@ describe('SQLite Space store', () => {
   it('persists entity changes and reloads them', async () => {
     const dir = await tempDir();
     const store = await openSpaceStore({ directory: dir, now: fixedNow });
-    await store.update((data) => {
+    await store.updateAs('user', (data) => {
       data.spaces.push({
         id: 'sp-a',
         name: 'A',
@@ -96,11 +96,11 @@ describe('SQLite Space store', () => {
   it('preserves array order across deletes and inserts', async () => {
     const dir = await tempDir();
     const store = await openSpaceStore({ directory: dir, now: fixedNow });
-    await store.update((data) => {
+    await store.updateAs('user', (data) => {
       const nodes = data.nodes as unknown as Array<Record<string, unknown>>;
       nodes.push(note('a', DEFAULT_SPACE_ID), note('b', DEFAULT_SPACE_ID), note('c', DEFAULT_SPACE_ID));
     });
-    await store.update((data) => {
+    await store.updateAs('user', (data) => {
       const nodes = data.nodes as unknown as Array<Record<string, unknown>>;
       nodes.splice(1, 1); // remove b
       nodes.unshift(note('z', DEFAULT_SPACE_ID));
@@ -118,11 +118,12 @@ describe('SQLite Space store', () => {
     const store = await openSpaceStore({ directory: dir, now: fixedNow });
     await Promise.all(
       Array.from({ length: 20 }, (_, index) =>
-        store.update((data) => {
+        store.updateAs('user', (data) => {
           (data.thoughts as unknown as Array<Record<string, unknown>>).push({
             id: `thought-${index}`,
             spaceId: DEFAULT_SPACE_ID,
             content: `t${index}`,
+            creator: 'me',
             createdAt: fixedNow().toISOString(),
           });
         }),
@@ -217,7 +218,7 @@ describe('SQLite Space store', () => {
       return;
     const dir = await tempDir();
     const store = await openSpaceStore({ directory: dir, now: fixedNow });
-    await store.update((data) => {
+    await store.updateAs('user', (data) => {
       (data.nodes as unknown as Array<Record<string, unknown>>).push(
         note('node-keep', DEFAULT_SPACE_ID),
       );
@@ -271,7 +272,7 @@ describe('SQLite Space store', () => {
     const dir = await tempDir();
     const file = join(dir, SPACE_DB_FILE);
     const store = await openSpaceStore({ directory: dir, now: fixedNow });
-    await store.update((data) => {
+    await store.updateAs('user', (data) => {
       (data.nodes as unknown as Array<Record<string, unknown>>).push(
         note('node-v1', DEFAULT_SPACE_ID),
       );
@@ -326,14 +327,14 @@ describe('SQLite Space store', () => {
         id: 'op_1',
         docId: 'node-doc',
         revision: 1,
-        actor: 'alter',
+        actor: 'user',
         ops: [{ op: 'update_attrs', target: 'blk_1', attrs: {} }],
         inverseOps: [],
         changedBlockIds: ['blk_1'],
         diff: { applied: [], changedBlockIds: ['blk_1'] },
         createdAt: fixedNow().toISOString(),
       });
-    });
+    }, 'user');
     expect(store.read().nodes.map((node) => node.id)).toContain('node-doc');
     expect(store.getDocumentObject('obj_1')?.payload).toEqual({
       root: { id: 'n1', text: 'root' },
@@ -359,7 +360,7 @@ describe('SQLite Space store', () => {
           createdAt: fixedNow().toISOString(),
         });
         throw new Error('boom');
-      }),
+      }, 'user'),
     ).rejects.toThrow('boom');
     expect(store.read().nodes.map((node) => node.id)).not.toContain(
       'node-rollback',

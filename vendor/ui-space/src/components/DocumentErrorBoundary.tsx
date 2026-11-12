@@ -11,14 +11,14 @@
  * fallback borrows the document shell look without touching the frozen
  * stylesheet or the normal-state DOM.
  *
- * Failures are handed to `reportLegacyDocumentError` from `componentDidCatch`
+ * Failures are handed to `reportDocumentError` from `componentDidCatch`
  * so a crashing client leaves a structured trace (E1/E2).
  *
  * @module @alter/ui-space/components/DocumentErrorBoundary
  */
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { Button } from '@alter/ui-system';
-import { reportLegacyDocumentError } from '@alter-space/legacy-adapter';
+import { reportDocumentError } from '@alter-space/document-runtime';
 
 /** Existing document-shell class names the fallback reuses. */
 export interface DocumentErrorBoundaryClassNames {
@@ -59,7 +59,7 @@ export class DocumentErrorBoundary extends Component<
   }
 
   componentDidCatch(error: Error, _info: ErrorInfo): void {
-    reportLegacyDocumentError('render', error, {
+    reportDocumentError('render', error, {
       docId: this.props.docId,
       operation: 'render',
     });

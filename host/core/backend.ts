@@ -35,6 +35,32 @@ export interface BackendConnectionStatus {
 }
 
 /**
+ * The Space structure surface Agent tools call: discovery reads plus node
+ * lifecycle writes. Always bound to the `alter` write identity — locally the
+ * alter authority stack, in server mode the bridge's stamped tool port.
+ * Space-level governance (create/delete/reorder spaces, collaborators) is not
+ * part of this surface.
+ */
+export type SpaceToolApi = Pick<
+  SpaceService,
+  | 'listSpaces'
+  | 'getSpace'
+  | 'listArchivedSpaces'
+  | 'listNodes'
+  | 'getNode'
+  | 'search'
+  | 'getOverview'
+  | 'listDeleted'
+  | 'createNode'
+  | 'saveNode'
+  | 'moveNode'
+  | 'setPinned'
+  | 'setArchived'
+  | 'deleteNode'
+  | 'restoreNode'
+>;
+
+/**
  * One authority implementation. The route layer, Agent tools and workspace
  * bridge only see this interface.
  */
@@ -52,6 +78,8 @@ export interface SpaceBackend {
   fetchAsset(request: Request): Promise<Response>;
   /** Agent tool surface over the document model. */
   readonly document: DocumentToolApi;
+  /** Agent tool surface for Space discovery and node lifecycle (alter). */
+  readonly space: SpaceToolApi;
   /** Agent tool surface for importing assets. */
   readonly assets: DocumentToolAssetApi;
   /** Present only while the local authority owns the data. */
@@ -90,8 +118,10 @@ export function createLocalBackend(
   const { runtime } = options;
   const handler = createSpaceRpc({
     service: runtime.service,
+    agentService: runtime.agentService,
     storage: runtime.storage,
     document: runtime.document,
+    agentDocument: runtime.agentDocument,
     assets: runtime.assets,
     workspaceSync: options.workspaceSync ?? (() => undefined),
   });
@@ -103,7 +133,10 @@ export function createLocalBackend(
     rpc: (endpoint, payload, signal) =>
       handler(endpoint, payload, signal ?? new AbortController().signal, undefined),
     fetchAsset: (request) => assetRoute(request),
-    document: runtime.document,
+    document: runtime.agentDocument,
+    // Raw alter-stack port; the migration-freeze proxy wraps it at the plugin
+    // core (same shape as the document proxy).
+    space: runtime.agentService,
     assets: runtime.assets,
     local: { store: runtime.store, service: runtime.service },
     async close() {

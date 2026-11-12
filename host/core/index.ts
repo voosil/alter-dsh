@@ -17,6 +17,7 @@ import {
   type DocumentToolAssetApi,
   type ToolsLike,
 } from '../document/editors/legacy/tools.js';
+import { registerSpaceTools } from '../authority/space-tools.js';
 import {
   createConnectionSettingsStore,
   type CredentialStoreLike,
@@ -27,7 +28,7 @@ import {
   type ApprovalLike,
 } from '../control/agent-settings-tool.js';
 import { registerAgentMigrationTool } from '../control/agent-migration-tool.js';
-import type { SpaceBackend } from './backend.js';
+import type { SpaceBackend, SpaceToolApi } from './backend.js';
 import { SpaceModeController } from './mode.js';
 import { createSettingsRpcHandler } from '../control/settings-rpc.js';
 import {
@@ -58,6 +59,8 @@ export interface SpacePluginConfig {
   dataDir?: unknown;
   /** Set `false` to keep the Agent document tools unregistered. */
   documentTools?: unknown;
+  /** Set `false` to keep the Agent space structure tools unregistered. */
+  spaceTools?: unknown;
 }
 
 interface LoggerLike {
@@ -228,6 +231,63 @@ function createDocumentProxy(
     updateObject: (input) => {
       guard();
       return source().updateObject(input);
+    },
+  };
+}
+
+/**
+ * Live proxy so Agent space tools always call the active authority backend.
+ * Reads stay available during a migration freeze; structure writes refuse
+ * with the stable `migration/read-only` code (same shape as the document
+ * proxy, whose guard the tools surface as a code-carrying error).
+ */
+export function createSpaceProxy(
+  source: () => SpaceToolApi,
+  isLocked: () => boolean,
+): SpaceToolApi {
+  const guard = (): void => {
+    if (isLocked())
+      throw Object.assign(
+        new Error('迁移进行中，空间结构暂时只读；请等待迁移完成'),
+        { code: 'migration/read-only' },
+      );
+  };
+  return {
+    listSpaces: () => source().listSpaces(),
+    getSpace: (id) => source().getSpace(id),
+    listArchivedSpaces: () => source().listArchivedSpaces(),
+    listNodes: (spaceId) => source().listNodes(spaceId),
+    getNode: (id) => source().getNode(id),
+    search: (spaceId, query) => source().search(spaceId, query),
+    getOverview: (spaceId) => source().getOverview(spaceId),
+    listDeleted: (spaceId) => source().listDeleted(spaceId),
+    createNode: (input) => {
+      guard();
+      return source().createNode(input);
+    },
+    saveNode: (id, patch) => {
+      guard();
+      return source().saveNode(id, patch);
+    },
+    moveNode: (id, target) => {
+      guard();
+      return source().moveNode(id, target);
+    },
+    setPinned: (id, pinned) => {
+      guard();
+      return source().setPinned(id, pinned);
+    },
+    setArchived: (id, archived) => {
+      guard();
+      return source().setArchived(id, archived);
+    },
+    deleteNode: (id) => {
+      guard();
+      return source().deleteNode(id);
+    },
+    restoreNode: (id) => {
+      guard();
+      return source().restoreNode(id);
     },
   };
 }
@@ -414,6 +474,10 @@ export async function apply(
       () => mode.current().document,
       () => mode.isMigrationLocked(),
     );
+    const spaceProxy = createSpaceProxy(
+      () => mode.current().space,
+      () => mode.isMigrationLocked(),
+    );
     const assetsProxy: DocumentToolAssetApi = {
       import: (input) => {
         if (mode.isMigrationLocked())
@@ -422,6 +486,7 @@ export async function apply(
       },
     };
     let disposeDocumentTools: (() => void) | undefined;
+    let disposeSpaceTools: (() => void) | undefined;
     let disposeSettingsTool: (() => void) | undefined;
     const attachSettingsTool = (child: HostContextLike): void => {
       const tools = child.tools ?? child.get?.('tools');
@@ -444,9 +509,14 @@ export async function apply(
       };
       disposeSettingsTool = dispose;
       try {
+        // The effect callback runs immediately and its RETURN value is the
+        // teardown: registering must not dispose the tools it just created.
         void child.effect(() => {
-          if (disposeSettingsTool === dispose) disposeSettingsTool = undefined;
-          dispose();
+          const cleanup = () => {
+            if (disposeSettingsTool === dispose) disposeSettingsTool = undefined;
+            dispose();
+          };
+          return cleanup;
         }, 'alter-dsh-space: server settings tool');
       } catch {
         // Keep the registration until unload when the child cannot own it.
@@ -475,11 +545,38 @@ export async function apply(
         // A missing child effect keeps the tools registered until unload.
       }
     };
+    const attachSpaceTools = (child: HostContextLike): void => {
+      const tools = child.tools ?? child.get?.('tools');
+      if (!isToolsLike(tools)) {
+        logger.warn?.(
+          '[alter-dsh-space] DSH 工具服务不可用：空间结构工具未注册',
+        );
+        return;
+      }
+      const dispose = registerSpaceTools(tools, { service: spaceProxy });
+      disposeSpaceTools = dispose;
+      const cleanup = () => {
+        if (disposeSpaceTools === dispose) disposeSpaceTools = undefined;
+        dispose();
+      };
+      try {
+        void child.effect(() => cleanup, 'alter-dsh-space: space tools');
+      } catch {
+        // A missing child effect keeps the tools registered until unload.
+      }
+    };
     if (config.documentTools !== false) {
       if (typeof ctx.inject === 'function') {
         ctx.inject(['tools'], (child) => attachDocumentTools(child));
       } else if (ctx.get !== undefined) {
         attachDocumentTools(ctx);
+      }
+    }
+    if (config.spaceTools !== false) {
+      if (typeof ctx.inject === 'function') {
+        ctx.inject(['tools'], (child) => attachSpaceTools(child));
+      } else if (ctx.get !== undefined) {
+        attachSpaceTools(ctx);
       }
     }
     if (typeof ctx.inject === 'function') {
@@ -559,6 +656,7 @@ export async function apply(
       detachWorkspaceSync?.();
       workspaceSync = undefined;
       disposeDocumentTools?.();
+      disposeSpaceTools?.();
       disposeSettingsTool?.();
       disposeRoute();
       disposeAssetRoute();

@@ -9,7 +9,7 @@
  * @module @alter-dsh/space/remote/bridge
  */
 import { randomUUID } from 'node:crypto';
-import type { BackendConnectionStatus } from '../core/backend.js';
+import type { BackendConnectionStatus, SpaceToolApi } from '../core/backend.js';
 import { isImageMime } from '../document/asset-store.js';
 import {
   applyOperations,
@@ -68,10 +68,10 @@ const OFFLINE_HEARTBEAT_BASE_MS = 20_000;
 const OFFLINE_HEARTBEAT_MAX_MS = 5 * 60_000;
 
 /**
- * Document writes whose provenance is decided at the RPC boundary. The
- * standalone server route is passthrough (it trusts the bridge), so the
- * browser-facing bridge must stamp `user` itself while the Agent document port
- * keeps `alter`; a browser request body can never choose its own actor.
+ * Document writes whose actor ALSO travels inline on the first argument:
+ * offline queue rows store that argument and replay it verbatim, so the
+ * provenance must survive inside the stored input. Every other write carries
+ * the stamp on the envelope only.
  */
 const ACTOR_ENDPOINTS: ReadonlySet<string> = new Set([
   'doc.applyOps',
@@ -81,12 +81,37 @@ const ACTOR_ENDPOINTS: ReadonlySet<string> = new Set([
   'doc.updateObject',
 ]);
 
-/** Stamp the authoritative actor onto one write payload (browser or Agent). */
+/**
+ * Stamp the authoritative origin onto the payload envelope. Applied to EVERY
+ * crossing payload (reads included) so a browser body can never choose its
+ * own actor: the stamp overwrites any caller-supplied value, and the server
+ * route is passthrough that selects the identity stack from this stamp.
+ */
+function stampEnvelope(payload: unknown, actor: 'user' | 'alter'): unknown {
+  if (!isPlainObject(payload)) return payload;
+  return { ...payload, actor };
+}
+
+/** Stamp the actor inline on the first argument (document-write replays). */
 function stampActor(payload: unknown, actor: 'user' | 'alter'): unknown {
   if (!isPlainObject(payload)) return payload;
   const args = argsOf(payload);
   if (args.length === 0 || !isPlainObject(args[0])) return payload;
   return { ...payload, args: [{ ...args[0], actor }, ...args.slice(1)] };
+}
+
+/**
+ * Non-document writes carry identity on the envelope only: strip any
+ * caller-supplied inline actor so a forged value never crosses the hop.
+ */
+function stripInlineActor(payload: unknown): unknown {
+  if (!isPlainObject(payload)) return payload;
+  const args = argsOf(payload);
+  if (args.length === 0 || !isPlainObject(args[0]) || args[0].actor === undefined)
+    return payload;
+  const cleaned = { ...args[0] };
+  delete cleaned.actor;
+  return { ...payload, args: [cleaned, ...args.slice(1)] };
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -170,6 +195,8 @@ export interface RemoteBridge {
   ) => Promise<unknown>;
   readonly fetchAsset: (request: Request) => Promise<Response>;
   readonly document: DocumentToolApi;
+  /** Agent Space structure port; writes are stamped `alter` across the hop. */
+  readonly space: SpaceToolApi;
   readonly assets: DocumentToolAssetApi;
   readonly status: BackendConnectionStatus;
   /** Documents whose queued writes are unsettled, one row per document. */
@@ -561,19 +588,23 @@ export function createRemoteBridge(
     signal: AbortSignal | undefined,
     origin: 'user' | 'alter',
   ): Promise<unknown> {
+    // Provenance is decided here, once, for every endpoint: the envelope
+    // stamp overwrites anything the caller claimed. Reads carry it too so a
+    // forged envelope actor cannot select a stack on the server either.
+    const stamped = stampEnvelope(payload, origin);
     const isRead = isReadEndpoint(endpoint);
     if (isRead) {
-      const args = argsOf(payload);
+      const args = argsOf(stamped);
       const key = cacheKey(endpoint, args);
       const cached = cachedRead(endpoint, args, key);
       if (cached !== undefined && link.state !== 'online') {
         // Stale-while-revalidate: with the link down, a cached answer is
         // served immediately instead of blocking on the 30s request timeout.
-        scheduleRevalidate(endpoint, payload, key);
+        scheduleRevalidate(endpoint, stamped, key);
         return cached;
       }
       try {
-        const result = await client.rpc(endpoint, payload, signal);
+        const result = await client.rpc(endpoint, stamped, signal);
         if (!isPlainObject(result) || result.error === undefined) {
           cache.setJson(key, result);
           if (endpoint === 'doc.get') rememberShadow(result);
@@ -589,10 +620,10 @@ export function createRemoteBridge(
         return errorOf(error);
       }
     }
-    const args = argsOf(payload);
+    const args = argsOf(stamped);
     const outgoing = ACTOR_ENDPOINTS.has(endpoint)
-      ? stampActor(payload, origin)
-      : payload;
+      ? stampActor(stamped, origin)
+      : stripInlineActor(stamped);
     const input = writeInput(outgoing);
     const queueable =
       endpoint === 'doc.applyOps' &&
@@ -720,6 +751,19 @@ export function createRemoteBridge(
                 link = { state: 'error', message: '服务端拒绝了 token，请更新 token' };
                 return;
               }
+              // A capacity answer (503 while a migration freezes the server,
+              // or while it is shutting down) is not a decision about this
+              // write: parking it as `failed` would demand a manual retry for
+              // content that is perfectly valid. Keep it pending and stop the
+              // drain; the heartbeat or the next flush retries it.
+              if (
+                error instanceof RemoteClientError &&
+                error.status !== undefined &&
+                error.status >= 500
+              ) {
+                markOffline(error);
+                return;
+              }
               // Only a genuine business conflict needs the user's decision;
               // every other rejection fails just this entry.
               if (
@@ -794,40 +838,40 @@ export function createRemoteBridge(
    */
   const documentPort: DocumentToolApi = {
     outline: (docId) =>
-      callDocument('doc.outline', [docId]) as ReturnType<
+      callAlter('doc.outline', [docId]) as ReturnType<
         DocumentToolApi['outline']
       >,
     read: (docId, readOptions) =>
-      callDocument('doc.read', [docId, readOptions]) as ReturnType<
+      callAlter('doc.read', [docId, readOptions]) as ReturnType<
         DocumentToolApi['read']
       >,
     search: (input) =>
-      callDocument('doc.search', [input]) as ReturnType<
+      callAlter('doc.search', [input]) as ReturnType<
         DocumentToolApi['search']
       >,
     applyOperations: (input) =>
-      callDocument('doc.applyOps', [input]) as ReturnType<
+      callAlter('doc.applyOps', [input]) as ReturnType<
         DocumentToolApi['applyOperations']
       >,
     generate: (input) =>
-      callDocument('doc.generate', [input]) as ReturnType<
+      callAlter('doc.generate', [input]) as ReturnType<
         DocumentToolApi['generate']
       >,
     undo: (input) =>
-      callDocument('doc.undo', [input]) as ReturnType<
+      callAlter('doc.undo', [input]) as ReturnType<
         DocumentToolApi['undo']
       >,
     getObject: (objectId) =>
-      callDocument('object.get', [objectId]) as ReturnType<
+      callAlter('object.get', [objectId]) as ReturnType<
         DocumentToolApi['getObject']
       >,
     updateObject: (input) =>
-      callDocument('doc.updateObject', [input]) as ReturnType<
+      callAlter('doc.updateObject', [input]) as ReturnType<
         DocumentToolApi['updateObject']
       >,
   };
 
-  async function callDocument(endpoint: string, args: unknown[]): Promise<unknown> {
+  async function callAlter(endpoint: string, args: unknown[]): Promise<unknown> {
     const result = await dispatch(endpoint, { op: endpoint, args }, undefined, 'alter');
     if (isPlainObject(result)) {
       if (result.error !== undefined) {
@@ -843,6 +887,42 @@ export function createRemoteBridge(
     }
     return result;
   }
+
+  /**
+   * Agent Space structure port. Reads take the existing cache path; writes
+   * are stamped `alter` and, unlike browser document edits, are never queued:
+   * offline structure writes fail explicitly (`remote/unavailable`), the same
+   * semantics the browser sees for uncached operations.
+   */
+  const spacePort: SpaceToolApi = {
+    listSpaces: () => callAlter('space.listSpaces', []) as ReturnType<SpaceToolApi['listSpaces']>,
+    getSpace: (id) => callAlter('space.getSpace', [id]) as ReturnType<SpaceToolApi['getSpace']>,
+    listArchivedSpaces: () =>
+      callAlter('space.listArchivedSpaces', []) as ReturnType<SpaceToolApi['listArchivedSpaces']>,
+    listNodes: (spaceId) =>
+      callAlter('space.listNodes', [spaceId]) as ReturnType<SpaceToolApi['listNodes']>,
+    getNode: (id) => callAlter('space.getNode', [id]) as ReturnType<SpaceToolApi['getNode']>,
+    search: (spaceId, query) =>
+      callAlter('space.search', [spaceId, query]) as ReturnType<SpaceToolApi['search']>,
+    getOverview: (spaceId) =>
+      callAlter('space.getOverview', [spaceId]) as ReturnType<SpaceToolApi['getOverview']>,
+    listDeleted: (spaceId) =>
+      callAlter('space.listDeleted', [spaceId]) as ReturnType<SpaceToolApi['listDeleted']>,
+    createNode: (input) =>
+      callAlter('space.createNode', [input]) as ReturnType<SpaceToolApi['createNode']>,
+    saveNode: (id, patch) =>
+      callAlter('space.saveNode', [id, patch]) as ReturnType<SpaceToolApi['saveNode']>,
+    moveNode: (id, target) =>
+      callAlter('space.moveNode', [id, target]) as ReturnType<SpaceToolApi['moveNode']>,
+    setPinned: (id, pinned) =>
+      callAlter('space.setPinned', [id, pinned]) as ReturnType<SpaceToolApi['setPinned']>,
+    setArchived: (id, archived) =>
+      callAlter('space.setArchived', [id, archived]) as ReturnType<SpaceToolApi['setArchived']>,
+    deleteNode: (id) =>
+      callAlter('space.deleteNode', [id]) as ReturnType<SpaceToolApi['deleteNode']>,
+    restoreNode: (id) =>
+      callAlter('space.restoreNode', [id]) as ReturnType<SpaceToolApi['restoreNode']>,
+  };
 
   /**
    * List the documents whose queued writes have not reached the server.
@@ -1002,9 +1082,10 @@ export function createRemoteBridge(
       });
     },
     document: documentPort,
+    space: spacePort,
     assets: {
       async import(input) {
-        const result = await callDocument('doc.importAsset', [
+        const result = await callAlter('doc.importAsset', [
           {
             mime: input.mime,
             dataBase64: Buffer.from(input.data).toString('base64'),

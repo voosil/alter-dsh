@@ -226,9 +226,10 @@ export interface SpaceImportedAsset {
 /** Browser upload input for `doc.importFile`. */
 export interface SpaceImportFileInput {
   /**
-   * Whitelisted file media type: the image types, `application/pdf`,
-   * `text/plain`, `text/markdown`, `text/csv`, `application/json`,
-   * `application/zip` or an Office Open XML document type.
+   * Browser-reported file media type (`File.type`; may be empty for unknown
+   * extensions). The Host keeps a known type as-is and stores everything else
+   * as `application/octet-stream`, served as an attachment; the value comes
+   * back as `SpaceImportedFile.mime`.
    */
   mime: string;
   /** Pure base64 bytes (no data-URL prefix, no line breaks); ≤ 8 MiB decoded. */
@@ -466,6 +467,8 @@ export interface SpaceMigrationPreflight {
     hasUserData: boolean;
   };
   needsOverwrite: boolean;
+  /** Overwriting would drop server rows the local database does not have. */
+  overwriteDropsServerData: boolean;
   replacesLocal: boolean;
   ok: boolean;
   message?: string;

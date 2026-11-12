@@ -1,4 +1,4 @@
-import type { SpaceService } from '@alter/protocol';
+import type { SpaceActor, SpaceService } from '@alter/protocol';
 import type { SpaceHubReader } from './contracts.js';
 import { openSpaceStore } from './store.js';
 import { createContentService } from './service.js';
@@ -9,6 +9,8 @@ export interface CreateSpaceServiceOptions {
   directory: string;
   /** Business clock; tests inject a fixed clock. */
   now?: () => Date;
+  /** Write identity this service instance speaks for (no default). */
+  actor: SpaceActor;
 }
 
 export type SpaceServiceHandle = SpaceService & { dispose(): Promise<void> };
@@ -33,8 +35,13 @@ export async function createSpaceService(
       store.read().thoughts.filter((item) => item.spaceId === id),
     events: (id) => store.read().events.filter((item) => item.spaceId === id),
   };
-  const hub = createHubService({ store, reader, now });
-  const service = createContentService({ store, hub, now });
+  const hub = createHubService({ store, reader, now, actor: options.actor });
+  const service = createContentService({
+    store,
+    hub,
+    now,
+    actor: options.actor,
+  });
   return Object.assign(service, { dispose: () => store.close() });
 }
 

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createDocumentAssetRoute } from '../../../host/document/asset-route.js';
 import {
   ASSET_ROUTE_PATH,
+  GENERIC_FILE_MIME,
   MAX_ASSET_BYTES,
   MAX_FILE_BYTES,
   assetFilePath,
@@ -143,7 +144,7 @@ describe('document assets', () => {
       expect(record.mime).toBe(mime);
       expect(assetFilePath(dir, record).endsWith(`.${extension}`)).toBe(true);
     }
-    // Unknown mimes cannot be imported, but legacy rows fall back to `bin`.
+    // Generic/unknown mimes store as `octet-stream` and land on the `bin` fallback.
     expect(
       assetFilePath(dir, {
         sha256: 'ab'.repeat(32),
@@ -153,27 +154,50 @@ describe('document assets', () => {
     await store.close();
   });
 
-  it('rejects non-whitelisted, empty or oversized files', async () => {
-    const { store, assets } = await setup();
-    for (const mime of [
-      'text/html',
-      'image/svg+xml',
-      'application/javascript',
-      'application/octet-stream',
-    ]) {
-      await expect(
-        assets.importFile({ data: pdf, mime }),
-      ).rejects.toMatchObject({ code: 'object/invalid', message: expect.stringContaining('不支持的文件类型') });
+  it('imports unknown or executable file types as generic attachments', async () => {
+    const { dir, store, assets } = await setup();
+    const cases: Array<[string, string]> = [
+      ['text/html', '页面.html'],
+      ['image/svg+xml', '图标.svg'],
+      ['application/javascript', '脚本.js'],
+      ['application/octet-stream', '未知.bin'],
+      ['application/x-sketch', '设计.sketch'],
+      // Browsers report an empty type for many extensions (e.g. .log/.heic).
+      ['', '日志.log'],
+    ];
+    for (const [index, [mime, name]] of cases.entries()) {
+      const record = await assets.importFile({
+        data: new Uint8Array([index + 11, 7]),
+        mime,
+        name,
+      });
+      // Executable/inline types are never kept: they become a download.
+      expect(record.mime).toBe(GENERIC_FILE_MIME);
+      expect(record.name).toBe(name);
+      expect(assetFilePath(dir, record).endsWith('.bin')).toBe(true);
+      expect((await assets.read(record.id))?.record.mime).toBe(
+        GENERIC_FILE_MIME,
+      );
     }
+    await store.close();
+  });
+
+  it('rejects empty or oversized files with readable Chinese errors', async () => {
+    const { store, assets } = await setup();
     await expect(
       assets.importFile({ data: new Uint8Array(0), mime: 'application/pdf' }),
-    ).rejects.toMatchObject({ code: 'object/invalid' });
-    await expect(
-      assets.importFile({
-        data: new Uint8Array(MAX_FILE_BYTES + 1),
-        mime: 'application/pdf',
-      }),
-    ).rejects.toMatchObject({ code: 'doc/too-large' });
+    ).rejects.toMatchObject({ code: 'object/invalid', message: '文件内容为空' });
+    const tooLarge = assets.importFile({
+      data: new Uint8Array(MAX_FILE_BYTES + 1),
+      mime: 'application/pdf',
+    });
+    await expect(tooLarge).rejects.toMatchObject({
+      code: 'doc/too-large',
+      message: expect.stringContaining('文件超过 8 MiB 上限'),
+    });
+    await expect(tooLarge).rejects.toMatchObject({
+      message: expect.stringContaining(String(MAX_FILE_BYTES)),
+    });
     // The file channel applies its own 8 MiB limit: 4 MiB + 1 is fine here.
     await expect(
       assets.importFile({
@@ -246,6 +270,28 @@ describe('document assets', () => {
     expect(fallback.headers.get('content-disposition')).toContain(
       `filename="${anonymous.id}"`,
     );
+    await store.close();
+  });
+
+  it('serves generic file types as octet-stream attachments', async () => {
+    const { store, assets } = await setup();
+    const route = createDocumentAssetRoute(assets);
+    const record = await assets.importFile({
+      data: pdf,
+      mime: 'application/x-sketch',
+      name: '设计.sketch',
+    });
+    expect(record.mime).toBe(GENERIC_FILE_MIME);
+    const response = await route(
+      new Request(`http://dsh.internal${ASSET_ROUTE_PATH}?id=${record.id}`),
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe(GENERIC_FILE_MIME);
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+    const disposition = response.headers.get('content-disposition') ?? '';
+    expect(disposition.startsWith('attachment;')).toBe(true);
+    expect(disposition).toContain(encodeURIComponent('设计.sketch'));
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(Buffer.from(pdf));
     await store.close();
   });
 });

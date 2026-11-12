@@ -19,7 +19,7 @@ import { getEditorSchema } from '../../../src/document/editors/tiptap/schema';
 
 const editorSchema = getEditorSchema();
 import { NODE_MANIFEST } from '../../../src/document/schema-manifest';
-import type { AlterDoc, BlockNode } from '../../../src/document/types';
+import type { BlockNode } from '../../../src/document/types';
 
 function block(
   id: string,
@@ -30,9 +30,6 @@ function block(
   return { id, type, attrs, ...extra };
 }
 
-function doc(blocks: BlockNode[]): AlterDoc {
-  return { format: 'alter-doc/1', schemaVersion: 1, revision: 1, blocks };
-}
 
 /** Full-coverage document: every node type with representative attributes. */
 function richBlocks(): BlockNode[] {
@@ -226,7 +223,7 @@ describe('AST -> ProseMirror -> AST is lossless', () => {
 });
 
 describe('conversion reports what it cannot represent', () => {
-  it('drops unknown node types with a warning instead of silently', () => {
+  it('degrades unknown node types to a visible placeholder with a warning', () => {
     const result = blocksToPmDoc([
       block('blk_ok', 'paragraph', {}, {
         content: [{ type: 'text', text: '保留' }],
@@ -234,7 +231,22 @@ describe('conversion reports what it cannot represent', () => {
       block('blk_bad', 'notARealNode'),
     ]);
     expect(result.warnings.join('')).toContain('notARealNode');
-    expect(result.value.childCount).toBe(1);
+    // Nothing disappears: the unknown block becomes a paragraph the user sees.
+    expect(result.value.childCount).toBe(2);
+    const placeholder = result.value.child(1);
+    expect(placeholder.type.name).toBe('paragraph');
+    expect(placeholder.attrs['id']).toBe('blk_bad');
+    expect(placeholder.textContent).toContain('不支持的块');
+  });
+
+  it('degrades an atom missing its required reference to a placeholder', () => {
+    const result = blocksToPmDoc([
+      block('blk_img', 'image', { alt: '没有资产' }),
+    ]);
+    expect(result.warnings.join('')).toContain('assetId');
+    const placeholder = result.value.firstChild!;
+    expect(placeholder.type.name).toBe('paragraph');
+    expect(placeholder.textContent).toContain('[图片：缺少资产 id]');
   });
 
   it('drops attributes outside the node contract with a warning', () => {
@@ -346,5 +358,204 @@ describe('schema covers the whole manifest', () => {
     expect(() =>
       editorSchema.nodes['bulletList']!.create(null, [item]).check(),
     ).not.toThrow();
+  });
+});
+
+
+describe('editor-only nodes map back to the AST contract', () => {
+  it('maps task rows to `taskItem` nodes and keeps the checked state', () => {
+    const blocks = normalizeBlocks([
+      block('blk_tasks', 'taskList', {}, {
+        children: [
+          block('blk_done', 'listItem', { checked: true }, {
+            children: [
+              block('blk_done_p', 'paragraph', {}, {
+                content: [{ type: 'text', text: '做完' }],
+              }),
+            ],
+          }),
+          block('blk_todo', 'listItem', { checked: false }, {
+            children: [
+              block('blk_todo_p', 'paragraph', {}, {
+                content: [{ type: 'text', text: '没做' }],
+              }),
+            ],
+          }),
+        ],
+      }),
+    ]);
+    const toPm = blocksToPmDoc(blocks);
+    expect(toPm.warnings).toEqual([]);
+    const list = toPm.value.firstChild!;
+    expect(list.type.name).toBe('taskList');
+    expect(list.firstChild?.type.name).toBe('taskItem');
+    expect(list.firstChild?.attrs['checked']).toBe(true);
+    expect(list.child(1).attrs['checked']).toBe(false);
+    expect(pmDocToBlocks(toPm.value).value).toEqual(blocks);
+  });
+
+  it('renders header rows as `tableHeader` and derives headerRows on capture', () => {
+    const table = (headerRows: number): BlockNode =>
+      block('blk_table', 'table', { headerRows }, {
+        children: [
+          block('blk_r1', 'tableRow', {}, {
+            children: [
+              block('blk_c11', 'tableCell', {}, {
+                content: [{ type: 'text', text: '表头' }],
+              }),
+            ],
+          }),
+          block('blk_r2', 'tableRow', {}, {
+            children: [
+              block('blk_c21', 'tableCell', {}, {
+                content: [{ type: 'text', text: '数据' }],
+              }),
+            ],
+          }),
+        ],
+      });
+
+    const withHeader = blocksToPmDoc([table(1)]);
+    expect(withHeader.warnings).toEqual([]);
+    const rows = withHeader.value.firstChild!;
+    expect(rows.type.name).toBe('table');
+    expect(rows.firstChild?.firstChild?.type.name).toBe('tableHeader');
+    expect(rows.child(1).firstChild?.type.name).toBe('tableCell');
+    expect(pmDocToBlocks(withHeader.value).value).toEqual([table(1)]);
+
+    const withoutHeader = blocksToPmDoc([table(0)]);
+    expect(withoutHeader.value.firstChild?.firstChild?.firstChild?.type.name).toBe(
+      'tableCell',
+    );
+    expect(pmDocToBlocks(withoutHeader.value).value).toEqual([table(0)]);
+  });
+
+  it('keeps card attributes across the editor schema', () => {
+    const blocks = normalizeBlocks([
+      block('blk_img', 'image', {
+        assetId: 'asset_i',
+        alt: '图',
+        caption: '说明',
+        width: '320',
+      }),
+      block('blk_file', 'file', {
+        assetId: 'asset_f',
+        name: 'a.pdf',
+        mime: 'application/pdf',
+        bytes: 12,
+      }),
+      block('blk_bm', 'bookmark', {
+        url: 'https://example.com',
+        title: '示例',
+        description: '描述',
+        icon: 'globe',
+      }),
+      block('blk_doc', 'docLink', { docId: 'doc_1', title: '文档' }),
+      block('blk_mind', 'mindmap', { objectId: 'obj_1', caption: '脑图' }),
+      block('blk_comp', 'component', { objectId: 'obj_2', title: '组件' }),
+    ]);
+    const toPm = blocksToPmDoc(blocks);
+    expect(toPm.warnings).toEqual([]);
+    expect(pmDocToBlocks(toPm.value).value).toEqual(blocks);
+  });
+});
+
+describe('merged table cells keep their spans end to end', () => {
+  const mergedCells = (): BlockNode => ({
+    id: 'blk_table',
+    type: 'table',
+    attrs: { headerRows: 0 },
+    children: [
+      {
+        id: 'blk_row1',
+        type: 'tableRow',
+        attrs: {},
+        children: [
+          {
+            id: 'blk_cell1',
+            type: 'tableCell',
+            attrs: { colspan: 2, rowspan: 2 },
+            content: [{ type: 'text', text: '合并' }],
+          },
+        ],
+      },
+      // The row covered by the rowspan above has no cells of its own.
+      { id: 'blk_row2', type: 'tableRow', attrs: {} },
+    ],
+  });
+
+  it('maps spans into the editor nodes and back without losing them', () => {
+    const blocks = normalizeBlocks([mergedCells()]);
+    const toPm = blocksToPmDoc(blocks);
+    expect(toPm.warnings).toEqual([]);
+    const table = toPm.value.firstChild!;
+    const merged = table.firstChild!.firstChild!;
+    expect(merged.attrs['colspan']).toBe(2);
+    expect(merged.attrs['rowspan']).toBe(2);
+    // The covered row exists but holds no cell (ProseMirror's merge model).
+    expect(table.child(1).childCount).toBe(0);
+    expect(pmDocToBlocks(toPm.value).value).toEqual(blocks);
+  });
+
+  it('omits the implicit span of a plain cell (round-trip is idempotent)', () => {
+    const plain = normalizeBlocks([
+      {
+        id: 'blk_table',
+        type: 'table',
+        attrs: { headerRows: 1 },
+        children: [
+          {
+            id: 'blk_row1',
+            type: 'tableRow',
+            attrs: {},
+            children: [
+              {
+                id: 'blk_head',
+                type: 'tableCell',
+                attrs: {},
+                content: [{ type: 'text', text: '头' }],
+              },
+            ],
+          },
+          {
+            id: 'blk_row2',
+            type: 'tableRow',
+            attrs: {},
+            children: [
+              {
+                id: 'blk_body',
+                type: 'tableCell',
+                attrs: {},
+                content: [{ type: 'text', text: '体' }],
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+    const toPm = blocksToPmDoc(plain);
+    expect(toPm.warnings).toEqual([]);
+    const head = toPm.value.firstChild!.firstChild!.firstChild!;
+    expect(head.attrs['colspan']).toBe(1);
+    expect(head.attrs['rowspan']).toBe(1);
+    // `1` is implicit: capture must not invent attrs on plain documents.
+    expect(pmDocToBlocks(toPm.value).value).toEqual(plain);
+  });
+
+  it('clamps an out-of-contract span to the host limit with a warning', () => {
+    const schema = getEditorSchema();
+    const cell = schema.nodes['tableCell']!.create(
+      { id: 'blk_c', colspan: 99, rowspan: 1 },
+      schema.nodes['paragraph']!.create(null, null),
+    );
+    const row = schema.nodes['tableRow']!.create({ id: 'blk_r' }, cell);
+    const table = schema.nodes['table']!.create({ id: 'blk_t', headerRows: 0 }, row);
+    const pmDoc = schema.nodes['doc']!.create(null, table);
+    const captured = pmDocToBlocks(pmDoc);
+    expect(captured.warnings.join('')).toContain('50');
+    const capturedTable = captured.value[0]!;
+    expect(capturedTable.children![0]!.children![0]!.attrs).toEqual({
+      colspan: 50,
+    });
   });
 });

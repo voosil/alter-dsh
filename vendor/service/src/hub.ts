@@ -124,9 +124,13 @@ export function createHubService({
   store,
   reader,
   now,
+  actor,
 }: SpaceHubServiceOptions): SpaceHubService {
   const at = () => now().toISOString();
   const clone = <T>(value: T): T => structuredClone(value);
+  // 事项/旅程/观察尚未实现（DEP-002）；实现后其创建路径必须从 actor 派生
+  // source/owner，与内容服务同一词表（creatorOf/archiveSourceOf）。
+  void actor;
 
   function requireSpace(spaceId: string) {
     reader.space(spaceId);

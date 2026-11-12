@@ -1,13 +1,14 @@
 ---
 type: acceptance
 status: active
-updated: 2026-11-11
+updated: 2026-11-12
 ---
 
 # 即时编辑器健壮性 · 验收清单
 
-验收对象：空间文档页的旧编辑器——`vendor/ui-space` 1:1 还原的 `DocumentView` 与 contentEditable
-编辑器，经 `src/document/editors/legacy` 适配 `alter-doc/1` AST 的编辑面。
+验收对象：空间文档页——`vendor/ui-space` 冻结的 `DocumentView` 壳层，唯一内核为 AST 原生 Tiptap
+（`src/document/editors/tiptap`），经 `@alter-space/document-runtime`（`src/document/runtime`）以
+`alter-doc/1` AST 与 Document Operations 读写。
 
 结论口径：健壮性以「每条失败路径都有兜底与回归」为验收原则，不以功能齐全为准。A–C 组为 P0，任一
 未通过即整体不通过；D–F 组为 P1；G 组是支撑上述结论的回归与自动化要求。
@@ -15,12 +16,15 @@ updated: 2026-11-11
 状态标记：`[x]` 自动化覆盖；`[~]` 部分落地、待真实运行或仅核心路径覆盖；`[ ]` 未完成。
 现状：A–G 除 D1（真实输入法）、A2（真实强制退出以页内 reload 等价验证）、G3（真实 IME/真实断网
 以等价自动化替代）为 `[~]` 外均由自动化+真实浏览器验收覆盖；清单已由独立复验通过并转 `active`。
+自动证据与真实浏览器记录产生于已退役的 contentEditable 内核时代；当前内核的对应证据见文末。
 对象卡人工入口不在本清单范围（见[编辑器还原验收](editor-experience-p0-p6.md)）。
 
 验收环境：DSH 桌面 profile 与真实桌面应用；测试文档用 Agent 文档工具生成，不手工改库。
-未自动化前按「人工」执行，并在验收时记录可复现步骤。自动证据：`tests/ui/document/editors/legacy/{adapter,view,
-save,recovery,input,resilience,anchors}.test.ts`、`tests/nightly/document/fuzz.test.ts`（G2+Host 引擎回归，夜间全量；门禁跑同一 runner 的小切片）；
-浏览器级证据见验收记录中的真实 GUI 用例。
+未自动化前按「人工」执行，并在验收时记录可复现步骤。自动证据：
+`tests/ui/document/page/{view,recovery,resilience,anchors,document-page}.test.ts`、
+`tests/ui/document/runtime/{adapter,save}.test.ts`、`tests/ui/document/editors/tiptap/*.test.ts`（13 套件）、
+`tests/nightly/document/fuzz.test.ts`（G2+Host 引擎回归，夜间全量；门禁跑同一 runner 的小切片），
+共享页面 harness 在 `tests/support/document-page.ts`；浏览器级证据见验收记录中的真实 GUI 用例。
 
 ## A. 数据安全（P0）
 
@@ -99,7 +103,7 @@ save,recovery,input,resilience,anchors}.test.ts`、`tests/nightly/document/fuzz.
 - [x] **F3 保存延迟**：上限文档保存 → 本地往返 ≤1s，过程中无连续超过 100ms 的长任务卡顿（暂定）。
 - [x] **F4 内存**：同一文档反复打开、关闭 20 次 → 内存无显著增长或泄漏。
 
-- **F 组实测与复跑**：`node scripts/perf/editor-perf.mjs`（开发期脚本，不在 CI 运行；默认从 Electron Cookies 取认证、用 Host RPC 建临时文档并清理）。HEAD ef93946 实测（headless Chrome 157，4990 顶层块 / 509.7 KiB，点击→就绪口径）：F1 273ms（3 次 260/273/282）；F2 输入 p50 9.5ms / p95 15.0ms；F3 保存 762ms（含 700ms 防抖，applyOps 19.7ms，无 >100ms 长任务）；F4 20 次开→关 GC 后 +247KB/+0.82%，DOM 节点/监听器计数恒定；`verdicts.all=true`。预算锁定：F1 ≤3s、F2 p95 ≤50ms、F3 ≤1s、F4 无显著泄漏。限制：headless、CDP 合成输入（无真实 IME/键盘）、F1 不含面板冷启动、F3 轮询 20ms、F4 仅 20 次循环；5000 块与 512KiB 是独立上限（任一），非空段落无法同时逼近，脚本用“3100 段文本+1890 空段”贴近双上限。
+- **F 组实测与复跑**：`node scripts/perf/editor-perf.mjs`（开发期脚本，不在 CI 运行；默认从 Electron Cookies 取认证、用 Host RPC 建临时文档并清理）。已退役 contentEditable 内核时代实测（HEAD ef93946，headless Chrome 157，4990 顶层块 / 509.7 KiB，点击→就绪口径）：F1 273ms（3 次 260/273/282）；F2 输入 p50 9.5ms / p95 15.0ms；F3 保存 762ms（含 700ms 防抖，applyOps 19.7ms，无 >100ms 长任务）；F4 20 次开→关 GC 后 +247KB/+0.82%，DOM 节点/监听器计数恒定；`verdicts.all=true`。预算锁定：F1 ≤3s、F2 p95 ≤50ms、F3 ≤1s、F4 无显著泄漏。限制：headless、CDP 合成输入（无真实 IME/键盘）、F1 不含面板冷启动、F3 轮询 20ms、F4 仅 20 次循环；5000 块与 512KiB 是独立上限（任一），非空段落无法同时逼近，脚本用“3100 段文本+1890 空段”贴近双上限。
 
 ## G. 回归与自动化（P1）
 
@@ -111,7 +115,7 @@ save,recovery,input,resilience,anchors}.test.ts`、`tests/nightly/document/fuzz.
 - [x] **G4 故障注入**：保存超时、宿主重启、数据库忙、回执丢失等故障下输入不丢且可恢复（自动化）。
 - [x] **G5 文档同步**：实施范围、验收状态与代码在同一变更里更新；独立复验通过，清单状态 `active`。
 
-自动证据：`tests/ui/document/editors/legacy/{adapter,view,save,recovery,input,resilience,anchors}.test.ts`、`tests/nightly/document/fuzz.test.ts`；编辑器专题优化（分割线/图片/表格选择、空 checkbox/placeholder、列表与 IME 转换、`---` 即时分割线、slash 菜单与方向固定、引用标记输入与行首删除）另见 `tests/ui/document/editors/legacy/{blocks,caret,convert,slash}.test.ts`；真实浏览器验收（G3）覆盖编辑/保存/刷新、slash、撤销、崩溃草稿、版本恢复脏状态、粘贴 XSS 与资产物化、大文档+保存失败重试、导出/历史/评论、样式/DOM 冻结对照；第 12–14 项（D6/D7）当前以 jsdom 行为测试为准，真实浏览器与真实输入法抽查待补。
+自动证据：见文首列出的 `tests/ui/document/{page,runtime,editors/tiptap}/` 与 `tests/nightly/document/fuzz.test.ts`。编辑器专题优化（分割线/图片/表格选择、空 checkbox/placeholder、列表与 IME 转换、`---` 即时分割线、slash 菜单与方向固定、引用标记输入与行首删除）、D6/D7 与 G3 的真实浏览器记录均产生于已退役的 contentEditable 内核时代；当前内核由 `tests/ui/document/editors/tiptap/` 的对应用例覆盖，真实浏览器与真实输入法抽查仍待补。
 
 ## 相关文档
 

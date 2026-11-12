@@ -109,11 +109,16 @@ export interface RemoteCache {
   touch(seq: number, now: number): void;
   clearConflicts(docId: string): void;
   /**
-   * Re-arm every conflict/failed entry of one document for replay against the
+   * Re-arm the conflicted entries of one document for replay against the
    * server's current revision. The stored business payload is rewritten so the
    * replay sends the new `baseRevision` instead of the stale one that caused
    * the conflict; entries are re-armed in queue order against consecutive
    * revisions because replaying them applies them one after another.
+   *
+   * `failed` entries stay failed: they were rejected by the server for their
+   * content (schema, size, invalid op), so re-arming them would only trade the
+   * real error for a misleading `doc/conflict`. They are resolved by discarding
+   * the document's queue instead.
    */
   requeue(docId: string, baseRevision: number, now: number): number;
   /** Drop every queue entry and the shadow of one document. */
@@ -645,7 +650,7 @@ export function openRemoteCache(
       const rows = db
         .prepare(
           `SELECT seq, payload FROM outbox
-            WHERE doc_id = ? AND state IN ('conflict','failed')
+            WHERE doc_id = ? AND state = 'conflict'
             ORDER BY seq`,
         )
         .all(docId) as { seq: number; payload: string }[];

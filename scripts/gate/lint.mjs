@@ -3,9 +3,9 @@
  * Lint entry point.
  *
  * Runs the oxlint binary shipped in `node_modules/.bin` with the repository
- * config. Any error fails the run; warnings do not (the accepted warning
- * backlog is recorded in `docs/designs/test-strategy.md`). `--strict` treats
- * warnings as failures and is what the nightly job uses.
+ * config. Any error fails the run; warnings do not. The warning backlog is
+ * currently empty, so `--strict` (warnings as failures, used by the nightly job)
+ * is expected to stay green: a new warning is a decision to make, not noise.
  */
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';

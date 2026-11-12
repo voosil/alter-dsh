@@ -757,6 +757,7 @@ async function fuzzPass(sequences: number) {
   const store = await tempStore();
   const service = createDocumentService({
     store,
+    actor: 'user',
     now: () => new Date('2026-11-10T00:00:00.000Z'),
   });
   const report = await runFuzz(service, {
@@ -807,6 +808,7 @@ describe('G2 random operation sequences', () => {
     const store = await tempStore();
     const service = createDocumentService({
       store,
+      actor: 'user',
       now: () => new Date('2026-11-10T00:00:00.000Z'),
     });
     const generated = await service.generate({
@@ -971,6 +973,7 @@ describe('G2 random operation sequences', () => {
     const store = await tempStore();
     const service = createDocumentService({
       store,
+      actor: 'user',
       now: () => new Date('2026-11-10T00:00:00.000Z'),
     });
     const generated = await service.generate({
@@ -1044,6 +1047,7 @@ describe('G2 random operation sequences', () => {
     const store = await tempStore();
     const service = createDocumentService({
       store,
+      actor: 'user',
       now: () => new Date('2026-11-10T00:00:00.000Z'),
     });
     const generated = await service.generate({
@@ -1114,6 +1118,7 @@ describe('regression: undo restores structural children of tableRow', () => {
     const store = await tempStore();
     const service = createDocumentService({
       store,
+      actor: 'user',
       now: () => new Date('2026-11-10T00:00:00.000Z'),
     });
     const docId = await tableDocument(service);
@@ -1134,6 +1139,7 @@ describe('regression: undo restores structural children of tableRow', () => {
     const store = await tempStore();
     const service = createDocumentService({
       store,
+      actor: 'user',
       now: () => new Date('2026-11-10T00:00:00.000Z'),
     });
     const docId = await tableDocument(service);
@@ -1154,6 +1160,7 @@ describe('regression: undo restores structural children of tableRow', () => {
     const store = await tempStore();
     const service = createDocumentService({
       store,
+      actor: 'user',
       now: () => new Date('2026-11-10T00:00:00.000Z'),
     });
     const generated = await service.generate({
@@ -1203,6 +1210,7 @@ describe('regression: undo restores structural children of tableRow', () => {
     const store = await tempStore();
     const service = createDocumentService({
       store,
+      actor: 'user',
       now: () => new Date('2026-11-10T00:00:00.000Z'),
     });
     const docId = await tableDocument(service);
@@ -1244,6 +1252,7 @@ describe('regression: undo of a container update_attrs keeps child ids', () => {
     const store = await tempStore();
     const service = createDocumentService({
       store,
+      actor: 'user',
       now: () => new Date('2026-11-10T00:00:00.000Z'),
     });
     const generated = await service.generate({

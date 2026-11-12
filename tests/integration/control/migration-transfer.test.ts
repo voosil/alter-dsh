@@ -536,6 +536,50 @@ describe('migration data counts', () => {
     const preflight = await transfer.preflight();
     expect(preflight.server.empty).toBe(false);
     expect(preflight.needsOverwrite).toBe(true);
+    // A collaborator the local side lacks is a row the overwrite would drop,
+    // but the preflight counts read the local side of an empty directory, which
+    // has no database to compare against; the flag stays false there and the
+    // overwrite confirmation carries the warning instead.
+    expect(preflight.overwriteDropsServerData).toBe(false);
+  });
+
+  it('flags an overwrite that would drop server rows the local copy lacks', async () => {
+    const server = await startServer();
+    const localDir = await tempDir();
+    await seedLocalData(localDir);
+    // The server knows a collaborator the local database does not.
+    const remote = new RemoteSpaceClient({ baseUrl: server.url, token: TOKEN });
+    await remote.call('space.createAgent', [{ name: '服务端协作者', role: '助手' }]);
+    const transfer = createSpaceMigrationTransfer({
+      directory: localDir,
+      serverUrl: server.url,
+      token: TOKEN,
+    });
+    const preflight = await transfer.preflight();
+    expect(preflight.needsOverwrite).toBe(true);
+    expect(preflight.overwriteDropsServerData).toBe(true);
+  });
+
+  it('does not flag an overwrite that only rewrites the same rows', async () => {
+    const server = await startServer();
+    const localDir = await tempDir();
+    await seedLocalData(localDir);
+    const transfer = createSpaceMigrationTransfer({
+      directory: localDir,
+      serverUrl: server.url,
+      token: TOKEN,
+    });
+    // Push the local database once, then migrate from the same copy: the server
+    // holds exactly what the local side has, so overwriting drops nothing.
+    await transfer.toServer();
+    const again = createSpaceMigrationTransfer({
+      directory: localDir,
+      serverUrl: server.url,
+      token: TOKEN,
+    });
+    const preflight = await again.preflight();
+    expect(preflight.needsOverwrite).toBe(true);
+    expect(preflight.overwriteDropsServerData).toBe(false);
   });
 });
 

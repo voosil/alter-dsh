@@ -71,8 +71,14 @@ export async function startRuntime(
 export interface TestAuthority {
   readonly directory: string;
   readonly store: SpaceStoreHandle;
+  /** User-identity stack (browser entrance). */
   readonly service: SpaceService;
+  /** Alter-identity stack (Agent entrance), same authority. */
+  readonly agentService: SpaceService;
+  /** User-identity document service. */
   readonly document: DocumentService;
+  /** Alter-identity document service. */
+  readonly agentDocument: DocumentService;
   readonly storage: SpaceStorageApi;
 }
 
@@ -88,10 +94,13 @@ export async function startAuthority(
   const now = options.now ?? FIXED_NOW;
   const store = await openSpaceStore({ directory, now });
   dispose(() => store.close());
-  const document = createDocumentService({ store, now });
-  const service = createStructuredSpaceService(createSpaceAuthority(store, now), document);
+  const stacks = createSpaceAuthority(store, now);
+  const document = createDocumentService({ store, now, actor: 'user' });
+  const agentDocument = createDocumentService({ store, now, actor: 'alter' });
+  const service = createStructuredSpaceService(stacks.user, document);
+  const agentService = createStructuredSpaceService(stacks.alter, agentDocument);
   const storage = createSpaceStorage({ store, directory });
-  return { directory, store, service, document, storage };
+  return { directory, store, service, agentService, document, agentDocument, storage };
 }
 
 /** Seed one space with a small AST document; returns both ids. */

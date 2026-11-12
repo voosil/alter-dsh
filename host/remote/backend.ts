@@ -53,6 +53,7 @@ export function createRemoteBackend(
     rpc: (endpoint, payload, signal) => bridge.rpc(endpoint, payload, signal),
     fetchAsset: (request) => bridge.fetchAsset(request),
     document: bridge.document,
+    space: bridge.space,
     assets: bridge.assets,
     queueEntries: () => bridge.queueEntries(),
     resolveQueue: (docId, action) => bridge.resolveQueue(docId, action),

@@ -29,7 +29,7 @@
       "@alter/ui-system": ["vendor/ui-system/src/index.ts"],
       "@alter/ui-system/tokens.css": ["vendor/ui-system/src/styles/tokens.css"],
       "@alter/ui-workbench": ["vendor/ui-workbench/src/index.ts"],
-      "@alter-space/legacy-adapter": ["src/document/editors/legacy/index.ts"]
+      "@alter-space/document-runtime": ["src/document/runtime/index.ts"]
     }
   },
   "include": [

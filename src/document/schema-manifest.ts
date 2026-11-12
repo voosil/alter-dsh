@@ -131,7 +131,12 @@ export const NODE_MANIFEST: Readonly<Record<string, NodeManifestEntry>> = {
   tableCell: {
     type: 'tableCell',
     contentModel: 'inline',
-    attrs: {},
+    // Merged-cell spans are optional and only stored when > 1 (implicit 1);
+    // this mirrors the Host registry, which validates 1..50.
+    attrs: {
+      colspan: { type: 'number' },
+      rowspan: { type: 'number' },
+    },
     marks: MARK_ORDER,
   },
   image: {

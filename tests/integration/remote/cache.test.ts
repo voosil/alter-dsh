@@ -132,6 +132,33 @@ describe('remote cache durability and recovery', () => {
     }
   });
 
+  it('leaves entries the server rejected for their content in the failed state', async () => {
+    const directory = await tempDir();
+    const cache = openRemoteCache(directory, SERVER);
+    try {
+      cache.enqueue(queueEntry(3, 'idem-c'));
+      cache.enqueue(queueEntry(4, 'idem-d'));
+      cache.markConflict('doc-1', '文档已在其他设备修改', 2_000);
+      // The second entry is rejected for its content, not for its revision.
+      cache.fail(2, 'doc/too-large: 文档超过单篇上限', 2_500);
+      expect(cache.counts()).toEqual({ pending: 0, conflicts: 1, failed: 1 });
+
+      // Retrying rewrites the genuine conflict only; the rejected entry keeps
+      // its own error instead of resurfacing as a bogus `doc/conflict`.
+      expect(cache.requeue('doc-1', 9, 3_000)).toBe(1);
+      expect(cache.counts()).toEqual({ pending: 1, conflicts: 0, failed: 1 });
+      const [replayed] = cache.pendingFor('doc-1');
+      expect(replayed?.state).toBe('pending');
+      expect(replayed?.baseRevision).toBe(9);
+      const rejected = cache.listUnsettled().find(
+        (entry) => entry.state === 'failed',
+      );
+      expect(rejected?.lastError).toContain('doc/too-large');
+    } finally {
+      cache.close();
+    }
+  });
+
   it('commits a queued write together with its optimistic shadow', async () => {
     const directory = await tempDir();
     const cache = openRemoteCache(directory, SERVER);

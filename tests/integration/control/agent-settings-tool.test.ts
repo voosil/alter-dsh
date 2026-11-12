@@ -142,7 +142,7 @@ describe('Agent space_settings tool', () => {
   });
 
   it('reads and updates the storage policy through the same tool', async () => {
-    const h = await harness();
+    const h = await harness({ approval: approving() });
     const initial = (await h.execute({ action: 'get' })) as Record<string, unknown>;
     expect(initial.storage).toMatchObject({ historyLimit: expect.any(Number) });
     const updated = (await h.execute({
@@ -151,6 +151,28 @@ describe('Agent space_settings tool', () => {
       snapshot_keep: 2,
     })) as Record<string, unknown>;
     expect(updated.storage).toMatchObject({ historyLimit: 5, snapshotKeep: 2 });
+  });
+
+  it('requires approval before it deletes recovery points', async () => {
+    // Lowering either limit drops versions/snapshots on the next write, so the
+    // tool must not do it silently; raising a limit only adds recovery points.
+    const noApproval = await harness();
+    await expect(
+      noApproval.execute({ action: 'set', snapshot_keep: 2 }),
+    ).rejects.toThrow('审批服务');
+
+    const rejecting = await harness({
+      approval: { request: async () => 'rejected' },
+    });
+    await expect(
+      rejecting.execute({ action: 'set', history_limit: 3 }),
+    ).rejects.toThrow('用户未批准');
+
+    // Out-of-range values fail the tool's own bounds check, not the Host's.
+    const bounded = await harness({ approval: approving() });
+    await expect(
+      bounded.execute({ action: 'set', history_limit: 0 }),
+    ).rejects.toThrow('history_limit 必须在');
   });
 
   it('switches to server mode only after approval and writes an audit line', async () => {

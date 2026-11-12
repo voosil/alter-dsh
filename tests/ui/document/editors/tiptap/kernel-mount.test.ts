@@ -1,23 +1,15 @@
 // @vitest-environment jsdom
 /**
- * Kernel selection is a UI preference, and the Tiptap kernel mounts through the
- * same contract the legacy one does.
+ * The AST-native kernel mounts through the editor-kernel contract.
  *
- * The switch must never change silently: `legacy` is the default, an unknown or
- * corrupt stored value falls back to it, and storage failures never break the
- * editor.
+ * These tests lock the mount lifecycle: the body is created once per document,
+ * an external revision reloads it in place, comments repaint without editing,
+ * and destroying the kernel leaves no listeners behind.
  */
 import { cleanup, render } from '@testing-library/react';
 import { createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mountTiptapKernel } from '../../../../../src/document/editors/tiptap/kernel';
-import {
-  DEFAULT_EDITOR_KERNEL,
-  EDITOR_KERNEL_PREFERENCE_KEY,
-  parseEditorKernelPreference,
-  readEditorKernelPreference,
-  writeEditorKernelPreference,
-} from '../../../../../src/document/editors/kernel-preference';
 import type { EditorKernelProps } from '../../../../../src/document/editors/kernel';
 import type { AlterDoc, BlockNode } from '../../../../../src/document/types';
 
@@ -48,7 +40,6 @@ function props(doc: AlterDoc): EditorKernelProps {
     docId: 'doc-1',
     document: doc,
     revision: doc.revision,
-    baseHtml: '',
     caret: 'none',
     comments: [],
   };
@@ -63,49 +54,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('kernel preference', () => {
-  it('defaults to the AST-native kernel before anything is stored', () => {
-    expect(DEFAULT_EDITOR_KERNEL).toBe('tiptap');
-    expect(readEditorKernelPreference().current).toBe('tiptap');
-  });
-
-  it('round-trips a stored selection', () => {
-    writeEditorKernelPreference({ current: 'tiptap', reviewedAt: '2026-11-11' });
-    expect(readEditorKernelPreference()).toEqual({
-      current: 'tiptap',
-      reviewedAt: '2026-11-11',
-    });
-    expect(localStorage.getItem(EDITOR_KERNEL_PREFERENCE_KEY)).toContain(
-      'tiptap',
-    );
-  });
-
-  it('falls back to the default for corrupt or unknown values', () => {
-    expect(parseEditorKernelPreference('not json').current).toBe('tiptap');
-    expect(parseEditorKernelPreference('{"current":"lexical"}').current).toBe('tiptap');
-    expect(parseEditorKernelPreference('null').current).toBe('tiptap');
-    expect(parseEditorKernelPreference('{}').current).toBe('tiptap');
-  });
-
-  it('never throws when storage is unavailable', () => {
-    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
-      throw new Error('blocked');
-    });
-    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
-      throw new Error('blocked');
-    });
-    expect(() => readEditorKernelPreference()).not.toThrow();
-    expect(() =>
-      writeEditorKernelPreference({ current: 'tiptap' }),
-    ).not.toThrow();
-    expect(readEditorKernelPreference().current).toBe('tiptap');
-  });
-});
-
 describe('Tiptap kernel mount', () => {
   it('mounts, marks itself, and captures the same AST it loaded', () => {
     const doc = sampleDoc();
-    const { Component, kernel } = mountTiptapKernel(props(doc));
+    const { Component, kernel } = mountTiptapKernel(() => props(doc));
     render(createElement(Component));
     expect(
       document.querySelector('[data-editor-kernel="tiptap"]'),
@@ -116,7 +68,7 @@ describe('Tiptap kernel mount', () => {
 
   it('captures edits made through the ProseMirror view', () => {
     const doc = sampleDoc('开始');
-    const { Component, kernel } = mountTiptapKernel(props(doc));
+    const { Component, kernel } = mountTiptapKernel(() => props(doc));
     render(createElement(Component));
     const surface = document.querySelector('.ProseMirror');
     expect(surface?.textContent).toBe('开始');
@@ -125,31 +77,69 @@ describe('Tiptap kernel mount', () => {
 
   it('reports edits through onChange, not HTML', () => {
     const doc = sampleDoc();
-    const { Component, kernel } = mountTiptapKernel(props(doc));
+    const { Component, kernel } = mountTiptapKernel(() => props(doc));
     const onChange = vi.fn();
     kernel.subscribe({ onChange });
     render(createElement(Component));
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  it('mounts a different body for a different base revision', () => {
-    const first = mountTiptapKernel(props(sampleDoc('旧内容')));
-    const result = render(createElement(first.Component));
-    expect(document.body.textContent).toContain('旧内容');
-    // A new base revision is a new mount (the shell remounts by `revision`).
-    const next = mountTiptapKernel({
-      ...props(sampleDoc('新内容')),
-      revision: 2,
-    });
-    result.rerender(createElement(next.Component));
-    cleanup();
-    const remounted = render(createElement(next.Component));
-    expect(remounted.container.textContent).toContain('新内容');
+  it('reloads the same body when the base revision changes', () => {
+    // The page reloads an external change (version restore, another writer) by
+    // passing a new document + revision; the kernel must adopt it in place
+    // instead of keeping the body it mounted with.
+    let current = props(sampleDoc('旧内容'));
+    const { Component, kernel } = mountTiptapKernel(() => current);
+    const view = render(createElement(Component));
+    expect(view.container.textContent).toContain('旧内容');
+    current = { ...props(sampleDoc('新内容')), revision: 2 };
+    view.rerender(createElement(Component));
+    expect(view.container.textContent).toContain('新内容');
+    expect(kernel.capture()).toEqual(sampleDoc('新内容').blocks);
+  });
+
+  it('reloads in place and drops the previous undo history', () => {
+    // An external reload (version restore, conflict, draft recovery) must not
+    // leave the pre-reload body reachable through undo — saving that would
+    // overwrite the restored document.
+    let current = props(sampleDoc('旧内容'));
+    const { Component, kernel } = mountTiptapKernel(() => current);
+    const view = render(createElement(Component));
+    expect(view.container.textContent).toContain('旧内容');
+
+    current = { ...props(sampleDoc('新内容')), revision: 2 };
+    view.rerender(createElement(Component));
+    expect(view.container.textContent).toContain('新内容');
+
+    // Undo has nothing to undo: the reload rebuilt the editor, so the history
+    // cannot reach the pre-reload body.
+    const host = document.querySelector('[data-editor-kernel="tiptap"]') as
+      | (HTMLElement & {
+          pmView?: {
+            state: {
+              plugins: readonly {
+                key: string;
+                getState(state: unknown): unknown;
+              }[];
+            };
+          };
+        })
+      | null;
+    const pmView = host?.pmView;
+    expect(pmView).toBeDefined();
+    const history = pmView!.state.plugins.find((plugin) =>
+      plugin.key.startsWith('history$'),
+    );
+    const historyState = history?.getState(pmView!.state) as
+      | { done?: unknown[] }
+      | undefined;
+    expect(historyState?.done?.length ?? 0).toBe(0);
+    expect(kernel.capture()).toEqual(sampleDoc('新内容').blocks);
   });
 
   it('stops reporting after destroy', () => {
     const doc = sampleDoc();
-    const { Component, kernel } = mountTiptapKernel(props(doc));
+    const { Component, kernel } = mountTiptapKernel(() => props(doc));
     const onChange = vi.fn();
     kernel.subscribe({ onChange });
     render(createElement(Component));
@@ -161,7 +151,7 @@ describe('Tiptap kernel mount', () => {
 
   it('applies the frozen surface class and placeholder', () => {
     const doc = sampleDoc();
-    const { Component } = mountTiptapKernel(props(doc), {
+    const { Component } = mountTiptapKernel(() => props(doc), {
       surfaceClassName: 'surface',
       placeholder: '开始写点什么…',
     });

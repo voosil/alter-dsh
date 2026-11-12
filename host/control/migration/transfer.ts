@@ -100,6 +100,12 @@ export interface MigrationPreflight {
   };
   /** `to-server` needs overwrite when the server has data. */
   needsOverwrite: boolean;
+  /**
+   * `to-server` would replace server rows that the local database does not
+   * contain. Overwriting is then not just "this target is not empty" but a
+   * real data loss on the other side, so the confirmation must say so.
+   */
+  overwriteDropsServerData: boolean;
   /** `from-server` replaces the local database; always needs confirmation. */
   replacesLocal: boolean;
   ok: boolean;
@@ -183,6 +189,26 @@ export interface MigrationTransferOptions {
 
 function assertNotAborted(signal?: AbortSignal): void {
   if (signal?.aborted === true) throw new Error('migration_cancelled');
+}
+
+/**
+ * Whether pushing the local database onto the server would drop rows the local
+ * side does not have.
+ *
+ * `to-server` copies the local database over the server, so rows the server
+ * holds and the local copy lacks are lost to the overwrite (they survive only in
+ * the server-side backup). Rows the local side also has are not a loss: the
+ * overwrite is a copy of content the user already owns. The counts are a coarse
+ * comparison on purpose — they cannot prove equivalence, only sort "overwrite a
+ * copy" from "delete data I never saw".
+ */
+function serverHasMoreRows(
+  server: SpaceDataCounts | null,
+  local: SpaceDataCounts | null,
+): boolean {
+  if (server === null || local === null) return false;
+  const keys = Object.keys(local) as (keyof SpaceDataCounts)[];
+  return keys.some((key) => Number(server[key] ?? 0) > Number(local?.[key] ?? 0));
 }
 
 /** An error that carries whether retrying the same chunk may help. */
@@ -530,12 +556,15 @@ export function createSpaceMigrationTransfer(
             hasUserData: localHasData,
           },
           needsOverwrite: false,
+          overwriteDropsServerData: false,
           replacesLocal: true,
           ok: false,
           message: '无法连接 Space 服务端',
         };
       }
       const needsOverwrite = server.empty !== true;
+      const overwriteDropsServerData =
+        needsOverwrite && serverHasMoreRows(server.counts ?? null, localCounts);
       const protocolOk = server.protocolVersion === SPACE_PROTOCOL_VERSION;
       return {
         server: {
@@ -556,6 +585,7 @@ export function createSpaceMigrationTransfer(
           hasUserData: localHasData,
         },
         needsOverwrite,
+        overwriteDropsServerData,
         replacesLocal: direction === 'from-server',
         // `from-server` installs a database into a fresh local directory, so
         // a missing local file is expected; `to-server` needs one to send.

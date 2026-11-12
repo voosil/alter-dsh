@@ -1,7 +1,7 @@
 ---
 type: spec
 status: active
-updated: 2026-11-11
+updated: 2026-11-12
 ---
 
 # 文档模型 v0
@@ -21,7 +21,7 @@ Marks、Schema Registry、v0 节点类型与 Markdown 投影规则。它是所�
   但只解析为「明确目标位置的新节点」。
 - **Document as Content 与 Document as Application 分离**：交互组件有独立 schema 与运行时，
   不混进正文语义。
-- 人编辑器（旧 UI 经 HTML↔AST 适配层）与 AI 工具共享同一节点契约（registry 为事实源，适配映射
+- 文档页内核（AST 原生 Tiptap）与 AI 工具共享同一节点契约（registry 为事实源，AST↔内核映射
   以往返测试校验对齐），避免定义漂移。
 
 v0 非目标：
@@ -99,14 +99,33 @@ v0 行内子集与投影：
 - 评论以 `Comment.anchor = { blockId, offset, length }` 锚定到某个顶层块的展平文本（inline text 原样、
   hardBreak 记 `\n`、嵌套块之间以 `\n` 连接）；颜色、字号 v0 不做；新增 mark 必须升 `schemaVersion`。
 
+### 4.1 评论生命周期与删除墓碑
+
+`Comment.status` 三态：`open`（评论轨与正文高亮可见）、`resolved`（已采纳，进「历史评论」）、
+`deleted`（已删除的墓碑）。删除**不移除记录**：`body`/`quote`/`anchor`/`supplements` 原样保留，
+只写 `status: 'deleted'` 与 `deletedAt`，因此被删评论仍可在「历史评论」中查看。
+
+- **两个删除入口**：用户显式删除（`space.deleteComment`，软删除）；正文写入使评论 `quote` 消失后的
+  级联删除。两者语义相同，都只改状态。
+- **`deleted` 是终态，写入幂等**：重复删除不改 `deletedAt`；对墓碑的编辑、补充、采纳一律 no-op 并返回
+  墓碑本身（客户端回写 quote 与 Host 级联删除天然竞态，不把竞态变成错误）。
+- **级联判据**（Host 权威，与具体 Operation 无关）：一次正文写入提交后，`status='open'`、`quote` 非空
+  的评论，若其 `quote` 在新正文的扁平文本中**不再出现**，即置为 `deleted`。扁平文本与锚点同一约定：
+  顶层块按文档顺序、inline text 原样、hardBreak 与块边界记为换行；比较前折叠空白。
+  「文本仍在但不再唯一匹配」只是锚点歧义，不算删除。
+- **不参与级联**：`resolved` 评论（已在历史中）与 `quote` 为空的全文评论。
+- **墓碑只读**：`deleted` 评论不可编辑、不可补充、不可再采纳，也不再参与锚点修复、评论轨与正文高亮。
+- **撤销不回滚评论**：`undo` 只回滚正文 Operation，已级联删除的评论保持「已删除」。
+- **清理随文档**：墓碑随文档一起失效（删除空间 / 清空回收站按 `docId` 连带删除），不提供单独永久删除。
+
 ## 5. 文档级元数据
 
 文档标题仍用 `SpaceNode.title`，不在 AST 内重复；AST 只承载正文结构。
 
 ## 6. Schema Registry（唯一事实源）
 
-同一份节点契约服务所有消费方：存储校验、编辑器 HTML 映射、AI 工具 JSON Schema、Markdown 投影、
-schemaVersion 校验与能力声明都以 registry 为准（适配层映射由往返测试校验对齐）：
+同一份节点契约服务所有消费方：存储校验、内核 schema 映射、AI 工具 JSON Schema、Markdown 投影、
+schemaVersion 校验与能力声明都以 registry 为准（AST↔内核映射由往返测试校验对齐）：
 
 ```ts
 interface NodeTypeDefinition {
@@ -161,7 +180,7 @@ interface NodeTypeDefinition {
 | `codeBlock` | content | inline（纯文本，无 marks） | `lang?: string` | 读 + 整块替换 | 围栏代码块 |
 | `divider` | content | none | — | 插入/删除 | `---` |
 | `table` | content | table | `headerRows?: number` | 读 + 结构 op（v0 限制） | GFM 表格 |
-| `tableRow` / `tableCell` | content | blocks / inline | — | 结构 op | GFM |
+| `tableRow` / `tableCell` | content | blocks / inline | `tableCell.colspan?/rowspan?: number`（1–50，>1 才落 attrs） | 结构 op | GFM（投影不表达合并，只保留文本） |
 | `image` | content | none | `assetId`, `alt?`, `caption?`, `width?` | 读 + 替换/属性 | `![alt](space-asset://…)` |
 | `file` | content | none | `assetId`, `name`, `mime`, `bytes?` | 读 + 替换/属性 | `[附件：name](space-asset://…)` |
 | `bookmark` | structured | none | `url`, `title?`, `description?`, `icon?` | 读写/属性+替换 | `[title](url)`（无 title 用 url） |
@@ -189,7 +208,7 @@ interface NodeTypeDefinition {
 
 - 投影是**只读视图**，用于 AI 阅读与人工导出；**不是第二真源**。
 - 默认开启块锚点（AI 视图）：每个顶层块前加 HTML 注释 `<!-- blk:blk_xxx -->`；导出/人类视图剥离。
-- 投影必须有界：工具层按块/范围裁剪，单次读默认 12k 字符、最大 40k 字符（见 [agent-doc-tools-v0.md](agent-doc-tools-v0.md)）。
+- 投影必须有界：工具层按块/范围裁剪，单次读默认 12k 字符、最大 40k 字符（见 [agent-tools-v1.md](agent-tools-v1.md)）。
 - 无法投影的 mark/节点降级为可见占位，并在工具结果 `capabilities` 中说明；**不静默丢失**。
 
 ### 7.2 语法映射
@@ -234,7 +253,7 @@ interface NodeTypeDefinition {
 ## 相关文档
 
 - [document-operations-v0.md](document-operations-v0.md) — 写入契约：信封、Operation 集、错误码、对象/资产
-- [agent-doc-tools-v0.md](agent-doc-tools-v0.md) — 模型可调用工具、投影预算与质量验收基线
+- [agent-tools-v1.md](agent-tools-v1.md) — 模型可调用工具、投影预算与质量验收基线
 - [system-architecture.md](system-architecture.md) — 分层、持久化与传输约束
 - [文档内容架构](../designs/document-content-architecture.md) — 为什么选择 JSON AST + Markdown 投影
 - [文档存储格式调研](../research/document-storage-options.md) — 候选方案对比与证据

@@ -1,7 +1,7 @@
 ---
 type: spec
 status: active
-updated: 2026-11-11
+updated: 2026-11-12
 ---
 
 # 文档操作 v0
@@ -45,6 +45,9 @@ updated: 2026-11-11
   outline/read 后重试。
 - `idempotencyKey` 重放返回原结果；同 key 内容不同返回 `idempotency/conflict`（当前实现不做过期裁剪）。
 - `dryRun` 只返回 diff 与校验结果：不写 AST、不追加 op log、不递增 revision。
+- **评论级联在同一事务内**：写入提交时，`open` 且 `quote` 非空的评论，若其 `quote` 在新正文扁平文本中
+  不再出现，同一事务内被软删除（`status='deleted'`，进「历史评论」）。判据与触发细节见
+  [document-model-v0.md](document-model-v0.md) §4.1；`dryRun` 不触发，`undo` 只回滚正文、不恢复评论。
 
 ## 3. Operation 集 v0
 
@@ -66,7 +69,7 @@ v0 限制：
 - 不提供 range/mark 级编辑；需要改格式用 `replace_block`，或 `update_text` + 明确说明。
 - `update_text` 只作用于 textblock；改 codeBlock 内容用 `replace_block`。
 - Agent 工具层的单块纯文本编辑（`space_doc_patch`）是单次 `update_text` 的封装；工具契约见
-  [agent-doc-tools-v0.md](agent-doc-tools-v0.md)，本篇只定义 Operation 语义。
+  [agent-tools-v1.md](agent-tools-v1.md)，本篇只定义 Operation 语义。
 
 ## 4. 撤销与审计
 
@@ -168,10 +171,13 @@ v0 限制：
 - 图片资产：png/jpeg/webp/gif，单资产 ≤ 4 MiB；Agent 工具 `space_asset_import` 与浏览器 RPC
   `doc.importAsset`（`{ mime, dataBase64, name? }` → `{ assetId, mime, bytes, width?, height? }`）
   接收 base64，解码后校验 mime/大小并去重；编辑器图片上传走后者。
-- 文件资产：mime 白名单为图片四类、`application/pdf`、`text/plain`、`text/markdown`、`text/csv`、
-  `application/json`、`application/zip` 与 Office Open XML（docx/xlsx/pptx）；单文件 ≤ 8 MiB，
-  HTML/SVG 等可内联执行类型不得加入白名单。浏览器 RPC `doc.importFile`（`{ mime, dataBase64, name? }`
-  → `{ assetId, mime, bytes, name? }`）接收 base64；文件卡以 `attrs.assetId` 引用资产（GC 依据）。
+- 文件资产：白名单内 mime（图片四类、`application/pdf`、`text/plain`、`text/markdown`、`text/csv`、
+  `application/json`、`application/zip` 与 Office Open XML docx/xlsx/pptx）原样保存；白名单外——包括
+  浏览器对大量扩展名上报的空串/未知类型（如 .sketch/.heic/.log）——一律以 `application/octet-stream`
+  存储并保留原始 `name` 作为下载文件名，HTML/SVG/JS 等可内联执行类型同样降级，绝不以原 mime 返回。
+  单文件 ≤ 8 MiB；空内容/超限仍报中文可读错误。浏览器 RPC `doc.importFile`
+  （`{ mime, dataBase64, name? }` → `{ assetId, mime, bytes, name? }`）接收 base64；文件卡以
+  `attrs.assetId` 引用资产（GC 依据）。
 - 读取：Host 注册 `GET /api/alter-space/asset?id=<assetId>`（Connection 鉴权）返回原始字节；
   图片以 `content-type` inline 返回供 `<img>` 渲染，非图片返回 `content-disposition: attachment`
   （文件名做 CRLF/引号转义），两者均带 `x-content-type-options: nosniff` 与 immutable 缓存；
@@ -186,7 +192,7 @@ v0 限制：
 - **op log**（`doc_ops`）：审计/撤销依据；与快照并存。
 - **对象/资产**：不重复进快照，只存引用；Host 启动时按「当前文档 + 保留版本」引用做 GC。
 - **版本预算**：当前「每篇 10 版 / 64 KiB」由存储设置控制、在写入事务内从最旧裁剪；
-  AST 快照更大，预算重估仍开放（见 [agent-doc-tools-v0.md](agent-doc-tools-v0.md)）。
+  AST 快照更大，预算重估仍开放（见 [agent-tools-v1.md](agent-tools-v1.md)）。
 - **恢复**：restore 历史快照 = 通过 delete+insert Operations 重放该 AST、revision+1、追加 op log；
   旧对象/资产按引用保活；版本历史全部为 AST 快照，恢复只接受 AST。
 - **备份**：数据库快照 + `assets/` 归档（`space-YYYYMMDD.assets.tar.gz`）成对生成与保留；恢复流程同时覆盖两者。
@@ -197,15 +203,15 @@ v0 限制：
   其中 `doc.applyOps` / `doc.generate` / `doc.undo` / `doc.restoreVersion` / `doc.updateObject` 是正文写入入口，
   `doc.importAsset` / `doc.importFile` 是资产上传入口，其余端点只读；
   `doc.get` 返回完整 AST（编辑器加载用），`doc.undo` 应用一次 op log 的 `inverseOps`；
-  浏览器编辑器（旧 UI 经适配层）加载 AST、编辑后在客户端做 block 级 diff 生成 Operation 批次再提交，
-  不整篇覆盖；
+  浏览器文档页（内核 + `@alter-space/document-runtime`）加载 AST、编辑后在客户端做 block 级 diff
+  生成 Operation 批次再提交，不整篇覆盖；
   新增端点必须同时加入 Host 路由白名单与浏览器客户端映射（约束见 [system-architecture.md](system-architecture.md)）。
-- 端点参数/结果沿用本规范 §1 信封与 §5 错误码；Agent 工具契约见 [agent-doc-tools-v0.md](agent-doc-tools-v0.md)。
+- 端点参数/结果沿用本规范 §1 信封与 §5 错误码；Agent 工具契约见 [agent-tools-v1.md](agent-tools-v1.md)。
 
 ## 相关文档
 
 - [document-model-v0.md](document-model-v0.md) — 文档权威表示与 Markdown 投影
-- [agent-doc-tools-v0.md](agent-doc-tools-v0.md) — 模型可调用工具与预算
+- [agent-tools-v1.md](agent-tools-v1.md) — 模型可调用工具与预算
 - [system-architecture.md](system-architecture.md) — 分层、传输与 SQLite 持久化约束
 - [文档内容架构](../designs/document-content-architecture.md) — 设计与取舍
 - [文档知识库](../README.md) — 分类与写作规则

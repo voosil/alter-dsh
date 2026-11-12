@@ -4,6 +4,48 @@ import { EmptyState } from './EmptyState';
 import { Dialog } from '@alter/ui-system';
 import styles from './HistoryCommentsModal.module.css';
 
+/**
+ * One history row: a comment that left the live rails, either resolved
+ * (采纳) or soft-deleted (已删除).
+ */
+interface HistoryEntry {
+  comment: Comment;
+  /** When it left the rails: `deletedAt` / `resolvedAt`, else `createdAt`. */
+  at: string;
+  /** Status word shown after the time. */
+  label: '采纳' | '已删除';
+}
+
+/**
+ * History entries, newest first.
+ *
+ * Resolved and deleted comments share one timeline ordered by when each of
+ * them happened (deleted by `deletedAt`, resolved by `resolvedAt`).
+ */
+function toHistoryEntries(comments: readonly Comment[]): HistoryEntry[] {
+  return comments
+    .flatMap((comment): HistoryEntry[] => {
+      if (comment.status === 'deleted')
+        return [
+          {
+            comment,
+            at: comment.deletedAt ?? comment.createdAt,
+            label: '已删除',
+          },
+        ];
+      if (comment.status === 'resolved')
+        return [
+          {
+            comment,
+            at: comment.resolvedAt ?? comment.createdAt,
+            label: '采纳',
+          },
+        ];
+      return [];
+    })
+    .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+}
+
 export function HistoryCommentsModal({
   open,
   comments,
@@ -13,25 +55,19 @@ export function HistoryCommentsModal({
   comments: Comment[];
   onClose: () => void;
 }) {
-  const resolved = comments
-    .filter((comment) => comment.status === 'resolved')
-    .sort(
-      (a, b) =>
-        Date.parse(b.resolvedAt ?? b.createdAt) -
-        Date.parse(a.resolvedAt ?? a.createdAt),
-    );
+  const entries = toHistoryEntries(comments);
   return (
     <Dialog open={open} onClose={onClose} title="历史评论" size="medium">
-      {resolved.length ? (
+      {entries.length ? (
         <div className={styles.list}>
-          {resolved.map((comment) => (
+          {entries.map(({ comment, at, label }) => (
             <article key={comment.id} className={styles.comment}>
               <header className={styles.head}>
                 <span className={styles.author}>
                   {comment.author === 'alter' ? 'Alter' : '我'}
                 </span>
                 <span className={styles.time}>
-                  {formatFullDate(comment.resolvedAt ?? comment.createdAt)} 采纳
+                  {formatFullDate(at)} {label}
                 </span>
               </header>
               {comment.quote ? (
@@ -57,7 +93,7 @@ export function HistoryCommentsModal({
       ) : (
         <EmptyState
           title="还没有历史评论"
-          description="评论被采纳后会保存在这里。"
+          description="评论被采纳或删除后会保存在这里。"
         />
       )}
     </Dialog>

@@ -34,6 +34,14 @@ export type NodeKind = 'content' | 'structured' | 'application';
 /** Structural shape of a node's payload. */
 export type ContentModel = 'inline' | 'blocks' | 'none' | 'table';
 
+/**
+ * Largest `colspan`/`rowspan` a table cell may declare.
+ *
+ * Spans are paste/merge metadata, not layout: the editor's merge commands only
+ * produce small values, and a huge span would make the whole grid unusable.
+ */
+export const MAX_CELL_SPAN = 50;
+
 /** Attribute rule for one node type. */
 export interface AttrSpec {
   type: 'string' | 'number' | 'boolean' | 'json' | 'assetRef' | 'objectRef';
@@ -249,7 +257,13 @@ export const NODE_TYPES: Readonly<Record<string, NodeTypeDefinition>> = {
     schemaVersion: 1,
     kind: 'content',
     contentModel: 'inline',
-    attrs: {},
+    // Merged-cell spans are optional and only stored when > 1: a plain cell
+    // (the overwhelming majority) keeps an empty attrs object, so old documents
+    // and non-merged tables do not gain `colspan: 1` noise.
+    attrs: {
+      colspan: { type: 'number' },
+      rowspan: { type: 'number' },
+    },
     allowedMarks: [...MARK_TYPES],
     ai: {
       readable: true,
@@ -617,6 +631,28 @@ function validateBlock(block: BlockNode, depth: number, stats: TreeStats): void 
       typeof block.attrs.headerRows === 'number' ? block.attrs.headerRows : 0;
     if (headerRows < 0 || headerRows > children.length)
       fail('node/schema-invalid', 'headerRows 超出表格行数');
+    // Cell spans are limited here (the generic attr check only enforces the
+    // number type): 1 is the implicit default and is never required, 2..50 is
+    // what merge/split produces, everything else is rejected instead of
+    // corrupting the grid.
+    for (const row of children) {
+      for (const cell of row.children ?? []) {
+        for (const name of ['colspan', 'rowspan'] as const) {
+          const span = cell.attrs[name];
+          if (span === undefined) continue;
+          if (
+            typeof span !== 'number' ||
+            !Number.isInteger(span) ||
+            span < 1 ||
+            span > MAX_CELL_SPAN
+          )
+            fail(
+              'node/schema-invalid',
+              `表格单元格 ${name} 必须是 1–${MAX_CELL_SPAN} 的整数`,
+            );
+        }
+      }
+    }
   }
 }
 

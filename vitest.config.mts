@@ -63,9 +63,10 @@ const alias = [
     replacement: path.join(vendorSrc('client-modules'), 'index.ts'),
   },
   {
-    // Legacy document adapter seam (restored pre-rebuild UI keeps DOM/CSS).
-    find: /^@alter-space\/legacy-adapter$/,
-    replacement: path.join(root, 'src', 'document', 'editors', 'legacy', 'index.ts'),
+    // Document-runtime seam (frozen page keeps DOM/CSS; runtime owns saves,
+    // drafts, snapshots and HTML projection).
+    find: /^@alter-space\/document-runtime$/,
+    replacement: path.join(root, 'src', 'document', 'runtime', 'index.ts'),
   },
 ];
 

@@ -13,8 +13,10 @@
 - 空间 ↔ DSH 工作区：新建空间时把**主工作目录**（`directories[0]`，其余为参考目录）映射为一个
   DSH 原生工作区，标题为 `🪐 <空间名>`；改名同步标题，删除/归档只做非破坏性处理
 - 工作目录选择接入宿主选择器（桌面=系统文件夹对话框，Web=DSH 目录浏览）；宿主无此能力时回退内置浏览器
-- Agent 文档读写工具：模型可通过 `space_doc_*` 工具（outline/read/search/ops/patch/undo/generate）、
-  对象/资产工具与组件目录读写空间文档；契约见 [docs/specs/agent-doc-tools-v0.md](docs/specs/agent-doc-tools-v0.md)，
+- Agent 空间工具：模型可通过 `space_doc_*` 工具（outline/read/search/ops/patch/undo/generate）、
+  对象/资产工具与组件目录读写文档，通过 `space_browse` / `space_tree` 发现空间与增删移改节点；
+  控制面的 `space_settings` / `space_migrate` 可切换数据权威与整库迁移（均需审批）；
+  能力台账声明每个端点的 Agent 暴露面。契约见 [docs/specs/agent-tools-v1.md](docs/specs/agent-tools-v1.md)，
   方案见 [docs/designs/agent-doc-tools.md](docs/designs/agent-doc-tools.md)
 
 ## 架构
@@ -90,6 +92,7 @@ client-HMR 自动替换。
 | 路径 | 说明 |
 | --- | --- |
 | `host/` | Host 半侧：SQLite 持久化、业务服务组装、工作区映射、存储策略、快照、RPC 路由、插件入口 |
+| `server/` | 独立运行的自部署服务端进程（同一权威运行时 + bearer token 的 RPC/资产/迁移路由） |
 | `src/` | 客户端装配缝：面板注册、`#/settings` 外壳、宿主目录选择器适配、SpaceService RPC、样式 |
 | `vendor/` | Space 的协议、业务服务与 UI 源码（项目自有），说明见 [vendor/README.md](vendor/README.md) |
 | `docs/` | 工程知识库，入口 [docs/README.md](docs/README.md) |

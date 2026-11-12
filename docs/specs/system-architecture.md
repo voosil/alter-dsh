@@ -26,9 +26,11 @@ updated: 2026-11-12
   客户端不得绕过该链路读写业务数据。
 - 业务数据只存在于 Host 与 SQLite；浏览器 localStorage 只存 UI 偏好，刷新或重开面板后从 Host 重新读取。
 - 插件自有数据放 SQLite 侧表（如空间 ↔ 工作区绑定），不写入 `vendor/` 的实体结构。
-- 文档页与基线（`vendor/ui-space` 旧 UI）保持视觉与交互 parity：壳层与 CSS 不动，编辑器内核可替换，
-  parity 验收前 legacy 仍是默认。legacy 的 AST 适配层在 `src/document/editors/legacy`，正文仍只经
-  Document Operations 写入 Host。
+- 文档页与基线（`vendor/ui-space` 旧 UI）保持视觉与交互 parity：壳层与 CSS 不动。编辑器内核唯一为
+  AST 原生 Tiptap（`src/document/editors/tiptap`），旧 contentEditable 内核已退役；kernel-agnostic
+  文档运行时在 `src/document/runtime`，经 `@alter-space/document-runtime` 别名接入，正文仍只经
+  Document Operations 写入 Host。退役只在客户端：`host/document/editors/legacy/` 是 Host 权威实现，
+  保持原名与路径。
 - 服务端模式的数据流：`SpaceApp` → Connection → 本地 Host bridge → HTTPS + bearer token → 服务端
   `LocalSpaceRuntime` → SQLite。bridge 的读缓存与写队列只存在于本地数据目录，不能作为权威。
 - 模式切换只经显式迁移或显式放弃；两种模式之间不做自动双向同步。
@@ -59,23 +61,27 @@ updated: 2026-11-12
 
   迁移进行中拒绝修改服务器配置、切换模式与重放队列（`migration/busy`），但控制面读端点
   （`settings.get/test`、`sync.status/queue`、`migration.status/cancel`）在冻结期间保持可用；
-  返回 `migration/read-only` 的只有业务端点。浏览器写入归属 `user`、Agent 工具写入归属 `alter`；
-  本地模式由 RPC 边界强制归属，服务端模式由本地 bridge 在跨端前盖章（服务端信任 bridge 的标记，
-  不信任浏览器请求体里的 actor）。
+  返回 `migration/read-only` 的只有业务端点。
+- **权威栈**：业务服务按写入身份实例化为 `user` 与 `alter` 两个权威栈，浏览器入口与工具入口只选择栈、
+  不接受身份参数。本地模式由 RPC 边界选栈（浏览器恒为 `user`）；服务端模式由本地 bridge 在跨端前盖章、
+  服务端按标记选栈（信任 bridge 的标记，不信任浏览器请求体里的 actor）。
 - 通道常量 `('/api', 'alter-space')` 在 Host 与客户端各有一份，必须保持同步。
 - 请求信封 `{ type: 'client-request', rpcId, payload: { op, args } }`；响应信封
   `{ type: 'server-response', rpcId, result: { ok: true, value } }`。业务结果在 `value` 内为
   `{ value }` 或 `{ error: { code, message } }`；HTTP 层只处理信封错误（405/400/500），
   业务失败留在成功响应的 `value` 内。
-- **端点白名单**：Host 维护 `space.*` / `hub.*` / `doc.*` / `object.*` / `storage.*` 方法白名单，并
-  逐条标注只读或写入；新增端点必须同时加入 Host 白名单与浏览器客户端映射（`host/authority/rpc.ts`、
-  `src/client/rpc.ts`，`storage.*` 在 `src/client/storage.ts`），缺一视为未完成。白名单、读写分类与
-  浏览器映射三处一致性由 `tests/integration/contract/` 检查，未知端点不得被判为只读。
+- **能力台账与端点白名单**：`host/authority/capabilities.ts` 是操作面单一事实源，逐端点声明读写/
+  破坏性/控制面分类与 Agent 暴露面（工具/action 或排除理由）。Host 维护 `space.*` / `hub.*` / `doc.*` /
+  `object.*` / `storage.*` 方法白名单；新增端点必须同时加入 Host 白名单、浏览器客户端映射
+  （`host/authority/rpc.ts`、`src/client/rpc.ts`，`storage.*` 在 `src/client/storage.ts`）并在台账声明
+  暴露面，缺一视为未完成。白名单、读写分类（从台账派生）、浏览器映射与工具注册四处一致性由
+  `tests/integration/contract/` 检查，未知端点不得被判为只读。工具契约见
+  [agent-tools-v1.md](agent-tools-v1.md)。
 - 参数与结果校验在 Host 侧执行；错误以稳定 `code` 返回，不在信封层抛裸异常。
 - 浏览器不得把业务数据持久化到 localStorage、IndexedDB 等本地存储。
 - **文档资产通道**：上传走同一 RPC 通道的 `doc.importAsset` / `doc.importFile`；读取由 Host 另注册
   `GET /api/alter-space/asset?id=…`（Connection 鉴权），图片按内容类型 inline 返回供渲染，其他文件按
-  `attachment` 下载。白名单、大小上限与错误码以
+  `attachment` 下载。文件 mime 降级策略（白名单外统一 `application/octet-stream`）、大小上限与错误码以
   [document-operations-v0.md](document-operations-v0.md) §6.4 为准。
 
 ## 3. SQLite 持久化
@@ -92,11 +98,14 @@ updated: 2026-11-12
   新表/新字段只加插件自有侧表并通过 `user_version` 升级，不改 `vendor/` 实体结构。
 - **文档组件目录**：声明式组件目录编译在协议包（`vendor/protocol`），是 Host 校验与客户端渲染的
   唯一事实源；文档只保存组件实例引用，不携带也不执行任意代码。Agent 工具面与预算见
-  [agent-doc-tools-v0.md](agent-doc-tools-v0.md)。
+  [agent-tools-v1.md](agent-tools-v1.md)。
 - **写入**：所有变更进入单写者队列；每笔变更只写「新增/修改/删除的实体行 + 顺序数组 + meta」，
   在一个事务里提交，提交成功才 resolve；失败回滚内存快照并抛错。普通编辑只更新一行，不重写整库。
-- **归属与裁剪**：写入路径必须保留实体归属（用户 / AI `alter`），并在同一事务内完成内容写入、
-  归属标记与版本裁剪；不得绕过单写者队列直接改库。
+- **归属与裁剪**：归属（节点/随想 creator、版本/评论作者、归档来源、事件来源）由写入身份派生、
+  写后不可变；实体词表 `me | alter`，归档与事件来源词表 `user | agent | system`（闲置自动归档为
+  `system`）。**持久化守卫**在同一事务内校验「新增实体归属等于当前身份、已有实体归属不变」，违反即
+  回滚；这是唯一守卫位置，新增写路径不必逐个传身份。内容写入、归属标记与版本裁剪同事务完成；
+  不得绕过单写者队列直接改库。`alter` 写入强制记录版本（不受 5 分钟节流），`user` 写入保持节流。
 - **启动**：打开数据库 → 校验 schema 版本 → `PRAGMA quick_check` → 读入内存；顺带截断上次异常退出
   留下的 WAL，并把 `journal_size_limit` 限制为 16 MiB。
 - **版本历史**：业务服务每 5 分钟最多记录一个完整版本；宿主在业务写入的同一事务里把每篇文档的历史
@@ -152,8 +161,8 @@ updated: 2026-11-12
 
 - 要求 Node.js ≥ 24 与 pnpm；`client.js`、`lib/` 是生成产物，不入库，安装或更新前必须先构建。
 - 构建期适配集中在 `build/build.mjs`（CSS 适配 + 模块级覆盖）：当前生效的模块覆盖只有
-  `DirectoryField → src/app/native-directory-field.tsx`（宿主目录选择）；`@alter-space/legacy-adapter`
-  别名指向 `src/document/editors/legacy/index.ts`，在 `build/build.mjs`、`tsconfig.json` paths 与
+  `DirectoryField → src/app/native-directory-field.tsx`（宿主目录选择）；`@alter-space/document-runtime`
+  别名指向 `src/document/runtime/index.ts`，在 `build/build.mjs`、`tsconfig.json` paths 与
   `vitest.config.mts` 三处声明，必须保持同步（由 `tests/integration/contract/` 校验）。新增覆盖或
   别名须在 `vendor/README.md` 登记。
 - 客户端 bundle 自包含：外置依赖仅限 react 族，新增第三方库必须打进 bundle；
@@ -163,14 +172,17 @@ updated: 2026-11-12
   token 列表）/ `SPACE_SNAPSHOTS` 提供，数据目录必须挂持久卷。
 - **测试分层**：`tests/<layer>/` 目录即分层，环境与包含范围只在 `tests/layers.mjs` 声明，由
   `vitest.config.mts` 生成项目。`unit`（纯函数，node，无 I/O，秒级）、`integration`（Host、持久化、
-  控制面、远程队列，真 SQLite 与真 HTTP 服务端）、`ui`（冻结旧编辑器 DOM/CSS，jsdom）、
+  控制面、远程队列，真 SQLite 与真 HTTP 服务端）、`ui`（冻结文档页 DOM/CSS 与内核行为，jsdom；按
+  `document/page/`、`document/runtime/`、`document/editors/tiptap/` 分组，共享页面 harness 为
+  `tests/support/document-page.ts`）、
   `nightly`（长跑种子 fuzz，不在门禁内）。不设浏览器 e2e：`dsh web` 登录态与 `__DSH_BOOT__` 注入
   无法在无人值守环境重建，真浏览器验收保留为人工清单。
 - **测试复用**：测试之间禁止互相引用；共享代码只放 `tests/support/`（生命周期、构建器、DSH 服务替身、
   真服务端/运行时启动器、AST 断言、fuzz runner）。共享层只统一生命周期与替身，不降级保真度。
 - **门禁**：`pnpm check` = lint + build + verify + docs:check + typecheck + 分层测试（不含 fuzz 全量），
-  任何红灯不得合并；重构提交必须行为中性。`pnpm test:nightly` = 严格 lint + 全量 fuzz + 覆盖率下限。
-  不稳定用例按缺陷处理（并发、端口、时序），不用重试掩盖。
+  任何红灯不得合并；重构提交必须行为中性。`pnpm test:nightly` = 分层测试 + 覆盖率下限 → 全量 fuzz →
+  严格 lint（顺序固定：覆盖率只统计分层测试，fuzz 之后重跑会覆盖它，所以先报覆盖率；严格 lint 放最后，
+  一个 warning 不得吞掉前面的结果）。不稳定用例按缺陷处理（并发、端口、时序），不用重试掩盖。
 - **覆盖率**：`pnpm test:coverage` 产出 JSON 摘要，`pnpm coverage:report` 按 `tests/layers.mjs` 的
   目录下限（行/语句双指标）校验，只升不降；冻结 UI 与薄接线不设硬指标，写入路径才是棘轮对象。
 - Host 改动后需重启 Loader 行，客户端改动由 client-HMR 原地替换。客户端 bundle 被原地替换时，
@@ -209,16 +221,16 @@ updated: 2026-11-12
   Workbench 右侧面板不装配。
 - **浏览器路由**：地址栏路由为内存路由，刷新后回到默认文档。
 - **数据文件形态**：SQLite 二进制不如 JSON 直观，备份与恢复按 §4 的方式操作。
-- **文档编辑器**：文档页维持基线 UI 的视觉与交互 parity（壳层与 CSS 不动，内核可替换）；
-  callout / mindmap / component 等新 AST 节点在旧 UI 中显示为对象占位卡，无人工编辑入口
-  （AI 工具仍可读写，见验收清单）。
+- **文档编辑器**：文档页维持基线 UI 的视觉与交互 parity（壳层与 CSS 不动）；唯一内核为 AST 原生
+  Tiptap，旧 contentEditable 内核已退役；callout / mindmap / component 等新 AST 节点在旧 UI 中显示为
+  对象占位卡，无人工编辑入口（AI 工具仍可读写，见验收清单）。
 - **面板行为**：Space 面板按产品设计始终浅色；其全局快捷键在面板打开时优先于宿主。
 
 ## 相关文档
 
 - [document-model-v0.md](document-model-v0.md) — 文档内容表示与 Markdown 投影
 - [document-operations-v0.md](document-operations-v0.md) — 写入契约、版本/快照/备份语义
-- [agent-doc-tools-v0.md](agent-doc-tools-v0.md) — Agent 工具契约与预算
+- [agent-tools-v1.md](agent-tools-v1.md) — Agent 工具契约、能力台账与预算
 - [规范索引](README.md) — 本目录文档清单与维护规则
 - [空间 ↔ 工作区验收清单](../acceptance/space-workspace.md) — 映射约定的可执行检查项
 - [文档知识库](../README.md) — 分类与写作规则

@@ -24,7 +24,7 @@ afterEach(async () => {
 describe('document service', () => {
   it('generates, reads and edits an AST document with revision CAS', async () => {
     const { store } = await tempStore();
-    const service = createDocumentService({ store, now: fixedNow });
+    const service = createDocumentService({ store, now: fixedNow, actor: 'user' });
     const generated = await service.generate({
       spaceId: DEFAULT_SPACE_ID,
       title: '鉴权方案',
@@ -117,7 +117,7 @@ describe('document service', () => {
 
   it('reads full AST and undoes one operation batch', async () => {
     const { store } = await tempStore();
-    const service = createDocumentService({ store, now: fixedNow });
+    const service = createDocumentService({ store, now: fixedNow, actor: 'user' });
     const created = await service.generate({
       spaceId: DEFAULT_SPACE_ID,
       markdown: '原文段落\n',
@@ -165,7 +165,7 @@ describe('document service', () => {
 
   it('inserts new markdown into an existing document via generate', async () => {
     const { store } = await tempStore();
-    const service = createDocumentService({ store, now: fixedNow });
+    const service = createDocumentService({ store, now: fixedNow, actor: 'user' });
     const created = await service.generate({
       spaceId: DEFAULT_SPACE_ID,
       markdown: '# 标题\n',
@@ -182,7 +182,7 @@ describe('document service', () => {
 
   it('updates structured objects atomically and keeps them immutable', async () => {
     const { store } = await tempStore();
-    const service = createDocumentService({ store, now: fixedNow });
+    const service = createDocumentService({ store, now: fixedNow, actor: 'user' });
     const created = await service.generate({
       spaceId: DEFAULT_SPACE_ID,
       markdown: ':::mindmap{objectId="obj_seed"}\n:::\n',
@@ -212,7 +212,7 @@ describe('document service', () => {
     dirs.push(dir);
     const store = await openSpaceStore({ directory: dir, now: fixedNow });
     let clock = new Date('2026-11-09T00:00:00.000Z');
-    const service = createDocumentService({ store, now: () => clock });
+    const service = createDocumentService({ store, now: () => clock, actor: 'user' });
     const created = await service.generate({
       spaceId: DEFAULT_SPACE_ID,
       markdown: '原始内容\n',
@@ -270,7 +270,7 @@ describe('document service', () => {
     dirs.push(dir);
     const store = await openSpaceStore({ directory: dir, now: fixedNow });
     let clock = new Date('2026-11-09T00:00:00.000Z');
-    const service = createDocumentService({ store, now: () => clock });
+    const service = createDocumentService({ store, now: () => clock, actor: 'user' });
     const lines = Array.from({ length: 80 }, (_, index) => `第 ${index} 行`).join(
       '\n\n',
     );
@@ -317,7 +317,7 @@ describe('document service', () => {
 
   it('searches AST text and skips non-AST content', async () => {
     const { store } = await tempStore();
-    const service = createDocumentService({ store, now: fixedNow });
+    const service = createDocumentService({ store, now: fixedNow, actor: 'user' });
     const created = await service.generate({
       spaceId: DEFAULT_SPACE_ID,
       title: '搜索文档',
@@ -338,7 +338,7 @@ describe('document service', () => {
     expect(nestedHits.hits.length).toBeGreaterThan(0);
     for (const hit of nestedHits.hits) expect(hit.preview).toContain('真实');
 
-    await store.update((data) => {
+    await store.updateAs('user', (data) => {
       (data.nodes as unknown as Array<Record<string, unknown>>).push({
         id: 'doc-plain',
         spaceId: DEFAULT_SPACE_ID,
@@ -384,7 +384,7 @@ describe('document service', () => {
 
   it('searches card titles through structured attributes', async () => {
     const { store } = await tempStore();
-    const service = createDocumentService({ store, now: fixedNow });
+    const service = createDocumentService({ store, now: fixedNow, actor: 'user' });
     const created = await service.generate({
       spaceId: DEFAULT_SPACE_ID,
       markdown: '正文\n',
@@ -434,7 +434,7 @@ describe('document service', () => {
 
   it('creates an empty AST note that document operations can edit', async () => {
     const { store } = await tempStore();
-    const service = createDocumentService({ store, now: fixedNow });
+    const service = createDocumentService({ store, now: fixedNow, actor: 'user' });
     const created = await service.createNote({
       spaceId: DEFAULT_SPACE_ID,
       title: '  空白文档  ',
@@ -465,8 +465,8 @@ describe('document service', () => {
 
   it('places new notes in a folder and rejects invalid parents', async () => {
     const { store } = await tempStore();
-    const service = createDocumentService({ store, now: fixedNow });
-    const space = createSpaceAuthority(store, fixedNow);
+    const service = createDocumentService({ store, now: fixedNow, actor: 'user' });
+    const space = createSpaceAuthority(store, fixedNow).user;
     const folder = await space.createNode({
       spaceId: DEFAULT_SPACE_ID,
       kind: 'folder',
@@ -489,14 +489,96 @@ describe('document service', () => {
     await store.close();
   });
 
+  it('persists merged-table cell spans and rejects invalid spans', async () => {
+    const { store } = await tempStore();
+    const service = createDocumentService({ store, now: fixedNow, actor: 'user' });
+    const created = await service.generate({
+      spaceId: DEFAULT_SPACE_ID,
+      title: '表格文档',
+      markdown: '# 表格文档\n\n正文\n',
+    });
+    const mergedTable = {
+      id: 'blk_merged_table',
+      type: 'table',
+      attrs: { headerRows: 1 },
+      children: [
+        {
+          id: 'blk_merged_row1',
+          type: 'tableRow',
+          attrs: {},
+          children: [
+            {
+              id: 'blk_merged_cell1',
+              type: 'tableCell',
+              attrs: { colspan: 2, rowspan: 2 },
+              content: [{ type: 'text', text: '合并' }],
+            },
+          ],
+        },
+        // Covered by the rowspan above; ProseMirror's merge model leaves it empty.
+        { id: 'blk_merged_row2', type: 'tableRow', attrs: {} },
+      ],
+    };
+    const applied = await service.applyOperations({
+      docId: created.docId,
+      baseRevision: created.revision,
+      ops: [{ op: 'insert_blocks', blocks: [mergedTable] }],
+    });
+    const stored = await service.get(created.docId);
+    const table = stored.doc.blocks.find((item) => item.type === 'table')!;
+    expect(table.children?.[0]?.children?.[0]?.attrs).toEqual({
+      colspan: 2,
+      rowspan: 2,
+    });
+    expect(table.children?.[1]?.children ?? []).toEqual([]);
+
+    for (const [colspan, rowspan] of [
+      [0, 1],
+      [51, 1],
+      [2, 99],
+      [1.5, 1],
+    ]) {
+      const invalid = {
+        ...mergedTable,
+        id: 'blk_invalid_table',
+        children: [
+          {
+            id: 'blk_invalid_row',
+            type: 'tableRow',
+            attrs: {},
+            children: [
+              {
+                id: 'blk_invalid_cell',
+                type: 'tableCell',
+                attrs: { colspan, rowspan },
+                content: [{ type: 'text', text: 'x' }],
+              },
+            ],
+          },
+        ],
+      };
+      await expect(
+        service.applyOperations({
+          docId: created.docId,
+          baseRevision: applied.revision,
+          ops: [{ op: 'insert_blocks', blocks: [invalid] }],
+        }),
+      ).rejects.toMatchObject({
+        code: 'node/schema-invalid',
+        message: expect.stringMatching(/colspan|rowspan/),
+      });
+    }
+    await store.close();
+  });
+
   it('rejects restoring a historical version that is not a valid AST', async () => {
     const { store } = await tempStore();
-    const service = createDocumentService({ store, now: fixedNow });
+    const service = createDocumentService({ store, now: fixedNow, actor: 'user' });
     const created = await service.generate({
       spaceId: DEFAULT_SPACE_ID,
       markdown: '原文\n',
     });
-    await store.update((data) => {
+    await store.updateAs('user', (data) => {
       data.versions.push({
         id: 'ver-plain',
         docId: created.docId,
@@ -513,6 +595,39 @@ describe('document service', () => {
         baseRevision: 1,
       }),
     ).rejects.toMatchObject({ code: 'doc/schema-invalid' });
+    await store.close();
+  });
+
+  it('refuses to open a stored document above the write limit', async () => {
+    const { store } = await tempStore();
+    const service = createDocumentService({ store, now: fixedNow, actor: 'user' });
+    const created = await service.generate({
+      spaceId: DEFAULT_SPACE_ID,
+      title: '超大文档',
+      markdown: '# 超大文档\n\n内容\n',
+    });
+    // A row can outgrow the limit through repeated appends; opening it must
+    // fail with an actionable code instead of arming a document that can
+    // never be saved again.
+    await store.updateAs('user', (data) => {
+      const node = data.nodes.find((item) => item.id === created.docId);
+      if (node === undefined) throw new Error('fixture document missing');
+      node.content = JSON.stringify({
+        format: 'alter-doc/1',
+        schemaVersion: 1,
+        revision: 1,
+        blocks: [
+          {
+            id: 'blk-huge',
+            type: 'paragraph',
+            content: [{ type: 'text', text: 'x'.repeat(600 * 1024) }],
+          },
+        ],
+      });
+    });
+    await expect(service.get(created.docId)).rejects.toMatchObject({
+      code: 'doc/too-large',
+    });
     await store.close();
   });
 });

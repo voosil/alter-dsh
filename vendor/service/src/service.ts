@@ -4,6 +4,7 @@ import type { Dirent } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
+import { archiveSourceOf, creatorOf } from '../../protocol/src/space.js';
 import type {
   Agent,
   AgentEvent,
@@ -81,9 +82,30 @@ function readCommentAnchor(value: unknown): CommentAnchor | null {
   return { blockId: blockId.trim(), offset, length };
 }
 
-/** Attach the anchor field to comments persisted before the anchor model. */
+/**
+ * Normalize one stored comment for the current model.
+ *
+ * Rows persisted before the anchor model load with `anchor: null`; rows
+ * persisted before the soft-delete tombstone load as a live comment
+ * (`deletedAt: null`, any unknown status collapses to `open`).
+ */
 function withCommentAnchor(comment: Comment): Comment {
-  return { ...comment, anchor: comment.anchor ?? null };
+  const row = comment as Comment & { deletedAt?: string | null };
+  const status: Comment['status'] =
+    comment.status === 'resolved' || comment.status === 'deleted'
+      ? comment.status
+      : 'open';
+  return {
+    ...comment,
+    status,
+    anchor: comment.anchor ?? null,
+    deletedAt: row.deletedAt ?? null,
+  };
+}
+
+/** Whether a stored comment is a soft-delete tombstone. */
+function isDeletedComment(comment: Comment): boolean {
+  return comment.status === 'deleted';
 }
 
 function toIso(date: Date) {
@@ -328,8 +350,11 @@ function resolveDirectoryPath(normalized: string) {
 export function createContentService(
   options: SpaceContentServiceOptions,
 ): SpaceService {
-  const { store, hub } = options;
+  const { store, hub, actor } = options;
   const now = options.now;
+  /** Attribution is derived from the bound write identity, never hardcoded. */
+  const creator = creatorOf(actor);
+  const archiveSource = archiveSourceOf(actor);
 
   function currentSpace(data: SpaceStoreData, id: string) {
     const space = data.spaces.find((item) => item.id === id);
@@ -373,7 +398,9 @@ export function createContentService(
       for (const node of data.nodes) {
         if (!needsArchiving(node, timestamp)) continue;
         node.archived = true;
-        node.archivedBy = 'agent';
+        // Idle auto-archiving is system cleanup on both stacks, never a user
+        // or Alter decision.
+        node.archivedBy = 'system';
         node.archivedAt = toIso(timestamp);
         node.activity = 0;
         node.activityAt = toIso(timestamp);
@@ -408,7 +435,7 @@ export function createContentService(
       docId: node.id,
       title: node.title,
       content: node.content,
-      author: 'me',
+      author: creator,
       at: toIso(timestamp),
     });
   }
@@ -583,7 +610,7 @@ export function createContentService(
             input.title?.trim() ??
             (input.kind === 'folder' ? '新建文件夹' : ''),
           parentId,
-          creator: 'me',
+          creator,
           pinned: false,
           archived: false,
           archivedBy: null,
@@ -672,7 +699,7 @@ export function createContentService(
         const node = currentNode(data, id);
         if (archived) {
           node.archived = true;
-          node.archivedBy = 'user';
+          node.archivedBy = archiveSource;
           node.archivedAt = toIso(now());
           node.pinned = false;
         } else {
@@ -763,13 +790,14 @@ export function createContentService(
         const comment: Comment = {
           id: createId('cm'),
           docId: node.id,
-          author: 'me',
+          author: creator,
           body,
           quote: input.quote?.trim() || null,
           anchor: readCommentAnchor(input.anchor),
           status: 'open',
           createdAt: toIso(now()),
           resolvedAt: null,
+          deletedAt: null,
           editedAt: null,
           supplements: [],
         };
@@ -782,6 +810,10 @@ export function createContentService(
       return store.update((data) => {
         const comment = data.comments.find((item) => item.id === id);
         if (!comment) throw new Error('评论不存在');
+        // `deleted` is terminal: a tombstone is returned untouched, so a
+        // client write that races the body cascade stays a no-op instead of
+        // surfacing an error after every deletion.
+        if (isDeletedComment(comment)) return withCommentAnchor(clone(comment));
         if (patch.body !== undefined) {
           const body = patch.body.trim();
           if (!body) throw new Error('评论内容不能为空');
@@ -791,7 +823,9 @@ export function createContentService(
           }
         }
         if (patch.quote !== undefined) {
-          comment.quote = patch.quote;
+          // An empty quote is the "commented text is gone" marker clients use;
+          // store it as "no quote" so the cascade never reconsiders it.
+          comment.quote = patch.quote === '' ? null : patch.quote;
         }
         if (patch.anchor !== undefined) {
           comment.anchor = readCommentAnchor(patch.anchor);
@@ -804,11 +838,12 @@ export function createContentService(
       return store.update((data) => {
         const comment = data.comments.find((item) => item.id === id);
         if (!comment) throw new Error('评论不存在');
+        if (isDeletedComment(comment)) return withCommentAnchor(clone(comment));
         const content = body.trim();
         if (!content) throw new Error('补充内容不能为空');
         comment.supplements.push({
           id: createId('cs'),
-          author: 'me',
+          author: creator,
           body: content,
           createdAt: toIso(now()),
         });
@@ -818,9 +853,13 @@ export function createContentService(
 
     async deleteComment(id) {
       return store.update((data) => {
-        const index = data.comments.findIndex((item) => item.id === id);
-        if (index < 0) throw new Error('评论不存在');
-        data.comments.splice(index, 1);
+        const comment = data.comments.find((item) => item.id === id);
+        if (!comment) throw new Error('评论不存在');
+        // Tombstones never leave the list (the history panel reads them back
+        // through `listComments`) and a second delete keeps the first stamp.
+        if (isDeletedComment(comment)) return;
+        comment.status = 'deleted';
+        comment.deletedAt = toIso(now());
       });
     },
 
@@ -828,6 +867,8 @@ export function createContentService(
       return store.update((data) => {
         const comment = data.comments.find((item) => item.id === id);
         if (!comment) throw new Error('评论不存在');
+        if (isDeletedComment(comment)) return withCommentAnchor(clone(comment));
+        if (comment.status === 'resolved') throw new Error('评论已解决');
         comment.status = 'resolved';
         comment.resolvedAt = toIso(now());
         return withCommentAnchor(clone(comment));
@@ -885,6 +926,7 @@ export function createContentService(
           id: createId('th'),
           spaceId: input.spaceId,
           content,
+          creator,
           createdAt: timestamp,
           updatedAt: timestamp,
           archived: false,
@@ -958,7 +1000,9 @@ export function createContentService(
           kind: 'note',
           title: '',
           parentId: null,
-          creator: 'me',
+          // A converted thought is a NEW node: its attribution is the current
+          // write identity, never the thought's original creator.
+          creator,
           pinned: false,
           archived: false,
           archivedBy: null,
@@ -1080,7 +1124,7 @@ export function createContentService(
           title: `随想 ${thought.createdAt.slice(0, 10)}`,
           excerpt: excerptAround(text, normalized),
           archived: thought.archived,
-          creator: 'me',
+          creator: thought.creator,
         });
       }
       // 文档在前，同类按标题；与设计阶段的排序结果一致，但不依赖比较器的调用顺序。

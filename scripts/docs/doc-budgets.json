@@ -2,7 +2,7 @@
   "version": 1,
   "documents": {
     "AGENTS.md": { "lines": 90, "bytes": 8192 },
-    "README.md": { "lines": 120, "bytes": 12288 },
+    "README.md": { "lines": 126, "bytes": 12288 },
     "docs/README.md": { "lines": 150, "bytes": 11264 },
     "vendor/README.md": { "lines": 100, "bytes": 12288 }
   },

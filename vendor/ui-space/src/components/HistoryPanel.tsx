@@ -3,7 +3,7 @@ import { RotateCcw } from 'lucide-react';
 import type { DocVersion, SpaceNode } from '@alter/protocol';
 import { useSpaceContext } from '../runtime';
 import { documentModelOf } from '../document-model';
-import { alterDocToEditorHtml, parseDocumentContent } from '@alter-space/legacy-adapter';
+import { alterDocToEditorHtml, parseDocumentContent } from '@alter-space/document-runtime';
 import { formatShortDate } from '../utils/date';
 import { diffHtml } from '../utils/diff';
 import { Button, Dialog } from '@alter/ui-system';

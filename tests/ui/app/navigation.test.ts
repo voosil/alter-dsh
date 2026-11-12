@@ -8,7 +8,7 @@
  *
  * This suite asserts the ordering at the moment `router.navigate` is called —
  * the same timing that showed "new document lands on the overview" in the
- * browser — plus the final editor/caret state.
+ * browser — plus the final editor/focus state.
  *
  * The service is an in-memory double rather than the real SQLite authority:
  * this layer owns browser behaviour (jsdom), and the Host half is covered by
@@ -18,7 +18,6 @@
 import { createElement } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { writeEditorKernelPreference } from '../../../src/document/editors/kernel-preference';
 import type { Space, SpaceNode, SpaceRouter, SpaceService } from '@alter/protocol';
 import { SpaceApp } from '../../../vendor/ui-space/src/SpaceApp';
 import { attachDocumentClient } from '../../../src/document/client-access';
@@ -197,8 +196,7 @@ function titleInput(): HTMLTextAreaElement {
 }
 
 beforeEach(() => {
-  // This file exercises the legacy kernel explicitly (see the frozen-parity design).
-  writeEditorKernelPreference({ current: 'legacy' });
+  localStorage.clear();
   (globalThis as { ResizeObserver?: unknown }).ResizeObserver = ResizeObserverStub;
 });
 
@@ -214,6 +212,10 @@ describe('新建文档后的路由落点', () => {
     await waitFor(() => {
       expect(screen.getByLabelText('文档正文')).toBeTruthy();
     });
+    // The page mounts the AST-native kernel by default (no kernel preference).
+    expect(
+      document.querySelector('[data-editor-kernel="tiptap"]'),
+    ).not.toBeNull();
     const [navigation] = router.docNavigations;
     expect(navigation?.listedDocs).toBe(1);
     expect(router.getPath()).toMatch(/\/doc\/doc-[^/]+$/);

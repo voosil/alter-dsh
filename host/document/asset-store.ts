@@ -7,9 +7,12 @@
  * snapshots stay small. Import is deduplicating: identical bytes map to the
  * same `asset_…` id and are written once.
  *
- * Images are imported through {@link DocumentAssets.import} (4 MiB limit) and
- * every other downloadable file through {@link DocumentAssets.importFile}
- * (8 MiB limit, explicit mime allowlist). Both share the same layout and
+ * Images are imported through {@link DocumentAssets.import} (4 MiB limit, four
+ * inline-renderable types). Every other downloadable file goes through
+ * {@link DocumentAssets.importFile} (8 MiB limit): a browser-reported type
+ * inside the file allowlist is stored as-is, while an unknown/missing type is
+ * stored as {@link GENERIC_FILE_MIME}. The original `name` is always kept for
+ * the download filename. Both channels share the same layout and
  * content-addressed dedup; the mime stored on the first import wins.
  *
  * @module @alter-dsh/space/document/asset-store
@@ -32,6 +35,24 @@ export const MAX_ASSET_BYTES = 4 * 1024 * 1024;
 /** Maximum accepted generic file size (8 MiB). */
 export const MAX_FILE_BYTES = 8 * 1024 * 1024;
 
+/**
+ * Stored mime of a file whose browser-reported type is not in the allowlist.
+ *
+ * The asset route serves every non-image record as `attachment` with
+ * `x-content-type-options: nosniff`, so a generic type is safe. The client's
+ * original mime is deliberately **not** kept: an unknown or executable type
+ * (`text/html`, `image/svg+xml`, `application/javascript`, …, and the empty
+ * string the browser reports for many extensions) must never be echoed back in
+ * a response header.
+ */
+export const GENERIC_FILE_MIME = 'application/octet-stream';
+
+/** Human readable byte limit for the user-facing Chinese errors. */
+function sizeLimitLabel(bytes: number): string {
+  const mib = bytes / (1024 * 1024);
+  return Number.isInteger(mib) ? `${mib} MiB` : `${mib.toFixed(1)} MiB`;
+}
+
 const IMAGE_MIME_EXTENSIONS: Readonly<Record<string, string>> = {
   'image/png': 'png',
   'image/jpeg': 'jpg',
@@ -40,8 +61,9 @@ const IMAGE_MIME_EXTENSIONS: Readonly<Record<string, string>> = {
 };
 
 /**
- * File-asset allowlist: the image types above plus downloadable documents.
- * HTML, SVG and other inline-executable types must stay out.
+ * File mimes kept verbatim on import: the image types above plus downloadable
+ * documents. HTML, SVG and other inline-executable types must stay out of this
+ * list — an import carrying one of them degrades to {@link GENERIC_FILE_MIME}.
  */
 const FILE_MIME_EXTENSIONS: Readonly<Record<string, string>> = {
   ...IMAGE_MIME_EXTENSIONS,
@@ -145,24 +167,28 @@ function validateImageInput(input: ImportAssetInput): ValidatedImport {
   };
 }
 
-/** Validate one generic file import without touching storage. */
+/**
+ * Validate one generic file import without touching storage.
+ *
+ * Browsers report an empty or `application/octet-stream` type for many
+ * extensions and deliberately refuse to sniff unknown bytes, so a file import
+ * must not be limited to the allowlist: a known type is kept, everything else
+ * becomes {@link GENERIC_FILE_MIME}. The route's `attachment` + `nosniff` then
+ * makes the download safe regardless of the bytes. Empty and oversized
+ * payloads stay hard errors with an actionable Chinese message.
+ */
 function validateFileInput(input: ImportFileInput): ValidatedImport {
-  const mime = input.mime.trim().toLowerCase();
-  if (extensionOf(mime) === undefined)
-    throw new DocumentError(
-      'object/invalid',
-      `不支持的文件类型：${input.mime}（允许 png/jpeg/webp/gif/pdf/txt/md/csv/json/zip/docx/xlsx/pptx）`,
-    );
   if (!(input.data instanceof Uint8Array) || input.data.byteLength === 0)
     throw new DocumentError('object/invalid', '文件内容为空');
   if (input.data.byteLength > MAX_FILE_BYTES)
     throw new DocumentError(
       'doc/too-large',
-      `文件 ${input.data.byteLength} 字节超过上限 ${MAX_FILE_BYTES}`,
+      `文件超过 ${sizeLimitLabel(MAX_FILE_BYTES)} 上限（${input.data.byteLength} 字节，上限 ${MAX_FILE_BYTES} 字节）`,
     );
+  const mime = input.mime.trim().toLowerCase();
   return {
     data: input.data,
-    mime,
+    mime: extensionOf(mime) === undefined ? GENERIC_FILE_MIME : mime,
     ...(input.name === undefined ? {} : { name: input.name }),
   };
 }

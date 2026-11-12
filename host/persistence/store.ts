@@ -27,6 +27,8 @@ import type {
 } from '../../vendor/service/src/contracts.js';
 
 export type { SpaceStoreData } from '../../vendor/service/src/contracts.js';
+import type { SpaceActor } from '../../vendor/protocol/src/space.js';
+import { assertAttribution, backfillAttribution } from './attribution.js';
 import type {
   DocumentAssetRecord,
   DocumentObjectRecord,
@@ -132,6 +134,16 @@ export interface SpaceWorkspaceLink {
 export interface SpaceStoreHandle extends SpaceStore {
   /** Absolute database file path. */
   readonly file: string;
+  /**
+   * Apply one change under a bound write identity. The attribution guard
+   * diffs pre/post rows in the same transaction: new entities must carry the
+   * identity's derived attribution and existing attribution stays immutable.
+   * A violation rolls back like any other failed write.
+   */
+  updateAs<T>(
+    actor: SpaceActor,
+    change: (data: SpaceStoreData) => T,
+  ): Promise<T>;
   /** Current storage policy, loaded from the SQLite `meta` table. */
   getStorageSettings(): StorageSettings;
   /** Persist a storage policy; resolves after COMMIT. */
@@ -170,9 +182,12 @@ export interface SpaceStoreHandle extends SpaceStore {
   /**
    * Run one document write atomically: block-collection changes and document
    * sidecar writes commit in the same transaction, or both roll back.
+   * `actor` binds the write identity for the attribution guard; omit it only
+   * for sidecar-only writes that never touch attribution-bearing entities.
    */
   transactDocument<T>(
     change: (value: SpaceStoreData, sidecar: DocumentSidecar) => T,
+    actor?: SpaceActor,
   ): Promise<T>;
   /** Write a consistent, compacted copy of the database to `destination`. */
   snapshotInto(destination: string): Promise<void>;
@@ -458,6 +473,9 @@ function readDatabase(db: DatabaseSync, now: () => Date): SpaceStoreData {
     if (raw !== undefined) data.hub[row.space_id] = raw as never;
   }
   if (data.spaces.length === 0) data.spaces = [defaultSpace(now())];
+  // Rows persisted before thought/event attribution existed load with the
+  // historical identity; JSON rows tolerate the fields, no schema bump.
+  backfillAttribution(data);
   return data;
 }
 
@@ -1019,11 +1037,28 @@ export async function openSpaceStore(
   }
 
   function update<T>(change: (value: SpaceStoreData) => T): Promise<T> {
+    return runUpdate(undefined, change);
+  }
+
+  function updateAs<T>(
+    actor: SpaceActor,
+    change: (value: SpaceStoreData) => T,
+  ): Promise<T> {
+    return runUpdate(actor, change);
+  }
+
+  function runUpdate<T>(
+    actor: SpaceActor | undefined,
+    change: (value: SpaceStoreData) => T,
+  ): Promise<T> {
     return enqueue(async () => {
       const snapshot = structuredClone(data);
       let result: T;
       try {
         result = change(data);
+        // Attribution invariants are checked inside the same transaction,
+        // against the pre-change rows; a violation rolls back like any error.
+        assertAttribution(actor, persisted.entities, data);
       } catch (error) {
         data = snapshot;
         throw error;
@@ -1104,6 +1139,7 @@ export async function openSpaceStore(
 
   function transactDocument<T>(
     change: (value: SpaceStoreData, sidecar: DocumentSidecar) => T,
+    actor?: SpaceActor,
   ): Promise<T> {
     return enqueue(async () => {
       const snapshot = structuredClone(data);
@@ -1127,6 +1163,8 @@ export async function openSpaceStore(
       let result: T;
       try {
         result = change(data, sidecar);
+        // Same attribution invariants as runUpdate, same transaction.
+        assertAttribution(actor, persisted.entities, data);
       } catch (error) {
         data = snapshot;
         throw error;
@@ -1206,6 +1244,7 @@ export async function openSpaceStore(
     file,
     read: () => data,
     update,
+    updateAs,
     getStorageSettings: () => ({ ...currentSettings }),
     setStorageSettings(next) {
       const value = clampStorageSettings(next);

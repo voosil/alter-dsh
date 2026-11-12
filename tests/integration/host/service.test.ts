@@ -40,7 +40,7 @@ describe('Space business service over SQLite', () => {
   it('persists documents, comments, versions and hub through a reopen', async () => {
     const dir = await tempDir();
     const store = await openSpaceStore({ directory: dir, now: fixedNow });
-    const service = createSpaceAuthority(store, fixedNow);
+    const service = createSpaceAuthority(store, fixedNow).user;
 
     const space = await service.createSpace({ name: '写作' });
     const doc = await service.createNode({
@@ -72,7 +72,7 @@ describe('Space business service over SQLite', () => {
     expect(convertedDoc.revision).toBe(1);
     expect(convertedDoc.blocks).toEqual([]);
     // The converted note is immediately openable through the document model.
-    const documents = createDocumentService({ store, now: fixedNow });
+    const documents = createDocumentService({ store, now: fixedNow, actor: 'user' });
     const opened = await documents.get(converted.node.id);
     expect(opened.revision).toBe(1);
     expect(opened.doc.blocks).toEqual([]);
@@ -90,7 +90,7 @@ describe('Space business service over SQLite', () => {
 
     await store.close();
     const reopened = await openSpaceStore({ directory: dir, now: fixedNow });
-    const restored = createSpaceAuthority(reopened, fixedNow);
+    const restored = createSpaceAuthority(reopened, fixedNow).user;
     const spaces = await restored.listSpaces();
     expect(spaces.map((item) => item.id)).toContain(space.id);
     const nodes = await restored.listNodes(space.id);
@@ -113,7 +113,7 @@ describe('Space business service over SQLite', () => {
   it('archives, trashes and restores documents', async () => {
     const dir = await tempDir();
     const store = await openSpaceStore({ directory: dir, now: fixedNow });
-    const service = createSpaceAuthority(store, fixedNow);
+    const service = createSpaceAuthority(store, fixedNow).user;
     const space = await service.createSpace({ name: '归档' });
     const doc = await service.createNode({ spaceId: space.id, kind: 'note' });
     const archived = await service.setArchived(doc.id, true);
@@ -136,7 +136,7 @@ describe('Space business service over SQLite', () => {
   it('creates collaborators and keeps them across a reopen', async () => {
     const dir = await tempDir();
     const store = await openSpaceStore({ directory: dir, now: fixedNow });
-    const service = createSpaceAuthority(store, fixedNow);
+    const service = createSpaceAuthority(store, fixedNow).user;
     const space = await service.createSpace({ name: '协作' });
     expect(await service.listAgents()).toHaveLength(0);
 
@@ -170,7 +170,7 @@ describe('Space business service over SQLite', () => {
     await store.close();
 
     const reopened = await openSpaceStore({ directory: dir, now: fixedNow });
-    const restored = createSpaceAuthority(reopened, fixedNow);
+    const restored = createSpaceAuthority(reopened, fixedNow).user;
     const restoredAgents = await restored.listAgents();
     expect(restoredAgents.map((item) => item.name)).toEqual([
       '研究助手',
@@ -192,7 +192,7 @@ describe('Space business service over SQLite', () => {
     let current = new Date('2026-11-01T09:00:00.000Z');
     const clock = () => current;
     const store = await openSpaceStore({ directory: dir, now: clock });
-    const service = createSpaceAuthority(store, clock);
+    const service = createSpaceAuthority(store, clock).user;
     const space = await service.createSpace({ name: '研究' });
 
     current = new Date('2026-11-01T09:05:00.000Z');
@@ -282,7 +282,7 @@ describe('Space business service over SQLite', () => {
     let current = new Date('2026-11-02T09:00:00.000Z');
     const clock = () => current;
     const store = await openSpaceStore({ directory: dir, now: clock });
-    const service = createSpaceAuthority(store, clock);
+    const service = createSpaceAuthority(store, clock).user;
     const space = await service.createSpace({ name: '研究' });
 
     const doc = await service.createNode({
@@ -298,7 +298,7 @@ describe('Space business service over SQLite', () => {
     });
     await service.saveNode(idle.id, { content: astContent('内容') });
 
-    await store.update((data) => {
+    await store.updateAs('alter', (data) => {
       const node = data.nodes.find((item) => item.id === doc.id);
       if (!node) throw new Error('missing doc');
       // 同一个动作：Alter 的 AgentEvent 已经概括，文档新建不再重复记。
@@ -310,12 +310,13 @@ describe('Space business service over SQLite', () => {
         at: node.createdAt,
         docId: doc.id,
         taskId: null,
+        source: 'agent',
       });
       const stale = data.nodes.find((item) => item.id === idle.id);
       if (!stale) throw new Error('missing idle doc');
-      // 闲置自动归档由系统清理触发，不是用户的决定。
+      // 闲置自动归档由系统清理触发，不是用户或 Alter 的决定。
       stale.archived = true;
-      stale.archivedBy = 'agent';
+      stale.archivedBy = 'system';
       stale.archivedAt = new Date('2026-11-02T10:00:00.000Z').toISOString();
       stale.activity = 0;
       stale.activityAt = stale.archivedAt;
@@ -340,7 +341,7 @@ describe('Space business service over SQLite', () => {
   it('persists comment anchors and validates their shape', async () => {
     const dir = await tempDir();
     const store = await openSpaceStore({ directory: dir, now: fixedNow });
-    const service = createSpaceAuthority(store, fixedNow);
+    const service = createSpaceAuthority(store, fixedNow).user;
     const space = await service.createSpace({ name: '评论' });
     const doc = await service.createNode({ spaceId: space.id, kind: 'note' });
     await service.saveNode(doc.id, { content: astContent('hello world') });
@@ -422,7 +423,7 @@ describe('Space business service over SQLite', () => {
     });
     await store.close();
     const reopened = await openSpaceStore({ directory: dir, now: fixedNow });
-    const restored = createSpaceAuthority(reopened, fixedNow);
+    const restored = createSpaceAuthority(reopened, fixedNow).user;
     expect(
       (await restored.listComments(doc.id)).find(
         (item) => item.id === persisted.id,
@@ -434,7 +435,7 @@ describe('Space business service over SQLite', () => {
   it('keeps the default space immutable and rejects invalid operations', async () => {
     const dir = await tempDir();
     const store = await openSpaceStore({ directory: dir, now: fixedNow });
-    const service = createSpaceAuthority(store, fixedNow);
+    const service = createSpaceAuthority(store, fixedNow).user;
     await expect(service.deleteSpace(DEFAULT_SPACE_ID)).rejects.toThrow();
     await expect(service.getSpace('sp-missing')).resolves.toBeUndefined();
     await expect(

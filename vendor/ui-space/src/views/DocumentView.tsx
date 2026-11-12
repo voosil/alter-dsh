@@ -1,5 +1,4 @@
 import {
-  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -12,47 +11,52 @@ import {
   Archive,
   ArchiveRestore,
   ChevronRight,
+  Code2,
   Download,
   FilePlus2,
   FileText,
+  Heading1,
+  Heading2,
+  Heading3,
   History,
   Link2,
+  List,
+  ListOrdered,
+  ListTodo,
   MessageSquare,
   MoreHorizontal,
   Plus,
+  Quote,
+  Text,
 } from 'lucide-react';
 import type { Comment, SpaceNode } from '@alter/protocol';
 import {
   alterDocToEditorHtml,
   anchorForQuote,
-  clearLegacyDraft,
-  draftBlocks,
-  createLegacySaveController,
-  legacyDraftMatchesSnapshot,
+  clearDraft,
+  createDocumentSaveController,
+  draftMatchesSnapshot,
   parseDocumentContent,
-  materializeLegacyAssets,
-  parseLegacyHtml,
   planCommentAnchorRepairs,
   readDocumentSnapshot,
-  readLegacyDraft,
-  readEditorKernelPreference,
+  readDocumentDraft,
   TiptapBody,
-  reportLegacyDocumentError,
+  reportDocumentError,
   serializeDocument,
   type AlterDoc,
   type BlockNode,
-  type EditorKernelKind,
-  type RecoverableDraft,
-  type LegacySaveController,
-  type LegacySaveSnapshot,
-} from '@alter-space/legacy-adapter';
+  type EditorBlockType,
+  type DocumentDraft,
+  type DocumentSaveController,
+  type DocumentSaveSnapshot,
+} from '@alter-space/document-runtime';
 import { useSpaceContext } from '../runtime';
 import { documentModelOf } from '../document-model';
 import { docPath, overviewPath } from '../space-route';
 import { ancestorsOf, displayTitle } from '../utils/tree';
 import { formatRelativeTime } from '../utils/date';
 import { downloadMarkdown } from '../utils/markdown';
-import { Editor } from '../components/editor/Editor';
+import editorStyles from '../components/editor/Editor.module.css';
 import { CommentRail } from '../components/CommentRail';
 import { DocumentErrorBoundary } from '../components/DocumentErrorBoundary';
 import { DocumentComments } from '../components/DocumentComments';
@@ -74,14 +78,51 @@ interface PendingQuoteSave {
   quote: string;
 }
 
-function hasBodyContent(html: string) {
-  const text = html
-    .replace(/<[^>]*>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .trim();
+/**
+ * When a comment left the live rails: `deletedAt` for a soft delete,
+ * `resolvedAt` for an approval, the creation time for a pre-anchor row.
+ */
+function historyCommentAt(comment: Comment): string {
   return (
-    text.length > 0 || /<(img|video|audio|iframe|figure|table|hr)\b/i.test(html)
+    (comment.status === 'deleted' ? comment.deletedAt : comment.resolvedAt) ??
+    comment.createdAt
   );
+}
+
+/**
+ * Comments the editor/rail may still write for: only open ones.
+ *
+ * Host rejects `updateComment` on a resolved or soft-deleted comment, so the
+ * page must stop mirroring live state (anchors, quotes) onto them.
+ */
+function isLiveComment(comment: Comment): boolean {
+  return comment.status === 'open';
+}
+
+/**
+ * Whether an AST body has any visible content.
+ *
+ * Same semantics as the HTML check below (strip tags, trim): the legacy page
+ * decided from the editor's `textContent`, and an AST body must not flip the
+ * page into "has content" for a blank paragraph or a lone divider. Nodes whose
+ * HTML renders text (file name, link-card title, doc-link title, object cards,
+ * table cells) count; images/dividers/rules do not.
+ */
+function blocksHaveContent(blocks: readonly BlockNode[]): boolean {
+  for (const block of blocks) {
+    for (const node of block.content ?? []) {
+      if (node.type === 'text' && node.text.trim() !== '') return true;
+    }
+    const attrs = block.attrs ?? {};
+    for (const key of ['name', 'title', 'description', 'caption'] as const) {
+      const value = attrs[key];
+      if (typeof value === 'string' && value.trim() !== '') return true;
+    }
+    if (block.children !== undefined && blocksHaveContent(block.children)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Empty AST document used when there is no stored content yet. */
@@ -98,25 +139,6 @@ interface DocumentLoadFailure {
   message: string;
   /** Original error, kept for structured diagnostics. */
   error: Error;
-}
-
-/**
- * Render one recoverable draft into the legacy editor's HTML.
- *
- * Block drafts (the current format) are projected through the legacy adapter so
- * the restore path is the same one a server snapshot takes; a legacy HTML draft
- * is already HTML.
- */
-function draftToEditorHtml(draft: RecoverableDraft): string {
-  if (!('html' in draft)) {
-    return alterDocToEditorHtml({
-      format: 'alter-doc/1',
-      schemaVersion: 1,
-      revision: draft.baseRevision,
-      blocks: draft.blocks,
-    });
-  }
-  return draft.html;
 }
 
 /** Flat text of a block tree, used for the draft download fallback. */
@@ -143,21 +165,15 @@ function blocksToDraftText(blocks: readonly BlockNode[]): string {
  */
 function readMountDocument(
   content: string,
-  docPathOf: (docId: string) => string,
-): { doc: AlterDoc; html: string; failure: DocumentLoadFailure | null } {
+): { doc: AlterDoc; failure: DocumentLoadFailure | null } {
   const raw = typeof content === 'string' ? content : '';
   if (raw.trim() === '') {
-    return {
-      doc: EMPTY_AST,
-      html: alterDocToEditorHtml(EMPTY_AST, { docPath: docPathOf }),
-      failure: null,
-    };
+    return { doc: EMPTY_AST, failure: null };
   }
   const parsed = parseDocumentContent(raw);
   if (parsed === undefined) {
     return {
       doc: EMPTY_AST,
-      html: '',
       failure: {
         title: '无法显示文档',
         message:
@@ -169,15 +185,10 @@ function readMountDocument(
     };
   }
   try {
-    return {
-      doc: parsed,
-      html: alterDocToEditorHtml(parsed, { docPath: docPathOf }),
-      failure: null,
-    };
+    return { doc: parsed, failure: null };
   } catch (cause) {
     return {
       doc: EMPTY_AST,
-      html: '',
       failure: {
         title: '无法显示文档',
         message:
@@ -214,26 +225,20 @@ export function DocumentView({
   // The document body is an `alter-doc/1` AST; the restored editor still works
   // on HTML, so the adapter projects it once per mounted document. Corrupt
   // content surfaces an explicit failure state instead of an empty document.
-  const docPathOf = useCallback(
-    (docId: string) => docPath(spaceId, docId),
-    [spaceId],
-  );
   const mountRef = useRef<ReturnType<typeof readMountDocument> | null>(null);
   if (mountRef.current === null) {
-    mountRef.current = readMountDocument(node.content, docPathOf);
+    mountRef.current = readMountDocument(node.content);
   }
   const mountDoc = mountRef.current.doc;
-  const mountHtml = mountRef.current.html;
   const mountDocRef = useRef<AlterDoc>(mountDoc);
   const initialFailureRef = useRef(mountRef.current.failure);
   const [loadFailure, setLoadFailure] = useState<DocumentLoadFailure | null>(
     mountRef.current.failure,
   );
   const [title, setTitle] = useState(node.title);
-  const [editorHtml, setEditorHtml] = useState(mountHtml);
   const [revision, setRevision] = useState(mountDoc.revision);
   const [bodyHasContent, setBodyHasContent] = useState(() =>
-    hasBodyContent(mountHtml),
+    blocksHaveContent(mountDoc.blocks),
   );
   const [comments, setComments] = useState<Comment[]>([]);
   /**
@@ -269,11 +274,20 @@ export function DocumentView({
     serverRevision?: number;
   } | null>(null);
   const [draftPrompt, setDraftPrompt] = useState<{
-    draft: RecoverableDraft;
+    draft: DocumentDraft;
     kind: 'same' | 'conflict';
-    latest?: LegacySaveSnapshot;
+    latest?: DocumentSaveSnapshot;
   } | null>(null);
   const [editorRevision, setEditorRevision] = useState(0);
+  /**
+   * Document the AST-native kernel renders.
+   *
+   * The retired contentEditable kernel renders `editorHtml`; an AST kernel needs the document
+   * itself. It changes only on an explicit reload (external revision, version
+   * restore, draft recovery), never on a save echo — a save echo must not
+   * rebuild the live body.
+   */
+  const [bodyDocument, setBodyDocument] = useState<AlterDoc>(mountDoc);
   /**
    * Link being edited from the AST-native body's link bar.
    *
@@ -286,6 +300,17 @@ export function DocumentView({
     href: string;
     label: string;
   } | null>(null);
+  /**
+   * 文本类型菜单的锚点（工具栏第一个按钮）。
+   *
+   * The menu itself is the frozen `Menu` component from `@alter/ui-system`: the
+   * kernel reports the anchor and applies the chosen conversion, so the visual
+   * stays exactly the pre-rebuild one.
+   */
+  const [textTypeAnchor, setTextTypeAnchor] = useState<HTMLElement | null>(null);
+  const [textTypeActive, setTextTypeActive] = useState<EditorBlockType>('p');
+  /** 链接编辑表单的校验错误（旧编辑器同一套文案）。 */
+  const [linkError, setLinkError] = useState('');
   /** Imperative handle of the mounted AST-native body (link write-back). */
   const tiptapHandleRef = useRef<{
     applyLinkEdit(input: {
@@ -294,78 +319,59 @@ export function DocumentView({
       href: string;
       label: string;
     }): void;
+    applyBlockType(type: EditorBlockType): void;
+    activeBlockType(): EditorBlockType;
   } | null>(null);
-  /**
-   * Which editor kernel renders the body.
-   *
-   * Read once per document page: switching kernels remounts the body, so the
-   * choice is a mount-time decision (a UI preference, never business data).
-   * `legacy` is the default until the parity checklist is accepted.
-   */
-  const [editorKernel] = useState<EditorKernelKind>(
-    () => readEditorKernelPreference().current,
-  );
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const childrenTabRef = useRef<HTMLButtonElement>(null);
   const commentsTabRef = useRef<HTMLButtonElement>(null);
   const draftRef = useRef<{
     title: string;
-    /** Editor HTML (the legacy kernel's body). */
-    content: string;
-    /**
-     * Canonical AST blocks of the current body.
-     *
-     * The save pipeline is kernel-independent, so blocks are the one shape both
-     * kernels produce. The legacy kernel keeps them in sync through `content`;
-     * an AST-native kernel writes them directly on every edit.
-     */
+    /** Canonical AST blocks of the current body (reported on every edit). */
     blocks: BlockNode[];
-  }>({ title: node.title, content: mountHtml, blocks: mountDoc.blocks });
+  }>({ title: node.title, blocks: mountDoc.blocks });
   const lastSavedDocRef = useRef<AlterDoc>(mountDoc);
   const baseRevisionRef = useRef(mountDoc.revision);
   const lastSavedTitleRef = useRef(node.title);
   const loadedContentRef = useRef(node.content);
   const aliveRef = useRef(true);
-  const controllerRef = useRef<LegacySaveController | null>(null);
+  const controllerRef = useRef<DocumentSaveController | null>(null);
   const draftCheckedRef = useRef(false);
   const commentsRef = useRef<Comment[]>([]);
   const anchorSweepRef = useRef(false);
   const anchorWarnedRef = useRef(false);
   commentsRef.current = comments;
+  /** Open comment ids — the only ones the page may still write to. */
+  const liveIdsRef = useRef(new Set<string>());
+  liveIdsRef.current = new Set(
+    comments.filter(isLiveComment).map((comment) => comment.id),
+  );
 
   // Report the initial load failure once (structured, content-free).
   useEffect(() => {
     const failure = initialFailureRef.current;
     if (failure === null) return;
-    reportLegacyDocumentError('load', failure.error, { docId: node.id });
+    reportDocumentError('load', failure.error, { docId: node.id });
   }, [node.id]);
 
-  /** Project one AST snapshot into the legacy editor HTML. */
-  function editorHtmlOf(doc: AlterDoc): string {
-    return alterDocToEditorHtml(doc, {
-      docPath: (docId) => docPath(spaceId, docId),
-    });
-  }
-
   /** Adopt one server snapshot into the editor (external reload/restore). */
-  function applyExternalSnapshot(snapshot: LegacySaveSnapshot): void {
+  function applyExternalSnapshot(snapshot: DocumentSaveSnapshot): void {
     lastSavedDocRef.current = snapshot.doc;
     baseRevisionRef.current = snapshot.revision;
     lastSavedTitleRef.current = snapshot.title;
     loadedContentRef.current = serializeDocument(snapshot.doc);
-    const html = editorHtmlOf(snapshot.doc);
-    draftRef.current = { title: snapshot.title, content: html, blocks: snapshot.doc.blocks };
+    draftRef.current = { title: snapshot.title, blocks: snapshot.doc.blocks };
     if (!aliveRef.current) return;
     setRevision(snapshot.revision);
-    setEditorHtml(html);
+    setBodyDocument(snapshot.doc);
     setTitle(snapshot.title);
-    setBodyHasContent(hasBodyContent(html));
+    setBodyHasContent(blocksHaveContent(snapshot.doc.blocks));
     setEditorRevision((value) => value + 1);
     setSaveState('saved');
   }
 
   if (controllerRef.current === null) {
-    controllerRef.current = createLegacySaveController({
+    controllerRef.current = createDocumentSaveController({
       docId: node.id,
       initial: {
         doc: mountDoc,
@@ -374,34 +380,11 @@ export function DocumentView({
       },
       getClient: () => documentModelOf(service),
       capture: () => ({
-        // Every kernel reports canonical AST blocks. The legacy kernel's body
-        // is HTML, so its blocks are projected here, once, on capture.
-        blocks:
-          editorKernel === 'legacy'
-            ? parseLegacyHtml(draftRef.current.content).blocks
-            : draftRef.current.blocks,
+        // The kernel reports canonical AST blocks on every edit; they are the
+        // one body shape the save pipeline ever sees.
+        blocks: draftRef.current.blocks,
         title: draftRef.current.title,
       }),
-      /**
-       * Before a cycle: upload inline `data:` images/files and rewrite them to
-       * asset references, so no base64 payload ever reaches the Host.
-       *
-       * This lives on the kernel side of the seam: an AST-native kernel holds
-       * assets as asset references already and has nothing to materialize.
-       */
-      prepareCapture: async () => {
-        const client = documentModelOf(service);
-        if (client === undefined) return draftRef.current.content;
-        const materialized = await materializeLegacyAssets(
-          draftRef.current.content,
-          client,
-        );
-        if (materialized.warnings.length > 0) {
-          throw new Error(materialized.warnings[0]);
-        }
-        draftRef.current.content = materialized.html;
-        return materialized.html;
-      },
       onStatus: (status) => {
         if (!aliveRef.current) return;
         setSaveState(
@@ -413,7 +396,7 @@ export function DocumentView({
         );
         if (status.kind === 'failed') {
           setSaveFailureKind('failed');
-          reportLegacyDocumentError('save', new Error(status.message), {
+          reportDocumentError('save', new Error(status.message), {
             docId: node.id,
             revision: baseRevisionRef.current,
           });
@@ -427,7 +410,7 @@ export function DocumentView({
               ? {}
               : { serverRevision: status.serverRevision }),
           });
-          reportLegacyDocumentError('conflict', new Error(status.message), {
+          reportDocumentError('conflict', new Error(status.message), {
             docId: node.id,
             ...(status.serverRevision === undefined
               ? {}
@@ -449,11 +432,13 @@ export function DocumentView({
         loadedContentRef.current = serializeDocument(snapshot.doc);
         if (!aliveRef.current) return;
         setRevision(snapshot.revision);
-        setEditorHtml(editorHtmlOf(snapshot.doc));
-        setBodyHasContent(hasBodyContent(draftRef.current.content));
+        setBodyHasContent(blocksHaveContent(draftRef.current.blocks));
         refresh();
         // E4: re-check open comment anchors once new content is authoritative.
         void repairCommentAnchors(commentsRef.current, snapshot.doc);
+        // The save may have cascaded deletes on the Host; re-read after the
+        // anchor repair so its writes are not overwritten by the refresh.
+        void reloadComments();
       },
       onExternalSnapshot: applyExternalSnapshot,
       notify: (message) => {
@@ -521,12 +506,14 @@ export function DocumentView({
       .listComments(node.id)
       .then((items) => {
         if (!alive) return;
+        // Every status is kept: the rails/body filter to open, the history
+        // panel shows resolved + deleted tombstones.
         setComments(items);
         // E4: repair drifted anchors of open comments once after loading.
         void repairCommentAnchors(items, lastSavedDocRef.current);
       })
       .catch((error: unknown) => {
-        reportLegacyDocumentError('comments', error, { docId: node.id });
+        reportDocumentError('comments', error, { docId: node.id });
         if (alive) toast('评论加载失败，请稍后重试');
       });
     return () => {
@@ -542,7 +529,7 @@ export function DocumentView({
         if (alive) refresh();
       })
       .catch((error: unknown) => {
-        reportLegacyDocumentError('load', error, {
+        reportDocumentError('load', error, {
           docId: node.id,
           operation: 'recordOpen',
         });
@@ -575,7 +562,7 @@ export function DocumentView({
     loadedContentRef.current = node.content;
     const parsedContent = parseDocumentContent(node.content);
     if (parsedContent === undefined) {
-      reportLegacyDocumentError(
+      reportDocumentError(
         'load',
         new Error('doc/schema-invalid: external content is not valid'),
         { docId: node.id },
@@ -588,7 +575,7 @@ export function DocumentView({
       });
       return;
     }
-    const snapshot: LegacySaveSnapshot = {
+    const snapshot: DocumentSaveSnapshot = {
       doc: parsedContent,
       revision: parsedContent.revision,
       title: node.title,
@@ -598,8 +585,7 @@ export function DocumentView({
     setLoadFailure(null);
     if (ownEcho) {
       // Own-save echo at the revision we already adopted (the Host may
-      // canonicalize attrs). Keep the editor DOM and cursor untouched.
-      setEditorHtml(editorHtmlOf(parsedContent));
+      // canonicalize attrs). Keep the live body and cursor untouched.
       return;
     }
     // External revision (version restore, another writer): reload the editor.
@@ -629,11 +615,11 @@ export function DocumentView({
   useEffect(() => {
     if (draftCheckedRef.current) return;
     draftCheckedRef.current = true;
-    const draft = readLegacyDraft(node.id);
+    const draft = readDocumentDraft(node.id);
     if (draft === undefined) return;
-    if (legacyDraftMatchesSnapshot(draft, { doc: mountDoc, title: node.title })) {
+    if (draftMatchesSnapshot(draft, { doc: mountDoc, title: node.title })) {
       // The save landed but the receipt was lost: nothing to resolve.
-      clearLegacyDraft(node.id);
+      clearDraft(node.id);
       return;
     }
     if (draft.baseRevision === mountDoc.revision) {
@@ -642,7 +628,7 @@ export function DocumentView({
     }
     void (async () => {
       const client = documentModelOf(service);
-      let latest: LegacySaveSnapshot | undefined;
+      let latest: DocumentSaveSnapshot | undefined;
       if (client !== undefined) {
         try {
           const raw = readDocumentSnapshot(await client.get(node.id));
@@ -686,10 +672,12 @@ export function DocumentView({
     return () => {
       for (const [id, pending] of saves) {
         window.clearTimeout(pending.timer);
+        // A resolved/deleted comment is never written back on unmount.
+        if (!liveIdsRef.current.has(id)) continue;
         void service
           .updateComment(id, { quote: pending.quote })
           .catch((error: unknown) => {
-            reportLegacyDocumentError('comments', error, {
+            reportDocumentError('comments', error, {
               docId: node.id,
               commentId: id,
               operation: 'flushQuote',
@@ -704,8 +692,21 @@ export function DocumentView({
     () => comments.filter((comment) => comment.status === 'open'),
     [comments],
   );
-  const resolvedComments = useMemo(
-    () => comments.filter((comment) => comment.status === 'resolved'),
+  /**
+   * Comments that left the live rails: resolved (采纳) and soft-deleted
+   * (已删除) share the history panel, newest first by when each happened.
+   */
+  const historyComments = useMemo(
+    () =>
+      comments
+        .filter(
+          (comment) =>
+            comment.status === 'resolved' || comment.status === 'deleted',
+        )
+        .sort(
+          (a, b) =>
+            Date.parse(historyCommentAt(b)) - Date.parse(historyCommentAt(a)),
+        ),
     [comments],
   );
 
@@ -730,12 +731,9 @@ export function DocumentView({
   function downloadDraft(): void {
     const draft = controllerRef.current?.exportDraft();
     if (draft === undefined) return;
-    // Block drafts are exported as Markdown text (they are AST, not HTML); a
-    // legacy HTML draft keeps exporting as before so nothing becomes unreadable.
-    const isHtml = 'html' in draft;
-    const body = isHtml ? draft.html : blocksToDraftText(draft.blocks);
-    const blob = new Blob([body], {
-      type: isHtml ? 'text/html;charset=utf-8' : 'text/plain;charset=utf-8',
+    // Drafts are canonical AST blocks (never HTML), exported as plain text.
+    const blob = new Blob([blocksToDraftText(draft.blocks)], {
+      type: 'text/plain;charset=utf-8',
     });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -743,7 +741,7 @@ export function DocumentView({
     link.download = `${(draft.title || '无标题').replace(
       /[\\/:*?"<>|]/g,
       ' ',
-    )}.draft.${isHtml ? 'html' : 'md'}`;
+    )}.draft.md`;
     link.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 0);
   }
@@ -761,7 +759,9 @@ export function DocumentView({
     doc: AlterDoc,
   ): Promise<void> {
     if (anchorSweepRef.current) return;
-    const plan = planCommentAnchorRepairs(items, doc);
+    // Anchor repair is a live-comment repair: resolved/deleted tombstones must
+    // not be rewritten (the Host rejects writes on them).
+    const plan = planCommentAnchorRepairs(items.filter(isLiveComment), doc);
     if (plan.repairs.length === 0 && plan.unresolvedIds.length === 0) return;
     anchorSweepRef.current = true;
     try {
@@ -779,7 +779,7 @@ export function DocumentView({
             ),
           );
         } catch (error) {
-          reportLegacyDocumentError('anchor', error, {
+          reportDocumentError('anchor', error, {
             docId: node.id,
             commentId: repair.commentId,
           });
@@ -799,12 +799,36 @@ export function DocumentView({
   }
 
   /**
+   * Re-read the comment list after a body save.
+   *
+   * Deleting commented text cascades on the Host (the tombstone goes with the
+   * block), so the page cannot derive the list from the body it just sent —
+   * it has to ask. Only called from the save-success path (never from an
+   * effect on `comments`), so a refresh cannot loop. Errors stay silent: the
+   * rails keep the last known list and the next save retries.
+   */
+  async function reloadComments(): Promise<void> {
+    try {
+      const items = await service.listComments(node.id);
+      if (!aliveRef.current) return;
+      // Leave the composer (its own state) and the open history dialog alone;
+      // only the mirrored list is replaced.
+      setComments(items);
+    } catch (error) {
+      reportDocumentError('comments', error, {
+        docId: node.id,
+        operation: 'reloadComments',
+      });
+    }
+  }
+
+  /**
    * E1: recover from the explicit load-failure state. Prefers a fresh Host
    * snapshot, then falls back to re-parsing the stored content.
    */
   async function retryLoadDocument(): Promise<void> {
     const client = documentModelOf(service);
-    let snapshot: LegacySaveSnapshot | null = null;
+    let snapshot: DocumentSaveSnapshot | null = null;
     if (client !== undefined) {
       try {
         const raw = readDocumentSnapshot(await client.get(node.id));
@@ -816,13 +840,13 @@ export function DocumentView({
           };
         }
       } catch (error) {
-        reportLegacyDocumentError('load', error, { docId: node.id });
+        reportDocumentError('load', error, { docId: node.id });
       }
     }
     if (snapshot === null) {
-      const parsed = readMountDocument(node.content, docPathOf);
+      const parsed = readMountDocument(node.content);
       if (parsed.failure !== null) {
-        reportLegacyDocumentError('load', parsed.failure.error, {
+        reportDocumentError('load', parsed.failure.error, {
           docId: node.id,
         });
         setLoadFailure(parsed.failure);
@@ -839,11 +863,7 @@ export function DocumentView({
       lastSavedDocRef.current = snapshot.doc;
       baseRevisionRef.current = snapshot.revision;
       loadedContentRef.current = serializeDocument(snapshot.doc);
-      draftRef.current = {
-        title: snapshot.title,
-        content: editorHtmlOf(snapshot.doc),
-        blocks: snapshot.doc.blocks,
-      };
+      draftRef.current = { title: snapshot.title, blocks: snapshot.doc.blocks };
       controllerRef.current?.adopt(snapshot);
       applyExternalSnapshot(snapshot);
       setLoadFailure(null);
@@ -854,7 +874,7 @@ export function DocumentView({
           '文档内容无法渲染，已停止加载以避免覆盖现有数据。可重试或返回空间目录。',
         error: cause instanceof Error ? cause : new Error(String(cause)),
       };
-      reportLegacyDocumentError('load', failure.error, { docId: node.id });
+      reportDocumentError('load', failure.error, { docId: node.id });
       setLoadFailure(failure);
     }
   }
@@ -869,7 +889,7 @@ export function DocumentView({
     const timer = window.setTimeout(() => {
       quoteSavesRef.current.delete(id);
       void service.updateComment(id, { quote }).catch((error: unknown) => {
-        reportLegacyDocumentError('comments', error, {
+        reportDocumentError('comments', error, {
           docId: node.id,
           commentId: id,
           operation: 'quote',
@@ -896,22 +916,29 @@ export function DocumentView({
 
   function handleCommentQuotesChange(updates: { id: string; quote: string }[]) {
     if (!updates.length) return;
-    const quotes = new Map(updates.map((update) => [update.id, update.quote]));
+    // The kernel reports its live set asynchronously; check the rendered
+    // state so a just-approved/deleted comment never gets a write queued.
+    const accepted = updates.filter((update) =>
+      comments.some(
+        (comment) => comment.id === update.id && isLiveComment(comment),
+      ),
+    );
+    if (!accepted.length) return;
+    const quotes = new Map(accepted.map((update) => [update.id, update.quote]));
     setComments((items) =>
       items.map((comment) => {
         const quote = quotes.get(comment.id);
         return quote === undefined ? comment : { ...comment, quote };
       }),
     );
-    for (const update of updates) scheduleQuoteSave(update.id, update.quote);
+    for (const update of accepted) scheduleQuoteSave(update.id, update.quote);
   }
 
   async function addComment(body: string, quote: string | null) {
     try {
-      // Comments anchor to a top-level block; derive it from the current draft
-      // when the quote matches exactly one block, otherwise store no anchor.
-      const parsed = parseLegacyHtml(draftRef.current.content);
-      const anchor = anchorForQuote(parsed.blocks, quote);
+      // Comments anchor to a top-level block; derive it from the live body when
+      // the quote matches exactly one block, otherwise store no anchor.
+      const anchor = anchorForQuote(draftRef.current.blocks, quote);
       const comment = await service.addComment({
         docId: node.id,
         body,
@@ -922,7 +949,7 @@ export function DocumentView({
       setPendingQuote(null);
       setPendingDraftHasContent(false);
     } catch (error) {
-      reportLegacyDocumentError('comments', error, {
+      reportDocumentError('comments', error, {
         docId: node.id,
         operation: 'addComment',
       });
@@ -943,7 +970,7 @@ export function DocumentView({
       if (caretCommentId === id) setCaretCommentId(null);
       toast('评论已采纳');
     } catch (error) {
-      reportLegacyDocumentError('comments', error, {
+      reportDocumentError('comments', error, {
         docId: node.id,
         commentId: id,
         operation: 'approveComment',
@@ -963,7 +990,7 @@ export function DocumentView({
         ),
       );
     } catch (error) {
-      reportLegacyDocumentError('comments', error, {
+      reportDocumentError('comments', error, {
         docId: node.id,
         commentId: id,
         operation: 'editComment',
@@ -983,7 +1010,7 @@ export function DocumentView({
         ),
       );
     } catch (error) {
-      reportLegacyDocumentError('comments', error, {
+      reportDocumentError('comments', error, {
         docId: node.id,
         commentId: id,
         operation: 'supplementComment',
@@ -998,12 +1025,25 @@ export function DocumentView({
     cancelQuoteSave(id);
     try {
       await service.deleteComment(id);
-      setComments((items) => items.filter((comment) => comment.id !== id));
+      if (!aliveRef.current) return;
+      // Soft delete: the row stays in `comments` as a tombstone so the history
+      // panel can show it. Every live view filters on `status === 'open'`.
+      setComments((items) =>
+        items.map((comment) =>
+          comment.id === id
+            ? {
+                ...comment,
+                status: 'deleted',
+                deletedAt: comment.deletedAt ?? new Date().toISOString(),
+              }
+            : comment,
+        ),
+      );
       if (hoveredCommentId === id) setHoveredCommentId(null);
       if (caretCommentId === id) setCaretCommentId(null);
       toast('评论已删除');
     } catch (error) {
-      reportLegacyDocumentError('comments', error, {
+      reportDocumentError('comments', error, {
         docId: node.id,
         commentId: id,
         operation: 'deleteComment',
@@ -1056,7 +1096,7 @@ export function DocumentView({
         throw new Error('doc/schema-invalid: restored content is not valid');
       }
       updateNodeInState(fresh);
-      const snapshot: LegacySaveSnapshot = {
+      const snapshot: DocumentSaveSnapshot = {
         doc: parsed,
         revision: parsed.revision,
         title: fresh.title,
@@ -1068,7 +1108,7 @@ export function DocumentView({
       applyExternalSnapshot(snapshot);
       refresh();
     } catch (error) {
-      reportLegacyDocumentError('restore', error, { docId: node.id });
+      reportDocumentError('restore', error, { docId: node.id });
       toast('版本恢复后刷新失败，请重试');
     }
   }
@@ -1077,18 +1117,23 @@ export function DocumentView({
   function restoreDraft(): void {
     const prompt = draftPrompt;
     if (prompt === null) return;
-    const snapshot: LegacySaveSnapshot = prompt.latest ?? {
+    const snapshot: DocumentSaveSnapshot = prompt.latest ?? {
       doc: mountDoc,
       revision: mountDoc.revision,
       title: node.title,
     };
     const controller = controllerRef.current;
     controller?.adopt(snapshot);
-    const html = draftToEditorHtml(prompt.draft);
-    draftRef.current = { title: prompt.draft.title, content: html, blocks: draftBlocks(prompt.draft) };
+    const blocks = prompt.draft.blocks;
+    draftRef.current = { title: prompt.draft.title, blocks };
     setTitle(prompt.draft.title);
-    setBodyHasContent(hasBodyContent(html));
-    setEditorHtml(html);
+    setBodyHasContent(blocksHaveContent(blocks));
+    setBodyDocument({
+      format: 'alter-doc/1',
+      schemaVersion: 1,
+      revision: snapshot.revision,
+      blocks,
+    });
     setEditorRevision((value) => value + 1);
     setSaveState('saved');
     setDraftPrompt(null);
@@ -1097,7 +1142,7 @@ export function DocumentView({
 
   /** Draft recovery: discard the local draft. */
   function discardDraft(): void {
-    clearLegacyDraft(node.id);
+    clearDraft(node.id);
     setDraftPrompt(null);
   }
 
@@ -1129,11 +1174,16 @@ export function DocumentView({
     }
     const controller = controllerRef.current;
     controller?.adoptForOverwrite(latest);
-    const html = draftToEditorHtml(prompt.draft);
-    draftRef.current = { title: prompt.draft.title, content: html, blocks: draftBlocks(prompt.draft) };
+    const blocks = prompt.draft.blocks;
+    draftRef.current = { title: prompt.draft.title, blocks };
     setTitle(prompt.draft.title);
-    setBodyHasContent(hasBodyContent(html));
-    setEditorHtml(html);
+    setBodyHasContent(blocksHaveContent(blocks));
+    setBodyDocument({
+      format: 'alter-doc/1',
+      schemaVersion: 1,
+      revision: latest.revision,
+      blocks,
+    });
     setEditorRevision((value) => value + 1);
     setDraftPrompt(null);
     controller?.notifyChange();
@@ -1146,7 +1196,7 @@ export function DocumentView({
     const controller = controllerRef.current;
     const reloaded = await controller?.reloadServerSnapshot({ clearDraft: true });
     if (reloaded !== undefined) return;
-    clearLegacyDraft(node.id);
+    clearDraft(node.id);
     applyExternalSnapshot({
       doc: mountDoc,
       revision: mountDoc.revision,
@@ -1240,7 +1290,7 @@ export function DocumentView({
       id: 'history-comments',
       label: '历史评论',
       icon: <MessageSquare />,
-      disabled: !resolvedComments.length,
+      disabled: !historyComments.length,
       onSelect: () => setHistoryCommentsOpen(true),
     },
     {
@@ -1248,10 +1298,18 @@ export function DocumentView({
       label: '导出 Markdown',
       icon: <Download />,
       onSelect: () => {
-        downloadMarkdown(
-          title || node.title || '无标题',
-          draftRef.current.content,
+        // Export always reflects the live body: project the current blocks
+        // through the frozen HTML projection the exporter understands.
+        const projected = alterDocToEditorHtml(
+          {
+            format: 'alter-doc/1',
+            schemaVersion: 1,
+            revision: baseRevisionRef.current,
+            blocks: draftRef.current.blocks,
+          },
+          { docPath: (docId) => docPath(spaceId, docId) },
         );
+        downloadMarkdown(title || node.title || '无标题', projected);
         toast('Markdown 已导出');
       },
     },
@@ -1333,6 +1391,74 @@ export function DocumentView({
         </div>
       </section>
     );
+  }
+
+  /**
+   * 文本类型菜单的动作。
+   *
+   * Same nine entries, order and icons as the pre-rebuild editor's block menu;
+   * the frozen `Menu` component renders it, so the look is unchanged.
+   */
+  const textTypeActions: MenuAction[] = [
+    { id: 'p', label: '正文', icon: <Text />, active: textTypeActive === 'p', onSelect: () => chooseBlockType('p') },
+    { id: 'h1', label: '标题 1', icon: <Heading1 />, active: textTypeActive === 'h1', onSelect: () => chooseBlockType('h1') },
+    { id: 'h2', label: '标题 2', icon: <Heading2 />, active: textTypeActive === 'h2', onSelect: () => chooseBlockType('h2') },
+    { id: 'h3', label: '标题 3', icon: <Heading3 />, active: textTypeActive === 'h3', onSelect: () => chooseBlockType('h3') },
+    { id: 'bullet', label: '无序列表', icon: <List />, active: textTypeActive === 'bullet', onSelect: () => chooseBlockType('bullet') },
+    { id: 'ordered', label: '有序列表', icon: <ListOrdered />, active: textTypeActive === 'ordered', onSelect: () => chooseBlockType('ordered') },
+    { id: 'todo', label: '待办', icon: <ListTodo />, active: textTypeActive === 'todo', separatorBefore: true, onSelect: () => chooseBlockType('todo') },
+    { id: 'quote', label: '引用', icon: <Quote />, active: textTypeActive === 'quote', onSelect: () => chooseBlockType('quote') },
+    { id: 'code', label: '代码块', icon: <Code2 />, active: textTypeActive === 'code', onSelect: () => chooseBlockType('code') },
+  ];
+
+  /** The toolbar asked for the block-type menu: snapshot the active type once. */
+  function openTextTypeMenu(anchor: HTMLElement): void {
+    setTextTypeActive(tiptapHandleRef.current?.activeBlockType() ?? 'p');
+    setTextTypeAnchor(anchor);
+  }
+
+  /** Apply one menu choice through the mounted AST-native kernel. */
+  function chooseBlockType(type: EditorBlockType): void {
+    tiptapHandleRef.current?.applyBlockType(type);
+    setTextTypeAnchor(null);
+  }
+
+  /**
+   * Upload one pasted/dropped file as an asset for the AST-native body.
+   *
+   * The AST has no place for a base64 payload, so the kernel reports the file
+   * and the document client stores it; the returned reference goes into the
+   * inserted block.
+   */
+  async function importDocumentAsset(input: {
+    kind: 'image' | 'file';
+    mime: string;
+    dataBase64: string;
+    name?: string;
+  }): Promise<{ assetId: string; mime: string; bytes: number; name?: string }> {
+    const client = documentModelOf(service);
+    if (client === undefined) throw new Error('当前环境不支持上传附件');
+    const importer =
+      input.kind === 'image' ? client.importAsset : client.importFile;
+    if (importer === undefined) throw new Error('当前环境不支持上传附件');
+    try {
+      return await importer.call(client, {
+        mime: input.mime,
+        dataBase64: input.dataBase64,
+        ...(input.name === undefined ? {} : { name: input.name }),
+      });
+    } catch (error) {
+      // Host business errors carry the user-facing Chinese message (size limit,
+      // unsupported image type, storage disabled, …); forward it unchanged so
+      // the body's upload notice shows the real reason instead of a generic
+      // "upload failed" line. Only a message-less rejection gets a fallback.
+      if (error instanceof Error) throw error;
+      throw new Error(
+        typeof error === 'string' && error.trim() !== ''
+          ? error
+          : '附件上传失败，请重试',
+      );
+    }
   }
 
   return (
@@ -1501,65 +1627,69 @@ export function DocumentView({
 
             <div className={styles.commentAnchorLayout}>
               <div ref={setAnchorRoot} className={styles.body}>
-                {editorKernel === 'legacy' ? (
-                  <Editor
-                    docId={node.id}
-                    initialHtml={editorHtml}
-                    externalRevision={editorRevision}
-                    findDoc={(id) => nodes.find((item) => item.id === id)}
-                    onOpenWeb={openWeb}
-                    onOpenDoc={(id) => router.navigate(docPath(spaceId, id))}
-                    onChange={(html) => {
-                      draftRef.current.content = html;
-                      setBodyHasContent(hasBodyContent(html));
-                      scheduleSave();
-                    }}
-                    onComment={startComment}
-                    comments={comments}
-                    activeCommentId={activeCommentId}
-                    onCommentAtCaretChange={setCaretCommentId}
-                    onCommentQuotesChange={handleCommentQuotesChange}
-                    onCommentedTextClick={() => setCommentsOpen(true)}
-                    onNotice={(message) => toast(message)}
-                  />
-                ) : (
-                  <TiptapBody
-                    docId={node.id}
-                    document={lastSavedDocRef.current}
-                    revision={editorRevision}
-                    baseHtml={editorHtml}
-                    caret="none"
-                    comments={commentsWithQuote}
-                    activeCommentId={activeCommentId}
-                    onBlocks={(blocks) => {
-                      draftRef.current.blocks = blocks;
-                      setBodyHasContent(blocks.length > 0);
-                      scheduleSave();
-                    }}
-                    onCommentedTextClick={() => setCommentsOpen(true)}
-                    onCommentRequest={startComment}
-                    onSelectionChange={(selection) => {
-                      // The AST-native body has no comment-caret tracking of
-                      // its own; the selection is what a new comment quotes.
-                      if (!selection.collapsed && selection.quote.trim() !== '') {
-                        setPendingQuote(selection.quote.trim());
-                      }
-                    }}
-                    onLinkEditRequest={(detail) =>
-                      setLinkEdit({
-                        kind: detail.kind,
-                        pos: detail.pos,
-                        href: detail.href,
-                        label: detail.href,
-                      })
-                    }
-                    onReady={(handle) => {
-                      tiptapHandleRef.current = handle;
-                    }}
-                    onNotice={(message) => toast(message)}
-                  />
-                )}
+                <TiptapBody
+                  docId={node.id}
+                  document={bodyDocument}
+                  revision={editorRevision}
+                  caret="none"
+                  comments={commentsWithQuote}
+                  activeCommentId={activeCommentId}
+                  onBlocks={(blocks) => {
+                    draftRef.current.blocks = blocks;
+                    setBodyHasContent(blocksHaveContent(blocks));
+                    scheduleSave();
+                  }}
+                  onCommentedTextClick={() => setCommentsOpen(true)}
+                  onCommentAtCaretChange={setCaretCommentId}
+                  onCommentRequest={startComment}
+                  onCommentQuotesChange={handleCommentQuotesChange}
+                  onSelectionChange={() => {
+                    // The quote for a new comment comes from the kernel's
+                    // toolbar action, never from merely selecting text: a
+                    // selection alone must not open the composer.
+                  }}
+                  onLinkEditRequest={(detail) => {
+                    setLinkError('');
+                    setLinkEdit({
+                      kind: detail.kind,
+                      pos: detail.pos,
+                      href: detail.href,
+                      label: detail.label ?? detail.href,
+                    });
+                  }}
+                  onReady={(handle) => {
+                    tiptapHandleRef.current = handle;
+                  }}
+                  onOpenWeb={
+                    openWeb ??
+                    ((url: string) =>
+                      window.open(url, '_blank', 'noopener,noreferrer'))
+                  }
+                  onOpenDoc={(id) => router.navigate(docPath(spaceId, id))}
+                  onTextTypeRequest={(anchor) => openTextTypeMenu(anchor)}
+                  importAsset={importDocumentAsset}
+                  hasDoc={(docId) => nodes.some((item) => item.id === docId)}
+                  docPath={(docId) => docPath(spaceId, docId)}
+                  resolveDoc={(docId) =>
+                    nodes.find((item) => item.id === docId) === undefined
+                      ? undefined
+                      : {
+                          archived:
+                            nodes.find((item) => item.id === docId)?.archived ===
+                            true,
+                        }
+                  }
+                  onNotice={(message) => toast(message)}
+                />
               </div>
+              <Menu
+                anchor={textTypeAnchor}
+                open={Boolean(textTypeAnchor)}
+                onClose={() => setTextTypeAnchor(null)}
+                align="start"
+                width={172}
+                actions={textTypeActions}
+              />
 
               {stacked ? (
                 <div
@@ -1728,7 +1858,7 @@ export function DocumentView({
       ) : null}
       <HistoryCommentsModal
         open={historyCommentsOpen}
-        comments={comments}
+        comments={historyComments}
         onClose={() => setHistoryCommentsOpen(false)}
       />
       <Dialog
@@ -1831,7 +1961,20 @@ export function DocumentView({
               onClick={() => {
                 const current = linkEdit;
                 if (current === null) return;
-                tiptapHandleRef.current?.applyLinkEdit(current);
+                const href = current.href.trim();
+                if (href === '') {
+                  setLinkError('填写链接地址');
+                  return;
+                }
+                if (!/^https?:\/\//iu.test(href)) {
+                  setLinkError('链接地址格式不正确');
+                  return;
+                }
+                setLinkError('');
+                tiptapHandleRef.current?.applyLinkEdit({
+                  ...current,
+                  href,
+                });
                 setLinkEdit(null);
               }}
             >
@@ -1840,8 +1983,8 @@ export function DocumentView({
           </>
         }
       >
-        <div className={styles.linkForm}>
-          <label className={styles.linkField}>
+        <div className={editorStyles.linkForm}>
+          <label className={editorStyles.linkField}>
             <span>显示文本</span>
             <input
               aria-label="显示文本"
@@ -1853,7 +1996,7 @@ export function DocumentView({
               }
             />
           </label>
-          <label className={styles.linkField}>
+          <label className={editorStyles.linkField}>
             <span>链接地址</span>
             <input
               aria-label="链接地址"
@@ -1865,6 +2008,11 @@ export function DocumentView({
               }
             />
           </label>
+          {linkError === '' ? null : (
+            <p role="alert" className={editorStyles.linkError}>
+              {linkError}
+            </p>
+          )}
         </div>
       </Dialog>
       </DocumentErrorBoundary>
