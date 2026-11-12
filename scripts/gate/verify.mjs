@@ -431,6 +431,10 @@ check(
   /data-plugin-css/.test(client),
   'client.js must inject its stylesheet with the data-plugin-css guard',
 );
+check(
+  /__dshStyle\.textContent\s*=\s*__dshCss/.test(client),
+  'client.js must replace the stylesheet text on re-registration (client HMR)',
+);
 
 const allowedExternals = new Set([
   'react',

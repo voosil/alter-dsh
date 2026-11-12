@@ -10,6 +10,10 @@ client.js
 # Local tooling noise.
 .DS_Store
 .vitest-cache
+
+# Tool caches (browser automation, perf runs): regenerable, never part of the
+# plugin package or the knowledge base.
+.cache/
 # Local deployment secrets
 .env
 

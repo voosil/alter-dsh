@@ -159,12 +159,18 @@ window.__ModuleLoader__.load({
 \t\tvar exports = module.exports;
 \t\tconst __dshCss = ${JSON.stringify(css)};
 \t\tconst __dshCssTagId = ${JSON.stringify(`${pkg.name}/client.css`)};
-\t\tif (typeof document !== 'undefined' && document.querySelector('style[data-plugin-css=' + JSON.stringify(__dshCssTagId) + ']') === null) {
-\t\t\tconst __dshStyle = document.createElement('style');
-\t\t\t__dshStyle.dataset.plugin = ${JSON.stringify(pkg.name)};
-\t\t\t__dshStyle.dataset.pluginCss = __dshCssTagId;
+\t\tif (typeof document !== 'undefined') {
+\t\t\tconst __dshCssSelector = 'style[data-plugin-css=' + JSON.stringify(__dshCssTagId) + ']';
+\t\t\tlet __dshStyle = document.querySelector(__dshCssSelector);
+\t\t\tif (__dshStyle === null) {
+\t\t\t\t__dshStyle = document.createElement('style');
+\t\t\t\t__dshStyle.dataset.plugin = ${JSON.stringify(pkg.name)};
+\t\t\t\t__dshStyle.dataset.pluginCss = __dshCssTagId;
+\t\t\t\tdocument.head.appendChild(__dshStyle);
+\t\t\t}
+\t\t\t// The module is re-registered on client HMR: the stylesheet must be
+\t\t\t// swapped with it, or a CSS-only change would keep the old rules.
 \t\t\t__dshStyle.textContent = __dshCss;
-\t\t\tdocument.head.appendChild(__dshStyle);
 \t\t}
 ${bundle}
 \t\treturn module.exports;

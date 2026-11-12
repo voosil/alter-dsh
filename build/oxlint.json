@@ -10,7 +10,8 @@
     "dist/**",
     "coverage/**",
     "client.js",
-    ".agents/**"
+    ".agents/**",
+    ".cache/**"
   ],
   "rules": {
     "no-console": "warn",
