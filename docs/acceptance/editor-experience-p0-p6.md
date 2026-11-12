@@ -8,7 +8,8 @@ updated: 2026-11-12
 
 验收对象：空间文档页——`vendor/ui-space` 的 `DocumentView`、评论轨/评论卡/评论框、历史面板、
 历史评论弹窗、底部「子文档 / 全文评论」与导出。前端按产品要求 **1:1 还原为重构前的旧 UI**
-（`c73c3f6` 基线），壳层与全部 CSS 保持冻结；编辑内核唯一为 AST 原生 Tiptap
+（`c73c3f6` 基线），壳层与浮层 CSS 保持冻结（正文内容区排版例外，见
+[正文排版方案](../designs/editor-content-typography.md)）；编辑内核唯一为 AST 原生 Tiptap
 （`src/document/editors/tiptap`），正文经 `@alter-space/document-runtime` 以 `alter-doc/1` AST 与
 Document Operations 读写。
 
@@ -19,8 +20,8 @@ Document Operations 读写。
 ## 1. 硬约束（违反即返工）
 
 - **前端冻结的是体验，不是实现**：文档页与基线（`c73c3f6` 旧 UI）保持**视觉与交互 parity**——壳层、
-  全部 CSS（含冻结的 `Editor.module.css`）与工具栏/slash 菜单/评论轨/历史面板视觉不动，正常状态渲染出的
-  外观与交互不得回归。编辑器内核唯一为 AST 原生 Tiptap；旧 contentEditable 内核已退役，
+  浮层 CSS 与工具栏/slash 菜单/评论轨/历史面板视觉不动，正常状态渲染出的
+  外观与交互不得回归。正文内容区的排版按[正文排版方案](../designs/editor-content-typography.md)执行。编辑器内核唯一为 AST 原生 Tiptap；旧 contentEditable 内核已退役，
   **不存在内核切换或应用内回滚路径**（退役决策见[内核替换方案](../designs/editor-kernel-replacement.md)）。
   例外（产品未反对的最小兜底）：加载失败/渲染崩溃的错误页、保存失败态的「导出草稿」按钮、
   错误边界 fallback 仅错误/失败态出现，使用既有样式类与组件。
@@ -56,7 +57,7 @@ Document Operations 读写。
 | 已读记录 | 打开文档 `recordOpen`，目录未读态更新 | 人工 |
 | 块编辑 | 正文、H1–H3、无序/有序/待办列表、引用、代码块、分割线、表格、图片、文件；整行输入 `---` 立即转为分割线（无需回车）；空行行首按 markdown 标准输入 `>`+空格转引用（全角 `》` 同），引用行首退格只删该行标记；分割线/图片支持先选中再删除 | 人工 + 行为测试 |
 | 列表/待办退格 | 空列表项第一次 Backspace 原位退成空段落（保留行与 id），第二次删掉空行并把被拆分的同名列表合并、光标回到上一行末尾（不再出现孤立序号）；空待办行第一步只去掉 checkbox（原位变空段落、光标行首），第二步同上；有文字的行首退格保持默认合并语义 | 自动 + 人工 |
-| 块级手柄 | hover 顶层 block 左侧显示六点手柄；点击全选 block（文本块 TextSelection，atom/表格 NodeSelection 并标记 `data-block-selected`）；拖拽调整 block 顺序（插入指示线、保留节点 id 与评论锚点，Esc/拖出取消；仅顶层 block，鼠标事件实现，未覆盖触屏） | 自动 + 人工 |
+| 块级手柄 | hover 顶层 block 左侧显示六点手柄（28px 点击区、右缘距正文 10px，hover 方块与 block 底板留间隙）；hover 手柄时对应 block 以 `data-block-hover` 轻底色高亮并保持手柄可见；点击全选 block（文本块 TextSelection，atom/表格 NodeSelection 并标记 `data-block-selected`）；拖拽调整 block 顺序（插入指示线、保留节点 id 与评论锚点，Esc/拖出取消；仅顶层 block，鼠标事件实现，未覆盖触屏） | 自动 + 人工 |
 | slash 菜单 | 输入 `/` 触发块插入，块清单与快捷键与旧版一致，新增「表格（无表头）」`table-plain`；菜单打开时按可用空间定在命令行下方或上方并保持方向，过滤变矮/变高只重新测量尺寸与位置、不翻到另一侧 | 人工 + 行为测试 |
 | 行内格式 | 粗/斜/下划线/删除线/代码/高亮/链接（含链接编辑条） | 人工 |
 | 卡片 | 文档内链卡、网页链接卡、文件卡（元数据与下载入口） | 人工 |
@@ -75,15 +76,15 @@ Document Operations 读写。
 
 - 内核（14 个套件）：`tests/ui/document/editors/tiptap/dom-contract.test.ts`（冻结 DOM 契约：块级 DOM 与模块类名）、
   `blocks.test.ts`（待办/卡片/表格）、`blocks-selection.test.ts`（块选中/表格条）、`block-handle.test.ts`
-  （块手柄选中/拖拽）、`slash.test.ts`、`toolbar.test.ts`、`keyboard.test.ts`、`input.test.ts`
+  （块手柄选中/拖拽/手柄 hover 高亮）、`slash.test.ts`、`toolbar.test.ts`、`keyboard.test.ts`、`input.test.ts`
   （输入规则/IME/粘贴拖入/两段式退格）、`overlays.test.ts`（表格工具条）、`link-overlay.test.ts`、
   `comments.test.ts`（Highlight 绘制、caret 上报与 quote 维护）、`kernel-mount.test.ts`/`body.test.ts`/`kernel.test.ts`（接线）；
 - 页面与运行时：`tests/ui/document/page/{view,recovery,resilience,anchors,document-page}.test.ts`、
   `tests/ui/document/runtime/{adapter,save}.test.ts`，共享页面 harness 在 `tests/support/document-page.ts`；
   新建文档路由落点由 `tests/ui/app/navigation.test.ts`（内存服务替身 + 真 SpaceApp）约束；
 - 规模与随机走查：`tests/nightly/document/fuzz.test.ts`（G2 种子随机）；
-- 当前复核：编辑器相关套件全绿（内核 297 tests、`--project ui` 404 tests），`tsc`（客户端）、
-  `lint`、`build` 与 `docs:check` 通过；bundle `client.js` 1437 KiB / 161 KiB CSS；6 个 legacy
+- 当前复核：编辑器相关套件全绿（内核 301 tests、`--project ui` 424 tests），`tsc`（客户端）、
+  `lint`、`build` 与 `docs:check` 通过；bundle `client.js` 1442 KiB / 162 KiB CSS；6 个 legacy
   测试套件已随旧内核删除。全仓 `pnpm check` 以与并行改动合并后的工作树为准。
 
 以下真实浏览器验收记录产生于已退役的 contentEditable 内核时代（编辑/保存/刷新拼接、slash、撤销、

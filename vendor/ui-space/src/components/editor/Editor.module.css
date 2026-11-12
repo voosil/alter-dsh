@@ -26,44 +26,60 @@
 }
 .surface ::selection {
   /* 半透明选区：选中状态下仍能透出行内高亮（mark）等文字背景色。 */
-  background: rgba(26, 24, 23, 0.08);
+  background: rgba(26, 24, 23, 0.12);
 }
 .surface p {
   margin: 0 0 10px;
 }
+/* 标题阶梯以正文字号（16px）为基准：文档标题 32 → h1 26 → h2 22 → h3 18 → h4 16 →
+   h5/h6 14。间距同样相对自身字号，上间距恒大于下间距，改阶梯时节奏自动跟随。 */
 .surface h1,
 .surface h2,
-.surface h3 {
+.surface h3,
+.surface h4,
+.surface h5,
+.surface h6 {
   color: var(--alter-text);
   font-weight: 600;
   line-height: 1.3;
   letter-spacing: 0;
 }
 .surface h1 {
-  margin: 30px 0 12px;
-  font-size: var(--alter-font-title);
+  margin: 1.25em 0 0.5em;
+  font-size: 1.625em;
 }
 .surface h2 {
-  margin: 28px 0 12px;
-  font-size: var(--alter-font-title-sm);
+  margin: 1.3em 0 0.5em;
+  font-size: 1.375em;
 }
 .surface h3 {
-  margin: 20px 0 10px;
-  font-size: var(--alter-font-body);
+  margin: 1.35em 0 0.55em;
+  font-size: 1.125em;
+}
+.surface h4 {
+  margin: 1.4em 0 0.5em;
+  font-size: 1em;
+}
+.surface h5,
+.surface h6 {
+  margin: 1.5em 0 0.5em;
+  font-size: 0.875em;
+}
+/* 六级标题与加粗正文同号，靠色调降一级区分。 */
+.surface h6 {
+  color: var(--alter-text-muted);
 }
 .surface strong,
 .surface b {
   font-weight: 600;
 }
-.surface h1:first-child,
-.surface h2:first-child,
-.surface h3:first-child {
+.surface :is(h1, h2, h3, h4, h5, h6):first-child {
   margin-top: 0;
 }
 .surface ul,
 .surface ol {
   margin: 4px 0 10px;
-  padding-left: 1.2em;
+  padding-left: 1.6em;
 }
 .surface li {
   margin: 6px 0;
@@ -74,9 +90,10 @@
 }
 .surface blockquote {
   margin: 24px 0;
-  padding-left: 16px;
+  padding-left: 20px;
   border-left: 1px solid var(--alter-control-border);
-  color: var(--alter-text);
+  /* 引用降一级：保留同一色相，靠色深拉开层级，而不是把边框加粗。 */
+  color: var(--alter-text-secondary);
 }
 .surface blockquote p:last-child {
   margin-bottom: 0;
@@ -373,7 +390,7 @@
   text-align: left;
 }
 .surface th {
-  background: var(--alter-surface-nav);
+  background: var(--alter-surface-hover);
   font-weight: 600;
 }
 .floating {

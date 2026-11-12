@@ -3,11 +3,16 @@
  * Block handle parity gate (Notion-style block affordance).
  *
  * Frozen behaviour under test: hovering a top-level block shows one handle in
- * the left gutter; clicking it selects the whole block (TextSelection for text,
- * NodeSelection for atoms/tables) and marks the DOM with `data-block-selected`
- * (editing state only); dragging it reorders top-level blocks with a drop
- * indicator on the target edge, keeps the moved node's id, ignores self drops,
- * cancels with Escape / leaving the body and saves through the kernel.
+ * the left gutter (a 28px target that starts 10px left of the text); hovering that
+ * handle highlights its block with `data-block-hover`; clicking it selects the
+ * whole block (TextSelection for text, NodeSelection for atoms/tables) and
+ * marks the DOM with `data-block-selected` (editing state only); dragging it
+ * reorders top-level blocks with a drop indicator on the target edge, keeps the
+ * moved node's id, ignores self drops, cancels with Escape / leaving the body
+ * and saves through the kernel. Both marks are ProseMirror node decorations
+ * published from the view state — a direct DOM write is stripped by the
+ * editor's own DOM reader in a real browser, which is what the state tests
+ * here guard against.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Editor } from '@tiptap/core';
@@ -173,8 +178,8 @@ describe('block handle', () => {
     moveOver(blocks[0]!);
     const handle = handleElement();
     expect(handle.dataset['visible']).toBe('true');
-    // 26px left of the block, clamped into the viewport, top + 2px.
-    expect(handle.style.left).toBe('94px');
+    // The 28px hit area starts 10px left of the block; top + 2px.
+    expect(handle.style.left).toBe('82px');
     expect(handle.style.top).toBe('52px');
   });
 
@@ -198,7 +203,7 @@ describe('block handle', () => {
     moveOver(nested!);
     const handle = handleElement();
     expect(handle.dataset['visible']).toBe('true');
-    expect(handle.style.left).toBe('104px');
+    expect(handle.style.left).toBe('92px');
     // Clicking the handle selects the whole list, not the paragraph inside it.
     handle.click();
     const selection = editor.state.selection;
@@ -303,6 +308,72 @@ describe('block handle', () => {
     expect(handleElement().dataset['visible']).toBe('false');
   });
 
+  it('highlights the block while the handle is hovered, and clears on hide', () => {
+    vi.useFakeTimers();
+    const { editor } = mount(
+      docWith([paragraph('blk_a', '一'), paragraph('blk_b', '二')]),
+    );
+    const blocks = topBlocks(editor);
+    stubRect(editor.view.dom, 100, 0, 500, 400);
+    stubRect(blocks[0]!, 120, 50);
+    stubRect(blocks[1]!, 120, 100);
+    moveOver(blocks[1]!);
+    const handle = handleElement();
+    // Hovering the block alone shows the handle but does not mark the block.
+    expect(blocks[1]!.hasAttribute('data-block-hover')).toBe(false);
+    handle.dispatchEvent(new MouseEvent('mouseenter'));
+    // Staying on the handle keeps both the handle and its block highlighted.
+    vi.advanceTimersByTime(500);
+    expect(handle.dataset['visible']).toBe('true');
+    expect(blocks[1]!.getAttribute('data-block-hover')).toBe('');
+    expect(blocks[0]!.hasAttribute('data-block-hover')).toBe(false);
+    // Leaving the handle drops the mark right away.
+    handle.dispatchEvent(new MouseEvent('mouseleave'));
+    expect(blocks[1]!.hasAttribute('data-block-hover')).toBe(false);
+    // Hiding the handle (scroll) also drops any mark left behind.
+    handle.dispatchEvent(new MouseEvent('mouseenter'));
+    expect(blocks[1]!.getAttribute('data-block-hover')).toBe('');
+    document.dispatchEvent(new Event('scroll'));
+    expect(handle.dataset['visible']).toBe('false');
+    expect(blocks[1]!.hasAttribute('data-block-hover')).toBe(false);
+    // Editing state only: the mark never reaches the AST.
+    expect(JSON.stringify(pmDocToBlocks(editor.state.doc).value)).not.toContain(
+      'data-block-hover',
+    );
+  });
+
+  it('keeps the hover mark in view state and drops it on a body change', () => {
+    const { editor } = mount(
+      docWith([paragraph('blk_a', '一'), paragraph('blk_b', '二')]),
+    );
+    const blocks = topBlocks(editor);
+    stubRect(editor.view.dom, 100, 0, 500, 400);
+    stubRect(blocks[0]!, 120, 50);
+    stubRect(blocks[1]!, 120, 100);
+    moveOver(blocks[1]!);
+    handleElement().dispatchEvent(new MouseEvent('mouseenter'));
+    expect(blocks[1]!.getAttribute('data-block-hover')).toBe('');
+    // A transaction that does not touch the body keeps the mark: it lives in the
+    // view state (a decoration), not as a one-off DOM write.
+    editor.view.dispatch(editor.state.tr);
+    expect(blocks[1]!.getAttribute('data-block-hover')).toBe('');
+    // Edits invalidate the marked position, so the transient mark drops.
+    editor.view.dispatch(editor.state.tr.insertText('x', 1, 1));
+    expect(blocks[1]!.hasAttribute('data-block-hover')).toBe(false);
+  });
+
+  it('drops the selection mark when the body changes', () => {
+    const { editor } = mount(docWith([paragraph('blk_p', '正文')]));
+    const blocks = topBlocks(editor);
+    stubRect(editor.view.dom, 100, 0, 500, 400);
+    stubRect(blocks[0]!, 120, 50);
+    moveOver(blocks[0]!);
+    handleElement().click();
+    expect(blocks[0]!.getAttribute('data-block-selected')).toBe('');
+    editor.view.dispatch(editor.state.tr.insertText('x', 1, 1));
+    expect(blocks[0]!.hasAttribute('data-block-selected')).toBe(false);
+  });
+
   it('hides on scroll', () => {
     const { editor } = mount(docWith([paragraph('blk_p', '正文')]));
     const blocks = topBlocks(editor);
@@ -329,12 +400,15 @@ describe('block handle', () => {
     stubRect(blocks[2]!, 120, 150);
 
     moveOver(blocks[2]!);
+    handleElement().dispatchEvent(new MouseEvent('mouseenter'));
+    expect(blocks[2]!.getAttribute('data-block-hover')).toBe('');
     pressHandle(200, 150);
     movePointer(200, 52);
     const indicator = indicatorElement();
     expect(indicator.style.display).not.toBe('none');
     expect(indicator.style.top).toBe('50px');
     expect(handleElement().dataset['visible']).toBe('false');
+    expect(blocks[2]!.hasAttribute('data-block-hover')).toBe(false);
     expect(onDragChange).toHaveBeenLastCalledWith(true);
 
     releasePointer(200, 52);
@@ -460,9 +534,16 @@ describe('block handle', () => {
 
   it('removes the handle and the insertion line on destroy', () => {
     const { editor, handle } = mount(docWith([paragraph('blk_p', '正文')]));
+    const blocks = topBlocks(editor);
+    stubRect(editor.view.dom, 100, 0, 500, 400);
+    stubRect(blocks[0]!, 120, 50);
+    moveOver(blocks[0]!);
+    handleElement().dispatchEvent(new MouseEvent('mouseenter'));
+    expect(blocks[0]!.getAttribute('data-block-hover')).toBe('');
     expect(document.querySelector('[aria-label="块操作"]')).not.toBeNull();
     handle.destroy();
     expect(editor.view.dom.querySelector('[data-block-selected]')).toBeNull();
+    expect(blocks[0]!.hasAttribute('data-block-hover')).toBe(false);
     expect(document.querySelector('[aria-label="块操作"]')).toBeNull();
     expect(document.querySelector('[data-drop-indicator]')).toBeNull();
   });

@@ -26,6 +26,7 @@
 import { Editor, type AnyExtension } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import type { Node as PmNode } from '@tiptap/pm/model';
+import { TextSelection } from '@tiptap/pm/state';
 import { documentAssetUrl } from '../../asset-url';
 import type {
   EditorBlockType,
@@ -44,6 +45,7 @@ import {
   handleBlockSelectionKey,
 } from './block-selection';
 import { createBlockIdExtension } from './block-ids';
+import { BlockMarksExtension } from './block-marks';
 import {
   createCommentExtension,
   repaintComments,
@@ -216,6 +218,7 @@ export function kernelExtensions(
       ...(options.hasDoc === undefined ? {} : { hasDoc: options.hasDoc }),
     }),
     createBlockIdExtension(),
+    BlockMarksExtension,
     createCommentExtension(comments),
   ];
 }
@@ -298,8 +301,24 @@ export type LinkEditHandler = (input: {
 /** The body the kernel exposes to the contract. */
 export interface KernelEditor {
   editor: Editor;
-  /** Replace the whole body without reporting an update. */
+  /**
+   * Replace the whole body by rebuilding the editing surface.
+   *
+   * Used when the *session* must reset: version restore, conflict adoption,
+   * crash-draft recovery, document switch. A rebuild drops the undo stack and
+   * the selection on purpose, so a restored version cannot be undone into the
+   * pre-restore body.
+   */
   load(doc: AlterDoc): void;
+  /**
+   * Replace the body in place with a newer external version.
+   *
+   * Used when another writer updated the same document: the content is swapped
+   * but the live session survives (undo stack, caret, floating surfaces), so an
+   * update never destroys what the user was doing. Returns whether the body
+   * actually changed; a no-op leaves the caret untouched.
+   */
+  refresh(doc: AlterDoc): boolean;
   /** Current body. */
   capture(): PmNode;
   /** Write the page's link dialog result back into the body. */
@@ -410,6 +429,15 @@ export function createKernelEditor(options: CreateKernelEditorOptions): KernelEd
   let runtime: KernelRuntime | null = null;
   /** Last built runtime, kept for read-only calls made after destroy(). */
   let lastRuntime: KernelRuntime | null = null;
+  /**
+   * Set while the kernel itself writes the body (external refresh).
+   *
+   * A doc-changing transaction normally means "the user edited this", which the
+   * page turns into a save. A refresh is the opposite — the server already has
+   * the content — so it must not report a change, or the page would echo the
+   * update straight back as a new edit.
+   */
+  let applyingExternalDoc = false;
 
   /**
    * Build one editor instance and its body-level surfaces.
@@ -486,6 +514,10 @@ export function createKernelEditor(options: CreateKernelEditorOptions): KernelEd
         },
       },
       onUpdate: () => {
+        if (applyingExternalDoc) {
+          refreshToolbar?.();
+          return;
+        }
         options.onUpdate?.();
         refreshToolbar?.();
       },
@@ -608,6 +640,43 @@ export function createKernelEditor(options: CreateKernelEditorOptions): KernelEd
     load(doc: AlterDoc) {
       runtime?.destroy();
       runtime = build(doc, false);
+    },
+    refresh(doc: AlterDoc) {
+      const current = runtime;
+      if (current === null) return false;
+      const converted = blocksToPmDoc(doc.blocks);
+      for (const warning of converted.warnings) options.onNotice?.(warning);
+      const editor = current.editor;
+      const next = editor.schema.nodeFromJSON(converted.value.toJSON());
+      // An identical body keeps the caret exactly where the user left it.
+      if (next.eq(editor.state.doc)) return false;
+      const { state } = editor;
+      const caret = Math.min(state.selection.from, state.doc.content.size);
+      const tr = state.tr.replaceWith(0, state.doc.content.size, next.content);
+      // The swap is not an edit: it must not enter the undo stack, otherwise
+      // one undo would revert the other writer's work instead of the user's.
+      tr.setMeta('addToHistory', false);
+      try {
+        tr.setSelection(
+          TextSelection.near(tr.doc.resolve(Math.min(caret, tr.doc.content.size))),
+        );
+      } catch {
+        // A collapsed/atom selection position can fall outside the new body;
+        // ProseMirror maps the old selection instead of failing the refresh.
+      }
+      applyingExternalDoc = true;
+      try {
+        editor.view.dispatch(tr);
+      } finally {
+        applyingExternalDoc = false;
+      }
+      // Comment anchors moved with the text, so repaint them onto the new body.
+      repaintComments(
+        editor.view,
+        options.comments ?? [],
+        options.activeCommentId ?? null,
+      );
+      return true;
     },
     capture() {
       return (

@@ -89,15 +89,20 @@
 
 /* The handle floats in the left gutter of the hovered top-level block. It is
    body-level DOM (never inside the editable root), so it must not inherit the
-   surface typography. Colors follow the frozen UI tokens. */
+   surface typography. Colors follow the frozen UI tokens.
+   The button is the pointer target (28×28) while the grip drawn inside it stays
+   14px, so the extra area around the icon is transparent. The visible hover
+   plate is a smaller square inset inside the target: it must stay clear of the
+   block tint that bleeds 10px into the gutter, otherwise the two merge into one
+   blob. */
 .kernelBlockHandle {
   position: fixed;
   z-index: 47;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 22px;
+  width: 28px;
+  height: 28px;
   padding: 0;
   border: 0;
   border-radius: var(--alter-radius-xs);
@@ -114,10 +119,18 @@
   opacity: 1;
   pointer-events: auto;
 }
-.kernelBlockHandle:hover,
-.kernelBlockHandle:focus-visible {
+/* Plain hover feedback: a compact square darkens inside the target. */
+.kernelBlockHandle::before {
+  content: '';
+  position: absolute;
+  inset: 5px;
+  border-radius: var(--alter-radius-xs);
+  background: transparent;
+  transition: background-color var(--alter-duration-fast);
+}
+.kernelBlockHandle:hover::before,
+.kernelBlockHandle:focus-visible::before {
   background: var(--alter-surface-hover);
-  color: var(--alter-text);
 }
 .kernelBlockHandle:active {
   cursor: grabbing;
@@ -126,6 +139,44 @@
   display: block;
   width: 14px;
   height: 14px;
+}
+
+/* Block highlighted while its handle is hovered: the tint (the same hover token
+   as every other hover in the UI) ties the grip to the block it will act on.
+   This is the fallback for blocks that keep their own surface below; plain
+   content blocks get the padded plate that follows. */
+.kernelSurface [data-block-hover] {
+  box-shadow: inset 0 0 0 999px var(--alter-surface-hover);
+}
+
+/* Plain content blocks (text, lists, quotes, dividers, tables) get a padded,
+   rounded plate instead of a tint glued to the edges: the plate bleeds 10px
+   into the left/right gutter and 3px above and below the block. Padding cannot
+   be added to the block itself without moving the document, so the plate is a
+   negative-z pseudo-element inside an isolated stacking context: the element
+   keeps its own box, the tint paints behind the content. Code blocks, cards and
+   images keep the inset tint / hairline ring, which follows their own radius
+   and never fights their own surface. */
+.kernelSurface :is(p, h1, h2, h3, ul, ol, blockquote, div[data-divider], table)[data-block-hover] {
+  position: relative;
+  isolation: isolate;
+  box-shadow: none;
+}
+.kernelSurface :is(p, h1, h2, h3, ul, ol, blockquote, div[data-divider], table)[data-block-hover]::after {
+  content: '';
+  position: absolute;
+  inset: -3px -10px;
+  z-index: -1;
+  border-radius: var(--alter-radius-xs);
+  background: var(--alter-surface-hover);
+  pointer-events: none;
+}
+/* Replaced content paints over the inset tint: an image block gets a hairline
+   ring instead so the mark is still visible. */
+.kernelSurface img[data-block-hover] {
+  box-shadow: none;
+  outline: 1px solid var(--alter-border);
+  outline-offset: 3px;
 }
 
 /* Insertion line shown while dragging a block. */

@@ -25,6 +25,7 @@ updated: 2026-11-12
 | [agent-doc-tools.md](agent-doc-tools.md) | Agent 读写空间为什么用 Host 原生工具、写入安全三件套、工具面现状与全量能力对齐决策、边界与风险 |
 | [document-editor-robustness.md](document-editor-robustness.md) | 文档编辑器还原后的健壮性现状、缺口、推进顺序、开放决策与风险 |
 | [editor-kernel-replacement.md](editor-kernel-replacement.md) | 体验不变、内核可换：为什么替换编辑器内核、唯一内核与文档运行时边界、选型、parity 验收与旧内核退役 |
+| [editor-content-typography.md](editor-content-typography.md) | 正文内容区的排版规则与依据：冻结范围收缩、候选为何不能整包引入、差距、标题阶梯与 em 间距、块级外观取舍 |
 | [space-deployment-modes.md](space-deployment-modes.md) | 空间部署形态：本地权威与自部署服务端的方向、模式边界、服务端约束与开放问题 |
 
 状态以每篇 frontmatter 的 `status` 为准，索引不复制。

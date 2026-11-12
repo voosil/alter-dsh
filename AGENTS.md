@@ -27,7 +27,8 @@ Host 半侧（`host/` → `lib/`）是 Cordis 插件，持有 SQLite 与业务�
 - **文档正文单一格式**：所有 Space note 正文只有 `alter-doc/1` AST 一种格式；正文写入必须经
   Document Operations，`space.saveNode` 只更新元数据、不接受正文。
 - **文档编辑面冻结的是体验，不是实现**：文档页与基线（`vendor/ui-space` 旧 UI）保持**视觉与交互
-  parity**——壳层、全部 CSS（含冻结的 `Editor.module.css`）与工具栏/菜单/评论轨/历史面板视觉不动。
+  parity**——壳层、浮层 CSS 与工具栏/菜单/评论轨/历史面板视觉不动；正文内容区的排版自 2026-11-12
+  起由[正文排版方案](docs/designs/editor-content-typography.md)管理（`Editor.module.css` 的 `.surface` 规则）。
   编辑器内核**唯一**为 AST 原生 Tiptap（`src/document/editors/tiptap`）；旧 contentEditable 内核已退役，
   不存在内核切换或应用内回滚路径（见 [内核替换方案](docs/designs/editor-kernel-replacement.md)）。
   正文只经 Document Operations（客户端经 `@alter-space/document-runtime` 接 Host）；组件目录在

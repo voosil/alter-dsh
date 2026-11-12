@@ -4,8 +4,12 @@
  * Notion/飞书 style block affordance on top of the frozen editor surface:
  *
  * - hovering any **top-level** block (paragraph, heading, list, quote, code,
- *   table, divider, image, card) shows one 20px six-dot handle 26px left of the
- *   block's left edge, vertically aligned with its top;
+ *   table, divider, image, card) shows one six-dot handle in the left gutter:
+ *   a 28px hit area that starts in the gutter clear of the block highlight
+ *   plate, vertically aligned with the block's top, so the pointer slides off
+ *   a line straight onto it;
+ * - hovering the handle highlights the block it belongs to (`data-block-hover`)
+ *   and keeps the handle visible while the pointer is on it;
  * - clicking the handle selects the whole block — a text block gets a
  *   `TextSelection` covering its content, an atom or a table gets a
  *   `NodeSelection` — and marks the block DOM with `data-block-selected`, an
@@ -29,6 +33,13 @@ import type { Editor } from '@tiptap/core';
 import type { Node as PmNode } from '@tiptap/pm/model';
 import { NodeSelection, Selection, TextSelection } from '@tiptap/pm/state';
 import type { EditorView } from '@tiptap/pm/view';
+import {
+  EMPTY_BLOCK_MARKS,
+  blockMarksKey,
+  patchBlockMarks,
+  selectionKind,
+  type BlockMarks,
+} from './block-marks';
 import { closeOverlayBars } from './overlays';
 
 /** Class of the handle shell (plain global class from `kernel.css`). */
@@ -37,14 +48,22 @@ const HANDLE_CLASS = 'kernelBlockHandle';
 /** Class of the insertion line (plain global class from `kernel.css`). */
 const INDICATOR_CLASS = 'kernelDropIndicator';
 
-/** Handle sits this far left of the block's left edge. */
-const HANDLE_LEFT_OFFSET_PX = 26;
+/**
+ * Width of the grip's pointer target; mirrors `.kernelBlockHandle` in
+ * `kernel.css`. Only the 14px icon is visible, the rest is transparent padding
+ * that makes the handle easier to hit.
+ */
+const HANDLE_WIDTH_PX = 28;
+
+/**
+ * Gap kept between the hit area and the block's left edge. The visible hover
+ * plate sits inset inside the hit area, so it stays clear of the block tint
+ * that bleeds 10px into the gutter (no merged blobs).
+ */
+const HANDLE_GAP_PX = 10;
 
 /** Handle is aligned with the block top plus this offset. */
 const HANDLE_TOP_OFFSET_PX = 2;
-
-/** Smallest viewport distance kept for the handle (never off-screen). */
-const HANDLE_MIN_LEFT_PX = 8;
 
 /** Delay before the handle hides when the pointer leaves the body. */
 const HIDE_DELAY_MS = 120;
@@ -78,15 +97,6 @@ interface DragState {
   startY: number;
   dragging: boolean;
   drop: DropTarget | null;
-}
-
-/** The block marked through the handle (editing state only). */
-interface SelectedMark {
-  element: HTMLElement;
-  /** Selection kind (`text`, `node`, …) so table normalization still matches. */
-  jsonID: string;
-  from: number;
-  to: number;
 }
 
 /** Options of {@link createBlockHandle}. */
@@ -154,18 +164,6 @@ function textblockRangeInside(
   return from === null || to === null ? null : { from, to };
 }
 
-/**
- * Selection kind id (`text`, `node`, `cell`, …) used to match a marked block.
- *
- * ProseMirror's `Selection` base class does not declare the per-subclass
- * `jsonID`; reading it is how the table plugin's normalized `CellSelection`
- * still matches the `NodeSelection` the handle asked for.
- */
-function selectionKind(selection: Selection): string {
-  const withId = selection as Selection & { readonly jsonID?: string };
-  return withId.jsonID ?? selection.constructor.name;
-}
-
 /** Selection that means "the whole block" for one node. */
 function selectionForBlock(
   doc: PmNode,
@@ -229,50 +227,43 @@ export function createBlockHandle(
   let hideTimer: number | null = null;
   let drag: DragState | null = null;
   let suppressClick = false;
-  let selectedMark: SelectedMark | null = null;
   let destroyed = false;
+
+  // -------------------------------------------------------------------------
+  // Transient block marks
+  // -------------------------------------------------------------------------
+
+  /** Current marks painted by the plugin. */
+  function marks(): BlockMarks {
+    return blockMarksKey.getState(editor.state) ?? EMPTY_BLOCK_MARKS;
+  }
+
+  /** Write one mark patch as a transient view update (no document change). */
+  function patchMarks(patch: Partial<BlockMarks>): void {
+    if (destroyed) return;
+    patchBlockMarks(view, patch);
+  }
 
   // -------------------------------------------------------------------------
   // Selection
   // -------------------------------------------------------------------------
-
-  function clearSelectedBlock(): void {
-    if (selectedMark === null) return;
-    selectedMark.element.removeAttribute('data-block-selected');
-    selectedMark = null;
-  }
-
-  function markSelected(ref: BlockRef, selection: Selection): void {
-    clearSelectedBlock();
-    ref.element.setAttribute('data-block-selected', '');
-    selectedMark = {
-      element: ref.element,
-      jsonID: selectionKind(selection),
-      from: selection.from,
-      to: selection.to,
-    };
-  }
-
-  /** Keep the mark only while the editor selection still matches the block. */
-  function syncSelectedBlock(): void {
-    const mark = selectedMark;
-    if (mark === null) return;
-    // A table NodeSelection is normalized by the table plugin into a
-    // CellSelection, so compare the selection kind/range instead of the class.
-    const selection = view.state.selection;
-    const matches =
-      selectionKind(selection) === mark.jsonID &&
-      selection.from === mark.from &&
-      selection.to === mark.to;
-    if (!matches) clearSelectedBlock();
-  }
 
   function selectBlock(ref: BlockRef): void {
     const selection = selectionForBlock(view.state.doc, ref.pos, ref.node);
     if (selection === null) return;
     view.dispatch(view.state.tr.setSelection(selection));
     view.focus();
-    markSelected(ref, selection);
+    // The table plugin can normalize a table NodeSelection into a CellSelection,
+    // so the mark records the selection the state actually applied.
+    const applied = view.state.selection;
+    patchMarks({
+      selected: {
+        pos: ref.pos,
+        jsonID: selectionKind(applied),
+        from: applied.from,
+        to: applied.to,
+      },
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -308,17 +299,24 @@ export function createBlockHandle(
 
   function positionHandle(element: HTMLElement): void {
     const rect = element.getBoundingClientRect();
-    handle.style.left = `${Math.max(HANDLE_MIN_LEFT_PX, rect.left - HANDLE_LEFT_OFFSET_PX)}px`;
+    // The hit area starts `HANDLE_GAP_PX` left of the block so it clears the
+    // hover plate that bleeds into the gutter; the visible hover square is
+    // inset inside the hit area and therefore keeps its gap too. A gutter
+    // narrower than the handle keeps the box at the viewport edge.
+    const left = Math.max(0, rect.left - HANDLE_WIDTH_PX - HANDLE_GAP_PX);
+    handle.style.left = `${left}px`;
     handle.style.top = `${rect.top + HANDLE_TOP_OFFSET_PX}px`;
   }
 
   function showHandle(element: HTMLElement): void {
     handleBlock = element;
+    clearHoveredBlock();
     positionHandle(element);
     handle.dataset['visible'] = 'true';
   }
 
   function hideHandle(): void {
+    clearHoveredBlock();
     handleBlock = null;
     handle.dataset['visible'] = 'false';
   }
@@ -430,7 +428,6 @@ export function createBlockHandle(
     if (selection !== null) tr.setSelection(selection);
     view.dispatch(tr);
     view.focus();
-    clearSelectedBlock();
   }
 
   function beginDrag(): void {
@@ -506,6 +503,23 @@ export function createBlockHandle(
   // Handle interaction
   // -------------------------------------------------------------------------
 
+  /** Drop the block highlight (the pointer left the handle). */
+  function clearHoveredBlock(): void {
+    if (marks().hoveredPos === null) return;
+    patchMarks({ hoveredPos: null });
+  }
+
+  /** Highlight the block the handle belongs to (editing state only). */
+  function hoverBlock(element: HTMLElement | null): void {
+    if (element === null) {
+      clearHoveredBlock();
+      return;
+    }
+    const ref = locate(element);
+    if (ref === null || marks().hoveredPos === ref.pos) return;
+    patchMarks({ hoveredPos: ref.pos });
+  }
+
   function onClick(): void {
     if (suppressClick) {
       suppressClick = false;
@@ -519,9 +533,11 @@ export function createBlockHandle(
 
   function onHandleEnter(): void {
     cancelScheduledHide();
+    hoverBlock(handleBlock);
   }
 
   function onHandleLeave(): void {
+    clearHoveredBlock();
     if (drag === null) scheduleHide();
   }
 
@@ -572,7 +588,6 @@ export function createBlockHandle(
   document.addEventListener('scroll', onScroll, true);
   window.addEventListener('resize', onResize);
   window.addEventListener('blur', onWindowBlur);
-  editor.on('selectionUpdate', syncSelectedBlock);
 
   const onEditorDestroy = (): void => {
     destroy();
@@ -581,10 +596,13 @@ export function createBlockHandle(
 
   function destroy(): void {
     if (destroyed) return;
-    destroyed = true;
     cancelScheduledHide();
     if (drag !== null) finishDrag();
-    editor.off('selectionUpdate', syncSelectedBlock);
+    // Drop the transient marks before the handle that owns them goes away. The
+    // editor may already be destroyed (teardown event path), in which case the
+    // view state and its decorations are gone with it.
+    if (!editor.isDestroyed) patchBlockMarks(view, EMPTY_BLOCK_MARKS);
+    destroyed = true;
     editor.off('destroy', onEditorDestroy);
     view.dom.removeEventListener('mousemove', onBodyMouseMove);
     view.dom.removeEventListener('mouseleave', onBodyMouseLeave);
@@ -595,7 +613,6 @@ export function createBlockHandle(
     handle.removeEventListener('click', onClick);
     handle.removeEventListener('mouseenter', onHandleEnter);
     handle.removeEventListener('mouseleave', onHandleLeave);
-    clearSelectedBlock();
     handle.remove();
     indicator.remove();
   }
