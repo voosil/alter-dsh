@@ -2,10 +2,10 @@
  * Structured diagnostics for the restored document UI.
  *
  * The legacy documents view catches failures in many places (mount/parse,
- * saves, conflicts, restores, comments, render boundaries). This module is the
- * single reporting seam: it turns any thrown value into one structured record
- * and logs it with `console.error` so a failing client leaves a reproducible
- * trace.
+ * saves, conflicts, restores, creation, comments, render boundaries). This
+ * module is the single reporting seam: it turns any thrown value into one
+ * structured record and logs it with `console.error` so a failing client leaves
+ * a reproducible trace.
  *
  * Privacy: the report only carries a fixed set of identifiers (document,
  * block, comment, revision, scope). Document body text is never logged — the
@@ -21,6 +21,7 @@ export type DocumentErrorScope =
   | 'save'
   | 'conflict'
   | 'restore'
+  | 'create'
   | 'comments'
   | 'anchor'
   | 'asset'

@@ -413,11 +413,14 @@ function insertNote(data: SpaceStoreData, input: InsertNoteInput): SpaceNode {
   if (space === undefined) throw new DocumentError('doc/not-found', '空间不存在');
   const parentId = input.parentId;
   if (parentId !== null) {
+    // A note may live under a folder or under another note: the product shows
+    // notes as sub-documents (`DocumentView` 子文档, sidebar quick-add) and the
+    // tree/move paths already accept that shape. Only the parent's existence
+    // and space membership are structural rules; folders stay root-only in the
+    // vendor structure service, which owns folder placement.
     const parent = findNode(data, parentId);
     if (parent === undefined || parent.spaceId !== input.spaceId)
-      throw new DocumentError('op/invalid', '目标文件夹不存在');
-    if (parent.kind !== 'folder')
-      throw new DocumentError('op/invalid', '父节点必须是文件夹');
+      throw new DocumentError('op/invalid', '父节点不存在或不属于当前空间');
   }
   const siblings = data.nodes.filter(
     (node) =>

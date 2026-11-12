@@ -216,6 +216,49 @@ describe('Space RPC dispatch', () => {
     await store.close();
   });
 
+  it('creates a sub-document under another note through the browser endpoint', async () => {
+    // Regression: the 「新建子文档」 button posts `parentId` = the open note. The
+    // document service used to reject every non-folder parent, so the browser
+    // call failed and the fire-and-forget click looked completely dead.
+    const { store, handler } = await createHandler();
+    const spaces = valueOf(
+      await handler('space.listSpaces', { args: [] }, signal, {}),
+    ) as Array<{ id: string }>;
+    const spaceId = spaces[0]!.id;
+    const parent = valueOf(
+      await handler(
+        'space.createNode',
+        { args: [{ spaceId, kind: 'note', title: '父文档' }] },
+        signal,
+        {},
+      ),
+    ) as { id: string };
+    const result = await handler(
+      'space.createNode',
+      { args: [{ spaceId, parentId: parent.id, kind: 'note' }] },
+      signal,
+      {},
+    );
+    expect(errorOf(result)).toBeUndefined();
+    const child = valueOf(result) as {
+      id: string;
+      kind: string;
+      parentId: string | null;
+      content: string;
+    };
+    expect(child.id).toMatch(/^doc-/);
+    expect(child.kind).toBe('note');
+    expect(child.parentId).toBe(parent.id);
+    // The sub-document starts as an editable empty AST at revision 1.
+    expect(parseAlterDoc(child.content).revision).toBe(1);
+
+    const nodes = valueOf(
+      await handler('space.listNodes', { args: [spaceId] }, signal, {}),
+    ) as Array<{ id: string; parentId: string | null }>;
+    expect(nodes.find((node) => node.id === child.id)?.parentId).toBe(parent.id);
+    await store.close();
+  });
+
   it('does not expose the removed doc.migrate endpoint', async () => {
     const { store, handler } = await createHandler();
     const result = await handler('doc.migrate', { args: [] }, signal, {});

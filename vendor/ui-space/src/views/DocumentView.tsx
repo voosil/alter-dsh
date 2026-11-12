@@ -1081,14 +1081,26 @@ export function DocumentView({
   }
 
   async function createChild() {
-    const child = await service.createNode({
-      spaceId,
-      parentId: node.id,
-      kind: 'note',
-    });
-    addNodeToState(child);
-    refresh();
-    router.navigate(docPath(spaceId, child.id));
+    try {
+      const child = await service.createNode({
+        spaceId,
+        parentId: node.id,
+        kind: 'note',
+      });
+      addNodeToState(child);
+      refresh();
+      router.navigate(docPath(spaceId, child.id));
+    } catch (error) {
+      // The button is fire-and-forget (`void createChild()`), so an uncaught
+      // rejection here used to be completely silent: no document, no message.
+      // Report the failure and tell the user instead.
+      reportDocumentError('create', error, { docId: node.id });
+      toast(
+        error instanceof Error && error.message.trim() !== ''
+          ? error.message
+          : '新建子文档失败，请重试',
+      );
+    }
   }
 
   async function handleRestored() {

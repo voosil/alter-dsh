@@ -146,15 +146,26 @@ export function Sidebar({
 
   async function createDoc(parentId: string | null) {
     setPlusAnchor(null);
-    const node = await service.createNode({
-      spaceId,
-      parentId,
-      kind: 'note',
-    });
-    addNodeToState(node);
-    setTab('me');
-    refresh();
-    router.navigate(`#/space/${spaceId}/doc/${node.id}`);
+    try {
+      const node = await service.createNode({
+        spaceId,
+        parentId,
+        kind: 'note',
+      });
+      addNodeToState(node);
+      setTab('me');
+      refresh();
+      router.navigate(`#/space/${spaceId}/doc/${node.id}`);
+    } catch (cause) {
+      // Same silent-failure trap as the document footer's 「新建子文档」: the
+      // caller is fire-and-forget, so a rejected creation must be reported
+      // instead of looking like a dead button.
+      toast(
+        cause instanceof Error && cause.message.trim() !== ''
+          ? cause.message
+          : '新建文档失败，请重试',
+      );
+    }
   }
 
   async function createFolder() {

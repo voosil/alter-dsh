@@ -463,7 +463,7 @@ describe('document service', () => {
     await store.close();
   });
 
-  it('places new notes in a folder and rejects invalid parents', async () => {
+  it('places new notes in a folder or under another note and rejects invalid parents', async () => {
     const { store } = await tempStore();
     const service = createDocumentService({ store, now: fixedNow, actor: 'user' });
     const space = createSpaceAuthority(store, fixedNow).user;
@@ -477,9 +477,14 @@ describe('document service', () => {
     });
     expect(inFolder.parentId).toBe(folder.id);
     const note = await service.createNote({ spaceId: DEFAULT_SPACE_ID });
-    await expect(
-      service.createNote({ spaceId: DEFAULT_SPACE_ID, parentId: note.id }),
-    ).rejects.toMatchObject({ code: 'op/invalid' });
+    // A note may also be a sub-document of another note: the page's 子文档
+    // footer and the sidebar quick-add create exactly this shape.
+    const subDocument = await service.createNote({
+      spaceId: DEFAULT_SPACE_ID,
+      parentId: note.id,
+    });
+    expect(subDocument.parentId).toBe(note.id);
+    expect(subDocument.kind).toBe('note');
     await expect(
       service.createNote({ spaceId: DEFAULT_SPACE_ID, parentId: 'missing' }),
     ).rejects.toMatchObject({ code: 'op/invalid' });
