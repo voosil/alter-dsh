@@ -305,9 +305,13 @@ function text(value: string): ToolTextBlock {
 }
 
 function renderNodeLine(node: NodeMeta): string {
+  // The structured projection always carries `creator`, but the text rendered
+  // to the model drops it. Mark Alter-created nodes so the Agent can tell its
+  // own documents from the user's without a per-node `action=node` lookup.
+  const owner = node.creator === 'alter' ? ' · Alter' : '';
   const flags = `${node.pinned ? ' 📌' : ''}${node.archived ? '（已归档）' : ''}`;
   const parent = node.parent_id === null ? '' : ` ← ${node.parent_id}`;
-  return `- ${node.id} [${node.kind}] ${node.title || '（未命名）'}${parent}${flags}`;
+  return `- ${node.id} [${node.kind}] ${node.title || '（未命名）'}${owner}${parent}${flags}`;
 }
 
 function renderBrowse(value: unknown): ToolTextBlock[] {

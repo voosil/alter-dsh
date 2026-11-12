@@ -341,9 +341,21 @@ export function Directory({
     [pinnedDocs, visibleNodes, pinnedExpanded, viewMode],
   );
 
+  /** Nodes this tab shows; the rest are transparent parents, not rows. */
+  const inTab = useMemo(
+    () => (node: SpaceNode) =>
+      node.creator === creator && (showArchived || !node.archived),
+    [creator, showArchived],
+  );
+
   const treeRows = useMemo(
-    () => flattenTree(visibleNodes, expanded),
-    [visibleNodes, expanded],
+    // Filter over the whole space tree instead of `visibleNodes`: a matching
+    // node whose parent belongs to the other creator must still get a row
+    // (attached to its nearest visible ancestor), otherwise an Agent-written
+    // document inside a user folder disappears from both creator tabs in tree
+    // view. The flat view never had that gap because it ignores parents.
+    () => flattenTree(nodes, expanded, inTab),
+    [nodes, expanded, inTab],
   );
 
   const flatNotes = useMemo(

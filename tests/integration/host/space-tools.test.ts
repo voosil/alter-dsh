@@ -429,6 +429,32 @@ describe.each(MODES)('$name mode: space_browse + space_tree', ({ start }) => {
     }
   });
 
+  it('marks Alter-created nodes in the tree text so the agent can spot its own work', async () => {
+    await h.tools.call('space_tree', {
+      action: 'create',
+      space_id: h.spaceId,
+      kind: 'note',
+      title: 'Alter 的文档',
+    });
+    await h.userRpc('space.createNode', [
+      { spaceId: h.spaceId, kind: 'note', title: '用户的文档' },
+    ]);
+    const tree = await h.tools.call('space_browse', {
+      action: 'tree',
+      space_id: h.spaceId,
+    });
+    const definition = h.tools.definitions.get('space_browse');
+    if (definition === undefined)
+      throw new Error('space_browse is not registered');
+    const text = definition.output
+      .render({ action: 'tree' }, tree)
+      .map((block) => block.text)
+      .join('\n');
+    expect(text).toContain('Alter 的文档 · Alter');
+    expect(text).toContain('用户的文档');
+    expect(text).not.toContain('用户的文档 · Alter');
+  });
+
   it('attributes tool writes to alter and archives to agent', async () => {
     const note = metaOf(
       await h.tools.call('space_tree', {

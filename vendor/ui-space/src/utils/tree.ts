@@ -20,14 +20,28 @@ export interface FlatNode {
   depth: number;
 }
 
+/**
+ * Flatten the tree depth-first.
+ *
+ * `include` narrows the view to matching nodes (the sidebar's creator tabs).
+ * A node that fails it is transparent: it takes no row or depth of its own and
+ * its children attach to the nearest included ancestor, so a matching node is
+ * never hidden just because its parent belongs to the other creator. Without
+ * `include` every node is its own row (the move-target tree).
+ */
 export function flattenTree(
   nodes: SpaceNode[],
   expanded: Set<string>,
+  include?: (node: SpaceNode) => boolean,
 ): FlatNode[] {
   const map = childrenMap(nodes);
   const result: FlatNode[] = [];
   function walk(parentId: string | null, depth: number) {
     for (const node of map.get(parentId) ?? []) {
+      if (include !== undefined && !include(node)) {
+        walk(node.id, depth);
+        continue;
+      }
       result.push({ node, depth });
       if (expanded.has(node.id)) walk(node.id, depth + 1);
     }

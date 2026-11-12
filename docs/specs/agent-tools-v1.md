@@ -168,7 +168,8 @@ revision 1 文档并同事务写入内容。Markdown 走投影解析，未知语
 
 节点元数据固定为 `{ id, kind, title, parent_id, pinned, archived, creator, updated_at }`，**绝不回传
 正文**；正文读取走文档工具。`tree` 默认不含已归档节点（`include_archived: true` 包含）。读路径不
-`recordOpen`、不改变活动度与未读。
+`recordOpen`、不改变活动度与未读。树与回收站的文本投影在 Alter 创建的节点后标注 `· Alter`，
+便于 Agent 区分自己的产出与用户节点（未标注即用户创建）。
 
 ### 4.2 `space_tree`（写）
 
