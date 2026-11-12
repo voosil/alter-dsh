@@ -51,6 +51,7 @@ export function createRemoteBackend(
       return bridge.status;
     },
     rpc: (endpoint, payload, signal) => bridge.rpc(endpoint, payload, signal),
+    agentRpc: (endpoint, args) => bridge.agentRpc(endpoint, args),
     fetchAsset: (request) => bridge.fetchAsset(request),
     document: bridge.document,
     space: bridge.space,

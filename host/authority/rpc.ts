@@ -213,6 +213,15 @@ export interface SpaceRpcOptions {
    * the arguments — services never see per-call identities.
    */
   actorPolicy?: 'browser' | 'passthrough';
+  /**
+   * Take a recovery point before a space is deleted.
+   *
+   * Deleting a space is the one operation that removes documents, versions,
+   * comments and history together, and it cannot be undone from inside the app.
+   * The caller supplies a snapshot; a failure aborts the delete (fail closed)
+   * instead of destroying data that has no way back.
+   */
+  snapshotBeforeSpaceDelete?: () => Promise<unknown>;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -221,6 +230,27 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Snapshot the database before a space is destroyed.
+ *
+ * A snapshot failure must stop the delete: the whole point of the step is that
+ * the removed space is recoverable, so continuing would delete data with no way
+ * back (and the user was told a backup is taken).
+ */
+async function takeDeleteRecoveryPoint(
+  snapshot: (() => Promise<unknown>) | undefined,
+): Promise<void> {
+  if (snapshot === undefined) return;
+  try {
+    await snapshot();
+  } catch (error) {
+    throw new SpaceRpcError(
+      'space/snapshot-failed',
+      `删除前无法创建恢复点，已取消删除以保护数据：${messageOf(error)}`,
+    );
+  }
 }
 
 function normalizeArgs(payload: unknown): unknown[] {
@@ -461,6 +491,8 @@ export function createSpaceRpc(options: SpaceRpcOptions): SpaceRpcHandler {
         return { value: await storage.set(patch) };
       }
       if (group === 'space' && SPACE_METHOD_SET.has(method)) {
+        if (method === 'deleteSpace')
+          await takeDeleteRecoveryPoint(options.snapshotBeforeSpaceDelete);
         const sync = options.workspaceSync?.();
         if (sync !== undefined) {
           if (method === 'createSpace') {
@@ -581,6 +613,41 @@ export function createSpaceRpc(options: SpaceRpcOptions): SpaceRpcHandler {
         error: { code: 'space/failed', message: messageOf(error) },
       };
     }
+  };
+}
+
+/**
+ * In-process dispatcher for the Agent tool surface.
+ *
+ * The business handler is the same one the browser uses, but this entrance is
+ * forced onto the alter identity stack (`actorPolicy: 'passthrough'` with the
+ * stamp applied here). It is never mounted on a route: only Host code reaches
+ * it (local Agent tools and the bridge test harness), so no browser request can
+ * use it to claim `alter`.
+ *
+ * Business failures are thrown as coded errors so the tool layer keeps its
+ * stable vocabulary, and read endpoints stay reads for the migration freeze
+ * and the offline cache.
+ */
+export function createAgentRpcHandler(
+  options: Omit<SpaceRpcOptions, 'actorPolicy'>,
+): (endpoint: string, args: unknown[], signal?: AbortSignal) => Promise<unknown> {
+  const handler = createSpaceRpc({ ...options, actorPolicy: 'passthrough' });
+  return async (endpoint, args, signal) => {
+    const result = await handler(
+      endpoint,
+      { op: endpoint, args, actor: 'alter' },
+      signal ?? new AbortController().signal,
+      undefined,
+    );
+    if (isPlainObject(result) && isPlainObject(result.error)) {
+      const error = result.error;
+      const code = typeof error.code === 'string' ? error.code : 'space/failed';
+      const message =
+        typeof error.message === 'string' ? error.message : '空间操作失败';
+      throw Object.assign(new Error(message), { code });
+    }
+    return isPlainObject(result) ? result.value : result;
   };
 }
 

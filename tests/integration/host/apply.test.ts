@@ -246,6 +246,8 @@ describe('host plugin apply', () => {
     expect([...fake.definitions.keys()].sort()).toEqual([
       'space_asset_import',
       'space_browse',
+      'space_collaborators',
+      'space_comments',
       'space_component_catalog',
       'space_doc_generate',
       'space_doc_ops',
@@ -254,11 +256,16 @@ describe('host plugin apply', () => {
       'space_doc_read',
       'space_doc_search',
       'space_doc_undo',
+      'space_governance',
+      'space_hub',
+      'space_import_file',
       'space_migrate',
       'space_object_get',
       'space_object_update',
       'space_settings',
+      'space_thoughts',
       'space_tree',
+      'space_versions',
     ]);
 
     const generated = (await harness.call('doc.generate', [

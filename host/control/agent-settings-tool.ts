@@ -1,10 +1,12 @@
 /**
  * Model-facing connection settings tool.
  *
- * Lets the Agent read the active authority mode/link status and, with the
- * user's approval, configure the self-hosted server URL/token or trigger a
- * queue flush. Sensitive writes require the DSH approval service; without an
- * answerer they fail closed instead of writing silently.
+ * Lets the Agent read the active authority mode/link status, the storage
+ * footprint for either the current or a candidate policy, and the documents
+ * whose queued writes are unsettled. With the user's approval it can configure
+ * the self-hosted server URL/token, flush the queue, or retry/discard one
+ * document's queued writes. Sensitive writes require the DSH approval service;
+ * without an answerer they fail closed instead of writing silently.
  *
  * @module @alter-dsh/space/control/agent-settings-tool
  */
@@ -16,6 +18,7 @@ import {
 } from './connection-settings.js';
 import type { SpaceModeController } from '../core/mode.js';
 import { STORAGE_LIMITS } from '../persistence/settings.js';
+import type { SyncQueueEntry } from '../remote/bridge.js';
 import { testRemoteServer } from '../remote/test.js';
 import type {
   ToolDefinitionLike,
@@ -90,6 +93,77 @@ async function storageOf(
   } catch {
     return null;
   }
+}
+
+/**
+ * Validate the optional storage patch of `estimate`/`set`.
+ *
+ * The Host validates these again, but a rejected value only surfaces as a bare
+ * error; checking the same bounds here keeps the model inside the range and
+ * says which value is wrong.
+ */
+function storagePatchOf(
+  input: Record<string, unknown>,
+): Record<string, number> {
+  const storagePatch: Record<string, number> = {};
+  if (input.history_limit !== undefined) {
+    if (
+      typeof input.history_limit !== 'number' ||
+      !Number.isInteger(input.history_limit)
+    )
+      throw new ConnectionSettingsError(
+        'settings/invalid',
+        'history_limit 必须是整数',
+      );
+    storagePatch.historyLimit = input.history_limit;
+  }
+  if (input.snapshot_keep !== undefined) {
+    if (
+      typeof input.snapshot_keep !== 'number' ||
+      !Number.isInteger(input.snapshot_keep)
+    )
+      throw new ConnectionSettingsError(
+        'settings/invalid',
+        'snapshot_keep 必须是整数',
+      );
+    storagePatch.snapshotKeep = input.snapshot_keep;
+  }
+  for (const [key, bounds] of Object.entries(STORAGE_LIMITS)) {
+    const value = storagePatch[key];
+    if (value === undefined) continue;
+    if (value < bounds.min || value > bounds.max)
+      throw new ConnectionSettingsError(
+        'settings/invalid',
+        `${snakeOf(key)} 必须在 ${bounds.min}–${bounds.max} 之间，收到 ${String(value)}`,
+      );
+  }
+  return storagePatch;
+}
+
+/** Estimate the footprint of one candidate policy without persisting it. */
+async function estimateOf(
+  deps: AgentSettingsToolDeps,
+  patch: Record<string, number>,
+): Promise<unknown> {
+  const result = (await deps.mode.current().rpc('storage.estimate', {
+    op: 'storage.estimate',
+    args: [patch],
+  })) as { value?: unknown; error?: { message?: string } };
+  if (result.error !== undefined)
+    throw new Error(result.error.message ?? '估算存储占用失败');
+  return result.value ?? null;
+}
+
+/** Bounded snake_case projection of one unsettled queue row. */
+function queueEntryOf(entry: SyncQueueEntry): Record<string, unknown> {
+  return {
+    doc_id: entry.docId,
+    state: entry.state,
+    entries: entry.entries,
+    base_revision: entry.baseRevision,
+    ...(entry.lastError === undefined ? {} : { last_error: entry.lastError }),
+    updated_at: entry.updatedAt,
+  };
 }
 
 /** Non-secret state the tool returns. */
@@ -167,7 +241,7 @@ export function registerAgentSettingsTool(
   const definition: ToolDefinitionLike = {
     name: 'space_settings',
     description:
-      'Read or change every Space business setting. action=get reports the current mode, server URL, token presence, link/queue status and the storage policy (history_limit/snapshot_keep). action=set switches between local mode and a self-hosted Space server (mode, server_url, token required for server mode) and can update storage settings via history_limit/snapshot_keep. Switching the authority mode (including switching back to local) and changing server_url/token are sensitive: every such change requires the user approval flow, never ask the user to paste a token into the conversation unless they chose to. A mode switch also requires discard=true to acknowledge that the authority being left is abandoned; changing server_url while the old server still has unsettled queued writes requires discard=true too, otherwise the change is rejected. action=test probes a server URL/token without saving. action=flush retries queued document writes.',
+      'Read or change every Space business setting. action=get reports the current mode, server URL, token presence, link/queue status and the storage policy (history_limit/snapshot_keep). action=estimate projects the disk footprint for the current policy or a candidate history_limit/snapshot_keep patch without changing it. action=queue lists documents whose queued server writes are unsettled, with their state and base revision. action=resolve retries or discards one document\'s unsettled writes (doc_id plus resolution=retry|discard; server mode only). action=set switches between local mode and a self-hosted Space server (mode, server_url, token required for server mode) and can update storage settings via history_limit/snapshot_keep. Switching the authority mode (including switching back to local) and changing server_url/token are sensitive: every such change requires the user approval flow, never ask the user to paste a token into the conversation unless they chose to. A mode switch also requires discard=true to acknowledge that the authority being left is abandoned; changing server_url while the old server still has unsettled queued writes requires discard=true too, otherwise the change is rejected. action=test probes a server URL/token without saving. action=flush retries queued document writes.',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -175,7 +249,15 @@ export function registerAgentSettingsTool(
       properties: {
         action: {
           type: 'string',
-          enum: ['get', 'set', 'test', 'flush'],
+          enum: [
+            'get',
+            'set',
+            'test',
+            'flush',
+            'estimate',
+            'queue',
+            'resolve',
+          ],
         },
         mode: {
           type: 'string',
@@ -202,11 +284,24 @@ export function registerAgentSettingsTool(
         },
         history_limit: {
           type: 'integer',
-          description: 'Storage setting: full versions kept per document (1-100).',
+          description:
+            'Storage setting for set/estimate: full versions kept per document (1-100).',
         },
         snapshot_keep: {
           type: 'integer',
-          description: 'Storage setting: daily snapshots to keep (1-30).',
+          description:
+            'Storage setting for set/estimate: daily snapshots to keep (1-30).',
+        },
+        doc_id: {
+          type: 'string',
+          description:
+            'resolve: document id with unsettled queued writes, from action=queue.',
+        },
+        resolution: {
+          type: 'string',
+          enum: ['retry', 'discard'],
+          description:
+            'resolve: retry the queued writes or discard them (required).',
         },
       },
     },
@@ -302,46 +397,52 @@ export function registerAgentSettingsTool(
           });
           return result;
         }
+        if (action === 'estimate') {
+          const patch = storagePatchOf(input);
+          return {
+            settings: await storageOf(deps),
+            estimate: await estimateOf(deps, patch),
+          };
+        }
+        if (action === 'queue')
+          return {
+            entries: (deps.mode.current().queueEntries?.() ?? []).map(
+              queueEntryOf,
+            ),
+          };
+        if (action === 'resolve') {
+          assertMigrationIdle(deps);
+          if (typeof input.doc_id !== 'string' || input.doc_id.trim() === '')
+            throw new ConnectionSettingsError(
+              'settings/invalid',
+              'resolve 需要 doc_id；请先用 action=queue 查看待同步文档',
+            );
+          const docId = input.doc_id.trim();
+          const resolution = input.resolution;
+          if (resolution !== 'retry' && resolution !== 'discard')
+            throw new ConnectionSettingsError(
+              'settings/invalid',
+              'resolution 必须是 retry 或 discard',
+            );
+          const backend = deps.mode.current();
+          const resolve = backend.resolveQueue;
+          // Local authority has no outbox: an absent resolver is the explicit
+          // "nothing to resolve here" answer, not a silent no-op.
+          if (resolve === undefined)
+            throw new ConnectionSettingsError(
+              'settings/invalid',
+              '本地模式没有待处理的同步队列',
+            );
+          const result = await resolve.call(backend, docId, resolution);
+          deps.audit.record({ actor: 'agent', action: 'sync', result: 'ok' });
+          return { doc_id: docId, resolution, resolved: result.resolved };
+        }
         if (action !== 'set')
           throw new ConnectionSettingsError(
             'settings/invalid',
-            'action 必须是 get、set、test 或 flush',
+            'action 必须是 get、set、test、flush、estimate、queue 或 resolve',
           );
-        const storagePatch: Record<string, number> = {};
-        if (input.history_limit !== undefined) {
-          if (
-            typeof input.history_limit !== 'number' ||
-            !Number.isInteger(input.history_limit)
-          )
-            throw new ConnectionSettingsError(
-              'settings/invalid',
-              'history_limit 必须是整数',
-            );
-          storagePatch.historyLimit = input.history_limit;
-        }
-        if (input.snapshot_keep !== undefined) {
-          if (
-            typeof input.snapshot_keep !== 'number' ||
-            !Number.isInteger(input.snapshot_keep)
-          )
-            throw new ConnectionSettingsError(
-              'settings/invalid',
-              'snapshot_keep 必须是整数',
-            );
-          storagePatch.snapshotKeep = input.snapshot_keep;
-        }
-        // The Host validates these again, but a rejected value only surfaces as
-        // a bare error; checking the same bounds here keeps the model inside the
-        // range and says which value is wrong.
-        for (const [key, bounds] of Object.entries(STORAGE_LIMITS)) {
-          const value = storagePatch[key];
-          if (value === undefined) continue;
-          if (value < bounds.min || value > bounds.max)
-            throw new ConnectionSettingsError(
-              'settings/invalid',
-              `${snakeOf(key)} 必须在 ${bounds.min}–${bounds.max} 之间，收到 ${String(value)}`,
-            );
-        }
+        const storagePatch = storagePatchOf(input);
         // One shared helper owns the migration lock, the mode-switch/
         // unsettled-queue guards, approval, backend switch/rollback and audit
         // for both the settings page and this tool.

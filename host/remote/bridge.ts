@@ -10,6 +10,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { BackendConnectionStatus, SpaceToolApi } from '../core/backend.js';
+import type { RpcCall } from '../authority/tool-support.js';
 import { isImageMime } from '../document/asset-store.js';
 import {
   applyOperations,
@@ -197,6 +198,8 @@ export interface RemoteBridge {
   readonly document: DocumentToolApi;
   /** Agent Space structure port; writes are stamped `alter` across the hop. */
   readonly space: SpaceToolApi;
+  /** Agent endpoint dispatcher on the alter stack (reads use the cache path). */
+  readonly agentRpc: RpcCall;
   readonly assets: DocumentToolAssetApi;
   readonly status: BackendConnectionStatus;
   /** Documents whose queued writes are unsettled, one row per document. */
@@ -1018,6 +1021,7 @@ export function createRemoteBridge(
 
   return {
     rpc,
+    agentRpc: (endpoint, args) => callAlter(endpoint, args),
     queueEntries,
     resolveQueue,
     async fetchAsset(request: Request): Promise<Response> {

@@ -46,16 +46,8 @@ export interface EndpointlessTool {
   reason: string;
 }
 
-const P2_COMMENTS = 'P2 待建（评论）';
-const P2_VERSIONS = 'P2 待建（版本历史）';
-const P2_THOUGHTS = 'P2 待建（随想）';
-const P3_GOVERNANCE = 'P3 待建（空间治理）';
-const P3_COLLABORATORS = 'P3 待建（协作者）';
-const P3_HUB_OVERVIEW = 'P3 待建（hub 概览）';
-const P3_HUB_CONFIG = 'P3 待建（hub 配置）';
-const HUB_MATTER = '未实现占位（事项），P3 待建';
-const HUB_JOURNEY = '未实现占位（旅程），P3 待建';
-const HUB_OBSERVATION = '未实现占位（观察），P3 待建';
+const HUB_UNIMPLEMENTED = '服务未实现（DEP-002 占位），不暴露';
+const HUB_INTERNAL = '空间删除的内部级联清理，不单独暴露';
 
 /**
  * The full operation surface: 73 business endpoints + 11 control-plane
@@ -65,13 +57,14 @@ export const CAPABILITIES: readonly Capability[] = [
   // space.* — business
   { endpoint: 'space.listSpaces', kind: 'read', agent: { tool: 'space_browse', action: 'spaces' } },
   { endpoint: 'space.getSpace', kind: 'read', agent: { tool: 'space_browse', action: 'space' } },
-  { endpoint: 'space.createSpace', kind: 'write', agent: { excluded: P3_GOVERNANCE } },
-  { endpoint: 'space.updateSpace', kind: 'write', agent: { excluded: P3_GOVERNANCE } },
-  { endpoint: 'space.archiveSpace', kind: 'write', agent: { excluded: P3_GOVERNANCE } },
-  { endpoint: 'space.unarchiveSpace', kind: 'write', agent: { excluded: P3_GOVERNANCE } },
+  { endpoint: 'space.createSpace', kind: 'write', agent: { tool: 'space_governance', action: 'create_space' } },
+  { endpoint: 'space.updateSpace', kind: 'write', agent: { tool: 'space_governance', action: 'update_space' } },
+  { endpoint: 'space.archiveSpace', kind: 'write', agent: { tool: 'space_governance', action: 'archive_space' } },
+  { endpoint: 'space.unarchiveSpace', kind: 'write', agent: { tool: 'space_governance', action: 'unarchive_space' } },
   { endpoint: 'space.listArchivedSpaces', kind: 'read', agent: { tool: 'space_browse', action: 'archived_spaces' } },
-  { endpoint: 'space.deleteSpace', kind: 'destructive', agent: { excluded: P3_GOVERNANCE } },
-  { endpoint: 'space.reorderSpaces', kind: 'write', agent: { excluded: P3_GOVERNANCE } },
+  // 删除空间一次性带走文档/版本/评论/随想/事件：路由层先做快照，快照失败即取消删除。
+  { endpoint: 'space.deleteSpace', kind: 'destructive', agent: { tool: 'space_governance', action: 'delete_space' } },
+  { endpoint: 'space.reorderSpaces', kind: 'write', agent: { tool: 'space_governance', action: 'reorder_spaces' } },
   { endpoint: 'space.listNodes', kind: 'read', agent: { tool: 'space_browse', action: 'tree' } },
   { endpoint: 'space.getNode', kind: 'read', agent: { tool: 'space_browse', action: 'node' } },
   { endpoint: 'space.createNode', kind: 'write', agent: { tool: 'space_tree', action: 'create' } },
@@ -88,53 +81,50 @@ export const CAPABILITIES: readonly Capability[] = [
     kind: 'write',
     agent: { excluded: '不伪造用户活动度，永不暴露' },
   },
-  { endpoint: 'space.listComments', kind: 'read', agent: { excluded: P2_COMMENTS } },
-  { endpoint: 'space.addComment', kind: 'write', agent: { excluded: P2_COMMENTS } },
-  { endpoint: 'space.updateComment', kind: 'write', agent: { excluded: P2_COMMENTS } },
-  { endpoint: 'space.addCommentSupplement', kind: 'write', agent: { excluded: P2_COMMENTS } },
-  { endpoint: 'space.deleteComment', kind: 'destructive', agent: { excluded: P2_COMMENTS } },
-  { endpoint: 'space.resolveComment', kind: 'write', agent: { excluded: P2_COMMENTS } },
-  { endpoint: 'space.listVersions', kind: 'read', agent: { excluded: P2_VERSIONS } },
-  { endpoint: 'space.restoreVersion', kind: 'destructive', agent: { excluded: P2_VERSIONS } },
-  { endpoint: 'space.listThoughts', kind: 'read', agent: { excluded: P2_THOUGHTS } },
-  { endpoint: 'space.createThought', kind: 'write', agent: { excluded: P2_THOUGHTS } },
-  { endpoint: 'space.updateThought', kind: 'write', agent: { excluded: P2_THOUGHTS } },
-  { endpoint: 'space.setThoughtArchived', kind: 'write', agent: { excluded: P2_THOUGHTS } },
-  { endpoint: 'space.deleteThought', kind: 'write', agent: { excluded: P2_THOUGHTS } },
-  { endpoint: 'space.restoreThought', kind: 'write', agent: { excluded: P2_THOUGHTS } },
-  { endpoint: 'space.moveThought', kind: 'write', agent: { excluded: P2_THOUGHTS } },
-  { endpoint: 'space.convertThought', kind: 'write', agent: { excluded: P2_THOUGHTS } },
+  { endpoint: 'space.listComments', kind: 'read', agent: { tool: 'space_comments', action: 'list' } },
+  { endpoint: 'space.addComment', kind: 'write', agent: { tool: 'space_comments', action: 'add' } },
+  { endpoint: 'space.updateComment', kind: 'write', agent: { tool: 'space_comments', action: 'update' } },
+  { endpoint: 'space.addCommentSupplement', kind: 'write', agent: { tool: 'space_comments', action: 'supplement' } },
+  { endpoint: 'space.deleteComment', kind: 'destructive', agent: { tool: 'space_comments', action: 'delete' } },
+  { endpoint: 'space.resolveComment', kind: 'write', agent: { tool: 'space_comments', action: 'resolve' } },
+  { endpoint: 'space.listVersions', kind: 'read', agent: { tool: 'space_versions', action: 'list' } },
+  // legacy 内容字段的恢复；AST 文档版本恢复由 doc.restoreVersion 承担。
+  { endpoint: 'space.restoreVersion', kind: 'destructive', agent: { excluded: 'legacy 内容字段恢复，AST 文档恢复由 doc.restoreVersion 承担' } },
+  { endpoint: 'space.listThoughts', kind: 'read', agent: { tool: 'space_thoughts', action: 'list' } },
+  { endpoint: 'space.createThought', kind: 'write', agent: { tool: 'space_thoughts', action: 'create' } },
+  { endpoint: 'space.updateThought', kind: 'write', agent: { tool: 'space_thoughts', action: 'update' } },
+  { endpoint: 'space.setThoughtArchived', kind: 'write', agent: { tool: 'space_thoughts', action: 'archive' } },
+  { endpoint: 'space.deleteThought', kind: 'write', agent: { tool: 'space_thoughts', action: 'delete' } },
+  { endpoint: 'space.restoreThought', kind: 'write', agent: { tool: 'space_thoughts', action: 'restore' } },
+  { endpoint: 'space.moveThought', kind: 'write', agent: { tool: 'space_thoughts', action: 'move' } },
+  { endpoint: 'space.convertThought', kind: 'write', agent: { tool: 'space_thoughts', action: 'convert' } },
   { endpoint: 'space.listDeleted', kind: 'read', agent: { tool: 'space_browse', action: 'trash' } },
-  { endpoint: 'space.emptyTrash', kind: 'destructive', agent: { excluded: P3_GOVERNANCE } },
+  { endpoint: 'space.emptyTrash', kind: 'destructive', agent: { tool: 'space_governance', action: 'empty_trash' } },
   { endpoint: 'space.search', kind: 'read', agent: { tool: 'space_browse', action: 'search' } },
   { endpoint: 'space.getOverview', kind: 'read', agent: { tool: 'space_browse', action: 'overview' } },
-  { endpoint: 'space.listAgents', kind: 'read', agent: { excluded: P3_COLLABORATORS } },
-  { endpoint: 'space.createAgent', kind: 'write', agent: { excluded: P3_COLLABORATORS } },
-  {
-    endpoint: 'space.listDirectories',
-    kind: 'read',
-    agent: { excluded: 'P3 随空间治理暴露' },
-  },
-  // hub.* — business（概览/配置 P3 待建；事项/旅程/观察为未实现占位）
-  { endpoint: 'hub.get', kind: 'read', agent: { excluded: P3_HUB_OVERVIEW } },
-  { endpoint: 'hub.createMatter', kind: 'write', agent: { excluded: HUB_MATTER } },
-  { endpoint: 'hub.setMatterStatus', kind: 'write', agent: { excluded: HUB_MATTER } },
-  { endpoint: 'hub.answerMatter', kind: 'write', agent: { excluded: HUB_MATTER } },
-  { endpoint: 'hub.readMatter', kind: 'write', agent: { excluded: HUB_MATTER } },
-  { endpoint: 'hub.saveJourney', kind: 'write', agent: { excluded: HUB_JOURNEY } },
-  { endpoint: 'hub.introduce', kind: 'write', agent: { excluded: HUB_JOURNEY } },
-  { endpoint: 'hub.skipIntroduction', kind: 'write', agent: { excluded: HUB_JOURNEY } },
-  { endpoint: 'hub.acceptObservation', kind: 'write', agent: { excluded: HUB_OBSERVATION } },
-  { endpoint: 'hub.extractSkill', kind: 'write', agent: { excluded: HUB_OBSERVATION } },
-  { endpoint: 'hub.setPolicy', kind: 'write', agent: { excluded: P3_HUB_CONFIG } },
-  { endpoint: 'hub.setPluginEnabled', kind: 'write', agent: { excluded: P3_HUB_CONFIG } },
-  { endpoint: 'hub.discoverPlugin', kind: 'write', agent: { excluded: P3_HUB_CONFIG } },
-  { endpoint: 'hub.savePluginContent', kind: 'write', agent: { excluded: P3_HUB_CONFIG } },
-  { endpoint: 'hub.summarize', kind: 'write', agent: { excluded: P3_HUB_OVERVIEW } },
-  { endpoint: 'hub.remove', kind: 'write', agent: { excluded: P3_HUB_CONFIG } },
+  { endpoint: 'space.listAgents', kind: 'read', agent: { tool: 'space_collaborators', action: 'list_agents' } },
+  { endpoint: 'space.createAgent', kind: 'write', agent: { tool: 'space_collaborators', action: 'create_agent' } },
+  { endpoint: 'space.listDirectories', kind: 'read', agent: { tool: 'space_collaborators', action: 'list_directories' } },
+  // hub.* — business（概览/配置已暴露；事项/旅程/观察仍是 DEP-002 占位）
+  { endpoint: 'hub.get', kind: 'read', agent: { tool: 'space_hub', action: 'get' } },
+  { endpoint: 'hub.createMatter', kind: 'write', agent: { excluded: HUB_UNIMPLEMENTED } },
+  { endpoint: 'hub.setMatterStatus', kind: 'write', agent: { excluded: HUB_UNIMPLEMENTED } },
+  { endpoint: 'hub.answerMatter', kind: 'write', agent: { excluded: HUB_UNIMPLEMENTED } },
+  { endpoint: 'hub.readMatter', kind: 'write', agent: { excluded: HUB_UNIMPLEMENTED } },
+  { endpoint: 'hub.saveJourney', kind: 'write', agent: { excluded: HUB_UNIMPLEMENTED } },
+  { endpoint: 'hub.introduce', kind: 'write', agent: { excluded: HUB_UNIMPLEMENTED } },
+  { endpoint: 'hub.skipIntroduction', kind: 'write', agent: { excluded: HUB_UNIMPLEMENTED } },
+  { endpoint: 'hub.acceptObservation', kind: 'write', agent: { excluded: HUB_UNIMPLEMENTED } },
+  { endpoint: 'hub.extractSkill', kind: 'write', agent: { excluded: HUB_UNIMPLEMENTED } },
+  { endpoint: 'hub.setPolicy', kind: 'write', agent: { tool: 'space_hub', action: 'set_policy' } },
+  { endpoint: 'hub.setPluginEnabled', kind: 'write', agent: { tool: 'space_hub', action: 'set_plugin_enabled' } },
+  { endpoint: 'hub.discoverPlugin', kind: 'write', agent: { excluded: HUB_UNIMPLEMENTED } },
+  { endpoint: 'hub.savePluginContent', kind: 'write', agent: { excluded: HUB_UNIMPLEMENTED } },
+  { endpoint: 'hub.summarize', kind: 'write', agent: { tool: 'space_hub', action: 'summarize' } },
+  { endpoint: 'hub.remove', kind: 'write', agent: { excluded: HUB_INTERNAL } },
   // storage.* — business
   { endpoint: 'storage.get', kind: 'read', agent: { tool: 'space_settings', action: 'get' } },
-  { endpoint: 'storage.estimate', kind: 'read', agent: { excluded: 'P4 待建（占用估算）' } },
+  { endpoint: 'storage.estimate', kind: 'read', agent: { tool: 'space_settings', action: 'estimate' } },
   { endpoint: 'storage.set', kind: 'write', agent: { tool: 'space_settings', action: 'set' } },
   // doc.* — business
   {
@@ -147,10 +137,10 @@ export const CAPABILITIES: readonly Capability[] = [
   { endpoint: 'doc.search', kind: 'read', agent: { tool: 'space_doc_search' } },
   { endpoint: 'doc.applyOps', kind: 'write', agent: { tool: 'space_doc_ops' } },
   { endpoint: 'doc.undo', kind: 'write', agent: { tool: 'space_doc_undo' } },
-  { endpoint: 'doc.restoreVersion', kind: 'destructive', agent: { excluded: P2_VERSIONS } },
+  { endpoint: 'doc.restoreVersion', kind: 'destructive', agent: { tool: 'space_versions', action: 'restore' } },
   { endpoint: 'doc.generate', kind: 'write', agent: { tool: 'space_doc_generate' } },
   { endpoint: 'doc.importAsset', kind: 'write', agent: { tool: 'space_asset_import' } },
-  { endpoint: 'doc.importFile', kind: 'write', agent: { excluded: 'P2 待建（文件导入）' } },
+  { endpoint: 'doc.importFile', kind: 'write', agent: { tool: 'space_import_file' } },
   { endpoint: 'doc.updateObject', kind: 'write', agent: { tool: 'space_object_update' } },
   // object.* — business
   { endpoint: 'object.get', kind: 'read', agent: { tool: 'space_object_get' } },
@@ -161,8 +151,8 @@ export const CAPABILITIES: readonly Capability[] = [
   // sync.* — control plane
   { endpoint: 'sync.status', kind: 'control', agent: { tool: 'space_settings', action: 'get' } },
   { endpoint: 'sync.flush', kind: 'control', agent: { tool: 'space_settings', action: 'flush' } },
-  { endpoint: 'sync.queue', kind: 'control', agent: { excluded: 'P4 待建（队列明细）' } },
-  { endpoint: 'sync.resolve', kind: 'control', agent: { excluded: 'P4 待建（冲突处置）' } },
+  { endpoint: 'sync.queue', kind: 'control', agent: { tool: 'space_settings', action: 'queue' } },
+  { endpoint: 'sync.resolve', kind: 'control', agent: { tool: 'space_settings', action: 'resolve' } },
   // migration.* — control plane
   { endpoint: 'migration.preflight', kind: 'control', agent: { tool: 'space_migrate', action: 'preflight' } },
   { endpoint: 'migration.start', kind: 'control', agent: { tool: 'space_migrate', action: 'start' } },

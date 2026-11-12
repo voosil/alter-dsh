@@ -38,6 +38,7 @@ import {
   type ToolDefinitionLike,
   type ToolsLike,
 } from '../../../host/document/editors/legacy/tools.js';
+import { registerSpaceDomainTools } from '../../../host/authority/domain-tools.js';
 import { registerSpaceTools } from '../../../host/authority/space-tools.js';
 import type { SpaceToolApi } from '../../../host/core/backend.js';
 import { registerAgentSettingsTool } from '../../../host/control/agent-settings-tool.js';
@@ -65,12 +66,12 @@ const CONTROL_GROUPS = new Set(['settings', 'sync', 'migration']);
 
 /**
  * Schema byte ratchet over `JSON.stringify(def.parameters)` of every registered
- * tool. Measured 7718 bytes on the current 15-tool surface (P1 space_browse /
- * space_tree added 1834), rounded up to 7800.
+ * tool. Measured 12936 bytes on the current 22-tool surface (P1's 15 tools were
+ * 7718; the P2–P4 domain tools added 5218), rounded up to 13200.
  * The cap may only rise deliberately — 上限调整必须同步 spec
- * （docs/specs/agent-tools-v1.md §6）.
+ * （docs/specs/agent-tools-v1.md §6 与 docs/specs/agent-tools-p2-p4.md §11）。
  */
-const SCHEMA_BYTE_BUDGET = 7800;
+const SCHEMA_BYTE_BUDGET = 13200;
 
 /** Deps double that fails loudly if registration touches business code. */
 function forbidden<T>(label: string): T {
@@ -98,6 +99,10 @@ function registeredDefinitions(): ToolDefinitionLike[] {
   });
   registerSpaceTools(tools, {
     service: forbidden<SpaceToolApi>('space service'),
+  });
+  registerSpaceDomainTools(tools, {
+    rpc: forbidden('domain tool rpc'),
+    approval: () => undefined,
   });
   registerAgentSettingsTool(tools, {
     settings: forbidden<ConnectionSettingsStore>('settings store'),

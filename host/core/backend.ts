@@ -10,7 +10,8 @@ import type { DocumentToolApi, DocumentToolAssetApi } from '../document/editors/
 import { createDocumentAssetRoute } from '../document/asset-route.js';
 import type { SyncQueueEntry } from '../remote/bridge.js';
 import type { SpaceStoreHandle } from '../persistence/store.js';
-import { createSpaceRpc } from '../authority/rpc.js';
+import { createAgentRpcHandler, createSpaceRpc } from '../authority/rpc.js';
+import type { RpcCall } from '../authority/tool-support.js';
 import type { LocalSpaceRuntime } from './runtime.js';
 import type { SpaceWorkspaceSync } from '../workspace/sync.js';
 
@@ -74,6 +75,13 @@ export interface SpaceBackend {
     payload: unknown,
     signal?: AbortSignal,
   ): Promise<unknown>;
+  /**
+   * Dispatch one business endpoint on the `alter` identity stack.
+   *
+   * Only in-process Agent tools (and the bridge test harness) call this; the
+   * browser route never does, so it cannot be used to impersonate Alter.
+   */
+  readonly agentRpc: RpcCall;
   /** Serve one asset GET request (already authenticated by the local Host). */
   fetchAsset(request: Request): Promise<Response>;
   /** Agent tool surface over the document model. */
@@ -116,7 +124,7 @@ export function createLocalBackend(
   options: LocalBackendOptions,
 ): SpaceBackend {
   const { runtime } = options;
-  const handler = createSpaceRpc({
+  const rpcOptions = {
     service: runtime.service,
     agentService: runtime.agentService,
     storage: runtime.storage,
@@ -124,7 +132,12 @@ export function createLocalBackend(
     agentDocument: runtime.agentDocument,
     assets: runtime.assets,
     workspaceSync: options.workspaceSync ?? (() => undefined),
-  });
+    // Deleting a space removes its documents, history and comments at once:
+    // take a recovery point first, and abort the delete if it cannot be taken.
+    snapshotBeforeSpaceDelete: () => runtime.snapshotNow(),
+  };
+  const handler = createSpaceRpc(rpcOptions);
+  const agentHandler = createAgentRpcHandler(rpcOptions);
   const assetRoute = createDocumentAssetRoute(runtime.assets);
   let closed = false;
   return {
@@ -132,6 +145,7 @@ export function createLocalBackend(
     status: { state: 'local' },
     rpc: (endpoint, payload, signal) =>
       handler(endpoint, payload, signal ?? new AbortController().signal, undefined),
+    agentRpc: (endpoint, args) => agentHandler(endpoint, args),
     fetchAsset: (request) => assetRoute(request),
     document: runtime.agentDocument,
     // Raw alter-stack port; the migration-freeze proxy wraps it at the plugin

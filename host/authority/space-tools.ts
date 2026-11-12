@@ -21,6 +21,20 @@ import type {
   ToolTextBlock,
   ToolsLike,
 } from '../document/editors/legacy/tools.js';
+import {
+  asRecord,
+  clip,
+  invalid,
+  notFound,
+  optionalBoolean,
+  optionalInteger,
+  optionalString,
+  requireAction,
+  requireBoolean,
+  requireString,
+  text,
+  toToolError,
+} from './tool-support.js';
 
 /** Dependencies for the Space structure tools. */
 export interface SpaceToolDeps {
@@ -80,58 +94,6 @@ const TREE_ACTIONS = [
   'restore',
 ] as const;
 
-/** Tool-layer failure with a stable code and a self-contained next step. */
-class SpaceToolError extends Error {
-  readonly code: string;
-
-  constructor(code: string, message: string) {
-    super(message);
-    this.name = 'SpaceToolError';
-    this.code = code;
-  }
-}
-
-function invalid(message: string): never {
-  throw new SpaceToolError('space/invalid-input', message);
-}
-
-function notFound(message: string): never {
-  throw new SpaceToolError('space/not-found', message);
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value))
-    invalid('参数必须是对象');
-  return value as Record<string, unknown>;
-}
-
-function requireAction<T extends string>(
-  input: Record<string, unknown>,
-  allowed: readonly T[],
-): T {
-  const value = input.action;
-  if (typeof value !== 'string' || !(allowed as readonly string[]).includes(value))
-    invalid(`action 必须是 ${allowed.join(' | ')} 之一`);
-  return value as T;
-}
-
-function requireString(args: Record<string, unknown>, key: string): string {
-  const value = args[key];
-  if (typeof value !== 'string' || value.trim() === '')
-    invalid(`${key} 必须是非空字符串`);
-  return value;
-}
-
-function optionalString(
-  args: Record<string, unknown>,
-  key: string,
-): string | undefined {
-  const value = args[key];
-  if (value === undefined) return undefined;
-  if (typeof value !== 'string') invalid(`${key} 必须是字符串`);
-  return value;
-}
-
 /** A parent reference: an id, or explicit null for the space root. */
 function optionalParentId(
   args: Record<string, unknown>,
@@ -154,47 +116,11 @@ function requireParentId(
   return value;
 }
 
-function requireBoolean(args: Record<string, unknown>, key: string): boolean {
-  const value = args[key];
-  if (typeof value !== 'boolean') invalid(`${key} 必须是布尔值`);
-  return value;
-}
-
-function optionalBoolean(
-  args: Record<string, unknown>,
-  key: string,
-): boolean | undefined {
-  const value = args[key];
-  if (value === undefined) return undefined;
-  if (typeof value !== 'boolean') invalid(`${key} 必须是布尔值`);
-  return value;
-}
-
-function optionalInteger(
-  args: Record<string, unknown>,
-  key: string,
-  bounds: { min?: number; max?: number } = {},
-): number | undefined {
-  const value = args[key];
-  if (value === undefined) return undefined;
-  if (typeof value !== 'number' || !Number.isInteger(value))
-    invalid(`${key} 必须是整数`);
-  if (bounds.min !== undefined && value < bounds.min)
-    invalid(`${key} 至少为 ${bounds.min}`);
-  if (bounds.max !== undefined && value > bounds.max)
-    invalid(`${key} 最多为 ${bounds.max}`);
-  return value;
-}
-
 function requireKind(args: Record<string, unknown>): 'folder' | 'note' {
   const value = args.kind;
   if (value !== 'folder' && value !== 'note')
     invalid("kind 必须是 'folder' 或 'note'");
   return value;
-}
-
-function clip(value: string, max: number): string {
-  return value.length > max ? value.slice(0, max) : value;
 }
 
 function nodeMeta(node: SpaceNode): NodeMeta {
@@ -219,57 +145,6 @@ function spaceMeta(space: Space): SpaceMeta {
     is_default: space.isDefault,
     order: space.order,
   };
-}
-
-/** Stable code of a thrown value, when it carries one. */
-function errorCode(error: unknown): string | undefined {
-  if (typeof error !== 'object' || error === null) return undefined;
-  const code = (error as { code?: unknown }).code;
-  return typeof code === 'string' ? code : undefined;
-}
-
-/** Vendor structure rejections that a fresh tree lookup can resolve. */
-const MOVE_REJECTIONS = [
-  '不能移动到自身',
-  '不能移动到自己的子层级',
-  '文件夹只能位于根目录',
-  '文件夹只能创建在根目录',
-  '目标位置不属于目标空间',
-  '上级目录不属于当前空间',
-];
-
-/**
- * Map any failure to a stable tool error with the next actionable step.
- * Tool-layer errors already carry their hint; backend codes pass through;
- * generic vendor errors become `space/failed` (existence → `space/not-found`).
- */
-function toolError(error: unknown): Error {
-  if (error instanceof SpaceToolError)
-    return new Error(`${error.code}: ${error.message}`);
-  const code = errorCode(error);
-  const message = error instanceof Error ? error.message : String(error);
-  if (code === 'remote/unavailable')
-    return new Error(
-      `remote/unavailable: ${message}；服务端离线，本次操作未执行：请恢复连接后重试（可用 space_settings test 检查连接）。`,
-    );
-  if (code === 'migration/read-only')
-    return new Error(
-      `migration/read-only: ${message}；请等待迁移完成后重试。`,
-    );
-  // The server RPC layer already wraps vendor failures as `space/failed`;
-  // existence and move rejections keep the same tool codes in both modes.
-  if (code === undefined || code === 'space/failed') {
-    if (message.includes('空间不存在') || message.includes('文档不存在'))
-      return new Error(
-        `space/not-found: ${message}；请先用 space_browse（spaces/tree/trash）定位目标后重试。`,
-      );
-    if (MOVE_REJECTIONS.some((part) => message.includes(part)))
-      return new Error(
-        `space/failed: ${message}；请用 space_browse tree 重新定位节点与目标位置后重试。`,
-      );
-    return new Error(`space/failed: ${message}`);
-  }
-  return new Error(`${code}: ${message}`);
 }
 
 /**
@@ -298,10 +173,6 @@ async function requireNode(
       `节点 ${nodeId} 不存在或已删除；请先用 space_browse tree 定位（已删除节点见 trash）`,
     );
   return node;
-}
-
-function text(value: string): ToolTextBlock {
-  return { type: 'text', text: value };
 }
 
 function renderNodeLine(node: NodeMeta): string {
@@ -688,7 +559,7 @@ export function registerSpaceTools(
           const input = asRecord(args);
           return await browse(service, input);
         } catch (error) {
-          throw toolError(error);
+          throw toToolError(error);
         }
       },
       presentCall: () => ({
@@ -762,7 +633,7 @@ export function registerSpaceTools(
           const input = asRecord(args);
           return await tree(service, input);
         } catch (error) {
-          throw toolError(error);
+          throw toToolError(error);
         }
       },
       presentCall: () => ({

@@ -6,8 +6,9 @@ updated: 2026-11-12
 
 # Agent 空间工具 v1
 
-本篇规范约束模型可调用的全部 Space 工具（`space_*`）契约、能力台账与 parity 门禁、投影预算与裁剪、
-质量验收基线，是 Agent 工具契约的**单一事实源**。底层读写语义由
+本篇规范约束核心 Space 工具（发现、结构、文档、控制面）的契约、能力台账与 parity 门禁、投影预算与
+裁剪、质量验收基线，是 Agent 工具契约的**单一事实源**；P2–P4 的增量领域工具（评论、版本、随想、
+治理、协作者、hub、文件导入）见 [agent-tools-p2-p4.md](agent-tools-p2-p4.md)。底层读写语义由
 [document-model-v0.md](document-model-v0.md) 与 [document-operations-v0.md](document-operations-v0.md)
 定义，分层、归属守卫与持久化由 [system-architecture.md](system-architecture.md) 定义，本篇不重复。
 
@@ -189,11 +190,13 @@ revision 1 文档并同事务写入内容。Markdown 走投影解析，未知语
 
 - `create` 的 note 是空文档；正文经 `space_doc_generate`/`space_doc_ops` 写入。`rename` 只改元数据，
   不接受正文（正文写入只经 Document Operations）。
+- `create` 的 `parent_id`：note 可建在文件夹或另一篇 note 下（即子文档，文档页「子文档」页签与
+  侧栏快捷新建都走这条路径）；文件夹只能位于根目录；父节点必须存在且属于同一空间。
 - 归属：新建 `creator='alter'`；归档 `archivedBy='agent'`；已有节点归属不变。
 - 结构操作不做 undo：恢复靠回收站（delete/restore）与版本历史；非法移动（如移入自身子孙）拒绝。
 - 创建暂无幂等键：重试前先 browse/search 确认（P4 补 `client_request_id`）。
-- 读 action 会触发产品既有的闲置自动归档 sweep（写入 `archivedBy='system'`）：不 `recordOpen`、
-  不改活动度与未读，但不是无副作用读。
+- 读 action 是纯读：不 `recordOpen`、不改活动度与未读，也不触发闲置自动归档——归档由 Host 的
+  定时 sweep 负责（写入 `archivedBy='system'`），因此读在迁移冻结期与离线缓存路径上都成立。
 - 迁移冻结期写返回 `migration/read-only`；服务端离线时结构写明确失败（`remote/unavailable`），不排队。
 
 ## 5. 控制面工具（2 个）
@@ -222,7 +225,9 @@ revision 1 文档并同事务写入内容。Markdown 走投影解析，未知语
 ## 6. 预算与裁剪
 
 - 文档工具 schema 约 +2.2–2.6k tokens；全部工具（含结构工具）以台账 parity 测试的 schema 字节
-  棘轮约束总量：15 工具实测 7718 字节，上限 7800（`SCHEMA_BYTE_BUDGET`）；上限调整必须同步本节。
+  棘轮约束总量：22 工具实测 12936 字节（P1 的 15 工具为 7718，P2–P4 领域工具 +5218），
+  上限 13200（`SCHEMA_BYTE_BUDGET`）；上限调整必须同步本节与
+  [agent-tools-p2-p4.md](agent-tools-p2-p4.md) §11。
   读投影按字符预算：单次默认 12k、最大 40k 字符。
 - 输出 schema 只列模型真正消费的字段，不回传整篇文档或未变更内容；读超限必须截断并给续读锚点；
   写工具不因预算裁剪改变语义。
@@ -250,7 +255,7 @@ revision 1 文档并同事务写入内容。Markdown 走投影解析，未知语
 3. table 合并单元格与代码组件沙箱的后续方案。
 4. `doc_ops` 是否作为版本历史主存储（当前快照 + op log 并存）。
 5. 版本预算（当前 10 版 / 64 KiB → 可配置累计字节）与备份资产目录的实施方案。
-6. P2/P3 工具排期：评论、版本列表与恢复、随想、附件、空间治理与协作者、hub 已实现部分。
+6. hub 事项/旅程/观察（DEP-002）服务实现后的工具契约：数据源就绪后再补规范与工具。
 7. 结构操作可选 CAS 与创建幂等键（P4）；工具可见范围的分域开关细化（读/写/结构/破坏性）。
 
 ## 相关文档

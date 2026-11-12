@@ -17,7 +17,9 @@ import {
   type DocumentToolAssetApi,
   type ToolsLike,
 } from '../document/editors/legacy/tools.js';
+import { registerSpaceDomainTools } from '../authority/domain-tools.js';
 import { registerSpaceTools } from '../authority/space-tools.js';
+import type { RpcCall } from '../authority/tool-support.js';
 import {
   createConnectionSettingsStore,
   type CredentialStoreLike,
@@ -478,6 +480,16 @@ export async function apply(
       () => mode.current().space,
       () => mode.isMigrationLocked(),
     );
+    // Domain tools name an endpoint; this seam keeps the alter identity and the
+    // migration freeze in one place (reads stay allowed while frozen).
+    const toolRpc: RpcCall = async (endpoint, args) => {
+      if (!isReadEndpoint(endpoint) && mode.isMigrationLocked())
+        throw Object.assign(
+          new Error('迁移进行中，空间暂时只读；请等待迁移完成'),
+          { code: 'migration/read-only' },
+        );
+      return mode.current().agentRpc(endpoint, args);
+    };
     const assetsProxy: DocumentToolAssetApi = {
       import: (input) => {
         if (mode.isMigrationLocked())
@@ -487,6 +499,7 @@ export async function apply(
     };
     let disposeDocumentTools: (() => void) | undefined;
     let disposeSpaceTools: (() => void) | undefined;
+    let disposeDomainTools: (() => void) | undefined;
     let disposeSettingsTool: (() => void) | undefined;
     const attachSettingsTool = (child: HostContextLike): void => {
       const tools = child.tools ?? child.get?.('tools');
@@ -565,6 +578,29 @@ export async function apply(
         // A missing child effect keeps the tools registered until unload.
       }
     };
+    const attachDomainTools = (child: HostContextLike): void => {
+      const tools = child.tools ?? child.get?.('tools');
+      if (!isToolsLike(tools)) {
+        logger.warn?.(
+          '[alter-dsh-space] DSH 工具服务不可用：空间领域工具未注册',
+        );
+        return;
+      }
+      const dispose = registerSpaceDomainTools(tools, {
+        rpc: toolRpc,
+        approval: () => approvalRef,
+      });
+      disposeDomainTools = dispose;
+      const cleanup = () => {
+        if (disposeDomainTools === dispose) disposeDomainTools = undefined;
+        dispose();
+      };
+      try {
+        void child.effect(() => cleanup, 'alter-dsh-space: space domain tools');
+      } catch {
+        // A missing child effect keeps the tools registered until unload.
+      }
+    };
     if (config.documentTools !== false) {
       if (typeof ctx.inject === 'function') {
         ctx.inject(['tools'], (child) => attachDocumentTools(child));
@@ -577,6 +613,13 @@ export async function apply(
         ctx.inject(['tools'], (child) => attachSpaceTools(child));
       } else if (ctx.get !== undefined) {
         attachSpaceTools(ctx);
+      }
+    }
+    if (config.spaceTools !== false) {
+      if (typeof ctx.inject === 'function') {
+        ctx.inject(['tools'], (child) => attachDomainTools(child));
+      } else if (ctx.get !== undefined) {
+        attachDomainTools(ctx);
       }
     }
     if (typeof ctx.inject === 'function') {

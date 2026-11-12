@@ -12,7 +12,7 @@
   },
   "counts": {
     "maxCategories": 6,
-    "maxDocsPerFolder": 10,
+    "maxDocsPerFolder": 11,
     "maxActiveDocs": 32,
     "warnActiveDocs": 24,
     "maxArchiveDocs": 60

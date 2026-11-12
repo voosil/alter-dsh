@@ -359,4 +359,65 @@ describe('Agent space_settings tool', () => {
     expect(applied.serverUrl).toBe(newUrl);
     expect((await h.settings.view()).serverUrl).toBe(newUrl);
   });
+
+  it('estimates the storage footprint without approval or writes', async () => {
+    // Harness has no approval service: estimate is a read and must still work.
+    const h = await harness();
+    const current = (await h.execute({ action: 'estimate' })) as {
+      settings: Record<string, unknown>;
+      estimate: Record<string, unknown>;
+    };
+    expect(current.settings).toMatchObject({
+      historyLimit: expect.any(Number),
+      snapshotKeep: expect.any(Number),
+    });
+    for (const key of [
+      'documentCount',
+      'currentBytes',
+      'projectedBytes',
+      'deltaBytes',
+    ])
+      expect(typeof current.estimate[key], key).toBe('number');
+
+    const candidate = (await h.execute({
+      action: 'estimate',
+      history_limit: 7,
+      snapshot_keep: 3,
+    })) as { settings: Record<string, unknown>; estimate: Record<string, unknown> };
+    expect(typeof candidate.estimate.projectedBytes).toBe('number');
+    // The projection never persists the candidate policy.
+    expect(candidate.settings).toEqual(current.settings);
+    expect((await h.settings.view()).mode).toBe('local');
+
+    await expect(
+      h.execute({ action: 'estimate', history_limit: 0 }),
+    ).rejects.toThrow('history_limit 必须在');
+  });
+
+  it('lists an empty sync queue in local mode', async () => {
+    const h = await harness();
+    const result = (await h.execute({ action: 'queue' })) as {
+      entries: unknown[];
+    };
+    expect(result.entries).toEqual([]);
+  });
+
+  it('refuses to resolve queued writes in local mode', async () => {
+    const h = await harness({ approval: approving() });
+    h.mode.setMigrationLock(true);
+    await expect(
+      h.execute({ action: 'resolve', doc_id: 'doc-1', resolution: 'retry' }),
+    ).rejects.toThrow(/迁移进行中/);
+    h.mode.setMigrationLock(false);
+
+    await expect(
+      h.execute({ action: 'resolve', doc_id: 'doc-1', resolution: 'retry' }),
+    ).rejects.toThrow(/本地模式没有待处理的同步队列/);
+    await expect(
+      h.execute({ action: 'resolve', resolution: 'retry' }),
+    ).rejects.toThrow(/resolve 需要 doc_id/);
+    await expect(
+      h.execute({ action: 'resolve', doc_id: 'doc-1', resolution: 'merge' }),
+    ).rejects.toThrow(/resolution 必须是 retry 或 discard/);
+  });
 });

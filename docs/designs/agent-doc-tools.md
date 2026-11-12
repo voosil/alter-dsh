@@ -238,13 +238,14 @@ updated: 2026-11-12
 | --- | --- | --- |
 | P0 归因地基 | 权威栈、持久化守卫、归属派生、随想/归档/事件来源、桥接身份 | 已落地；[s1 验收](../acceptance/s1-capability-alignment.md) |
 | P1 发现与空间树 | browse（列表/检索/概览/回收站读）、tree（建/改名/移动/置顶/归档/删除/恢复） | 已落地；同上 |
-| P2 协作 | 评论、版本列表与恢复、随想（含转文档）、附件 | 写入互不覆盖；版本恢复走 CAS + 审批 |
-| P3 治理 | 空间 CRUD/排序/协作者、已实现 hub 配置；破坏性操作审批 | 不可逆操作必有审批；工作区映射不变量 |
-| P4 质量 | 创建幂等、可选结构 CAS、活动流、双模式离线与缓存语义、工具预算实测 | 全模式回归；schema 预算不超限 |
+| P2 协作 | 评论、版本列表与恢复、随想（含转文档）、附件 | 已落地；[P2–P4 验收](../acceptance/agent-tools-p2-p4.md)、[工具契约](../specs/agent-tools-p2-p4.md) |
+| P3 治理 | 空间 CRUD/排序/协作者、已实现 hub 配置；破坏性操作审批 | 已落地；不可逆操作必接审批；hub 事项/旅程/观察仍为 DEP-002 占位 |
+| P4 质量 | 创建幂等、可选结构 CAS、活动流、双模式离线与缓存语义、工具预算实测 | 队列明细/冲突处置与占用估算已暴露；创建幂等与结构 CAS 仍待排期；schema 预算见 spec §11 |
 
 ### 14.6 待拍板
 
-1. Agent 是否可以新建空间（联动 DSH 工作区）与 AI 协作者（P3 暴露前必须拍板）。
+1. ~~Agent 是否可以新建空间（联动 DSH 工作区）与 AI 协作者~~ 已拍板：P3 暴露，破坏性操作接审批，
+   工作区映射不变量由工作区桥接保持。
 2. 工具可见范围：当前为配置门禁（`documentTools` / `spaceTools` / 写策略）；是否细化分域开关
    （读/写/结构/破坏性）或按 preset 收窄。
 
@@ -253,7 +254,9 @@ updated: 2026-11-12
 
 ## 相关文档
 
-- [specs/agent-tools-v1.md](../specs/agent-tools-v1.md) — 工具契约、能力台账与预算（事实源）
+- [specs/agent-tools-v1.md](../specs/agent-tools-v1.md) — 核心工具契约、能力台账与预算（事实源）
+- [specs/agent-tools-p2-p4.md](../specs/agent-tools-p2-p4.md) — P2–P4 增量工具契约
+- [acceptance/agent-tools-p2-p4.md](../acceptance/agent-tools-p2-p4.md) — P2–P4 验收清单
 - [specs/document-operations-v0.md](../specs/document-operations-v0.md) — Operations 语义与错误码
 - [specs/document-model-v0.md](../specs/document-model-v0.md) — 节点模型、Schema Registry 与投影
 - [specs/system-architecture.md](../specs/system-architecture.md) — Host/Client 边界与持久化约束
