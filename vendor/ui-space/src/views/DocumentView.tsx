@@ -435,10 +435,11 @@ export function DocumentView({
         setBodyHasContent(blocksHaveContent(draftRef.current.blocks));
         refresh();
         // E4: re-check open comment anchors once new content is authoritative.
-        void repairCommentAnchors(commentsRef.current, snapshot.doc);
-        // The save may have cascaded deletes on the Host; re-read after the
-        // anchor repair so its writes are not overwritten by the refresh.
-        void reloadComments();
+        void repairCommentAnchors(commentsRef.current, snapshot.doc).then(
+          // The save may have cascaded deletes on the Host; re-read after the
+          // anchor repair so its writes are not overwritten by the refresh.
+          () => reloadComments(),
+        );
       },
       onExternalSnapshot: applyExternalSnapshot,
       notify: (message) => {
@@ -915,6 +916,7 @@ export function DocumentView({
   }
 
   function handleCommentQuotesChange(updates: { id: string; quote: string }[]) {
+    console.log('QUOTES', JSON.stringify(updates), 'commentCount', comments.length);
     if (!updates.length) return;
     // The kernel reports its live set asynchronously; check the rendered
     // state so a just-approved/deleted comment never gets a write queued.
