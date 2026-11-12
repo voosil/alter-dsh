@@ -16,6 +16,7 @@ updated: 2026-11-11
 | --- | --- | --- |
 | [document-model-v0.md](document-model-v0.md) | 文档权威表示：单一 `alter-doc/1` 格式、顶层信封与创建/写入约束、Block/Inline 节点、Marks、Schema Registry、v0 节点类型、Markdown 投影规则 | active |
 | [document-operations-v0.md](document-operations-v0.md) | 写入契约：请求/响应信封、Operation 集、原子性与并发、撤销与审计、错误码、对象与资产、版本/快照/备份 | active |
+| [space-comment-v0.md](space-comment-v0.md) | 评论生命周期：三态与迁移、软删除墓碑、正文写入级联删除、客户端可见面、旧数据兼容 | active |
 | [agent-tools-v1.md](agent-tools-v1.md) | 全部 Space 工具契约（文档 11 + 结构 2 + 控制面 2）、能力台账与 parity 门禁、投影预算与裁剪、质量验收基线 | active |
 | [system-architecture.md](system-architecture.md) | 分层与数据所有权、RPC 传输约束、SQLite 持久化与恢复、构建自包含、空间 ↔ 工作区映射不变量、已知边界 | active |
 

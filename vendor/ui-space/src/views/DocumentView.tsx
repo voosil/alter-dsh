@@ -61,7 +61,10 @@ import { CommentRail } from '../components/CommentRail';
 import { DocumentErrorBoundary } from '../components/DocumentErrorBoundary';
 import { DocumentComments } from '../components/DocumentComments';
 import { HistoryPanel } from '../components/HistoryPanel';
-import { HistoryCommentsModal } from '../components/HistoryCommentsModal';
+import {
+  HistoryCommentsModal,
+  historyCommentAt,
+} from '../components/HistoryCommentsModal';
 import {
   Button,
   Dialog,
@@ -79,21 +82,11 @@ interface PendingQuoteSave {
 }
 
 /**
- * When a comment left the live rails: `deletedAt` for a soft delete,
- * `resolvedAt` for an approval, the creation time for a pre-anchor row.
- */
-function historyCommentAt(comment: Comment): string {
-  return (
-    (comment.status === 'deleted' ? comment.deletedAt : comment.resolvedAt) ??
-    comment.createdAt
-  );
-}
-
-/**
  * Comments the editor/rail may still write for: only open ones.
  *
- * Host rejects `updateComment` on a resolved or soft-deleted comment, so the
- * page must stop mirroring live state (anchors, quotes) onto them.
+ * Host treats writes against resolved/deleted comments as no-ops, and the
+ * views must not mirror live state (anchors, quotes) onto comments that are
+ * already history.
  */
 function isLiveComment(comment: Comment): boolean {
   return comment.status === 'open';
@@ -242,13 +235,19 @@ export function DocumentView({
   );
   const [comments, setComments] = useState<Comment[]>([]);
   /**
-   * Comments that carry a quote, as the AST-native body needs them.
+   * Comments the AST-native body draws, as the kernel needs them.
    *
    * The kernel contract only knows quoted comments; legacy keeps its own
-   * filtering, so this is derived here instead of changing `comments`.
+   * filtering, so this is derived here instead of changing `comments`. A
+   * deleted comment is a tombstone: it no longer paints its quote in the body
+   * (resolved comments keep painting, as they always have).
    */
   const commentsWithQuote = useMemo(
-    () => comments.filter((item): item is Comment & { quote: string } => typeof item.quote === 'string'),
+    () =>
+      comments.filter(
+        (item): item is Comment & { quote: string } =>
+          typeof item.quote === 'string' && item.status !== 'deleted',
+      ),
     [comments],
   );
   const [commentsOpen, setCommentsOpen] = useState(false);
@@ -916,14 +915,20 @@ export function DocumentView({
   }
 
   function handleCommentQuotesChange(updates: { id: string; quote: string }[]) {
-    console.log('QUOTES', JSON.stringify(updates), 'commentCount', comments.length);
     if (!updates.length) return;
-    // The kernel reports its live set asynchronously; check the rendered
-    // state so a just-approved/deleted comment never gets a write queued.
-    const accepted = updates.filter((update) =>
-      comments.some(
-        (comment) => comment.id === update.id && isLiveComment(comment),
-      ),
+    // Two updates are dropped here:
+    // - a comment that is no longer open (the kernel reports its live set
+    //   asynchronously, so a just-approved/deleted row must not be written);
+    // - an empty quote: the kernel reports it when the quoted text was
+    //   deleted, which is the Host's cue to cascade the comment on save. It is
+    //   not UI state: the row keeps its old quote until the post-save
+    //   `reloadComments` returns the tombstone.
+    const accepted = updates.filter(
+      (update) =>
+        update.quote !== '' &&
+        comments.some(
+          (comment) => comment.id === update.id && isLiveComment(comment),
+        ),
     );
     if (!accepted.length) return;
     const quotes = new Map(accepted.map((update) => [update.id, update.quote]));
@@ -1030,20 +1035,17 @@ export function DocumentView({
       if (!aliveRef.current) return;
       // Soft delete: the row stays in `comments` as a tombstone so the history
       // panel can show it. Every live view filters on `status === 'open'`.
+      // The timestamp stays unset here — the Host owns it (a tombstone written
+      // on another device may be older) and the reload below brings it in.
       setComments((items) =>
         items.map((comment) =>
-          comment.id === id
-            ? {
-                ...comment,
-                status: 'deleted',
-                deletedAt: comment.deletedAt ?? new Date().toISOString(),
-              }
-            : comment,
+          comment.id === id ? { ...comment, status: 'deleted' } : comment,
         ),
       );
       if (hoveredCommentId === id) setHoveredCommentId(null);
       if (caretCommentId === id) setCaretCommentId(null);
       toast('评论已删除');
+      void reloadComments();
     } catch (error) {
       reportDocumentError('comments', error, {
         docId: node.id,

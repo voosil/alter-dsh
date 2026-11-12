@@ -288,6 +288,45 @@ describe('comment cascade on body writes', () => {
     await store.close();
   });
 
+  it('ignores an empty quote write-back so the cascade keeps its evidence', async () => {
+    const { store, documents, space, doc } = await setup();
+    const read = await documents.read(doc.docId);
+    const target = read.blocks.filter((block) => block.type === 'paragraph')[0]!;
+    const comment = await space.addComment({
+      docId: doc.docId,
+      body: '这句要确认',
+      quote: '第一段正文。',
+      anchor: { blockId: target.id, offset: 0, length: 5 },
+    });
+
+    // The client's quote write-back is debounced shorter than the body save,
+    // so it lands first: it must not clear the quote the cascade judges by.
+    const writtenBack = await space.updateComment(comment.id, { quote: '' });
+    expect(writtenBack.status).toBe('open');
+    expect(writtenBack.quote).toBe('第一段正文。');
+    expect(writtenBack.editedAt).toBeNull();
+    expect((await space.listComments(doc.docId))[0]?.quote).toBe('第一段正文。');
+
+    // The body write that erases the quoted span still cascades.
+    await documents.applyOperations({
+      docId: doc.docId,
+      baseRevision: doc.revision,
+      ops: [
+        {
+          op: 'update_text',
+          target: target.id,
+          edits: [{ oldText: '第一段正文。', newText: '换了写法。' }],
+        },
+      ],
+    });
+    const [listed] = await space.listComments(doc.docId);
+    expect(listed?.id).toBe(comment.id);
+    expect(listed?.status).toBe('deleted');
+    expect(listed?.deletedAt).not.toBeNull();
+    expect(listed?.quote).toBe('第一段正文。');
+    await store.close();
+  });
+
   it('keeps a quote write-back after the cascade a silent no-op', async () => {
     const { store, documents, space, doc } = await setup();
     const read = await documents.read(doc.docId);

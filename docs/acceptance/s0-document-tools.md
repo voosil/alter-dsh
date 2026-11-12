@@ -35,7 +35,7 @@ updated: 2026-11-12
 | 完整 AST 读取 | `doc.get` 返回 revision/title/doc 块树；`tests/integration/document/service.test.ts` 与 `tests/integration/host/apply.test.ts` 集成用例覆盖。 |
 | 撤销 | `doc.undo` / `space_doc_undo` 应用 op log 的 inverseOps：revision+1、旧内容恢复；过期 base 报 `doc/conflict`，未知 token 报 `op/invalid`。 |
 | 资产 | `space_asset_import` + 内容寻址资产表/文件：去重、mime/大小校验、`GET /api/alter-space/asset` 读取；客户端图片块用该 URL 渲染，失败回退占位。 |
-| 评论与历史 | 评论列表/发布/解决；版本列表、差异预览与「恢复此版本」。恢复走 `doc.restoreVersion`（delete+insert Operations，revision+1，不倒退 revision）；版本历史全部为 AST 快照，恢复只接受 AST。 |
+| 评论与历史 | 评论列表/发布/解决/删除（软删除墓碑，`listComments` 仍返回，供「历史评论」查看）；正文写入让评论 quote 消失时在同一事务链式软删除；版本列表、差异预览与「恢复此版本」。恢复走 `doc.restoreVersion`（delete+insert Operations，revision+1，不倒退 revision）；版本历史全部为 AST 快照，恢复只接受 AST。 |
 | 对象/资产 GC | 启动时扫描当前文档与保留版本的引用，删除未引用对象与资产元数据/字节；版本中仍引用的对象保留。 |
 | 资产备份 | 每日快照同时生成 `space-YYYYMMDD.assets.tar.gz`（无资产跳过），二者按同一 keep 策略保留；恢复流程同时覆盖。 |
 | AST 文本抽取 | 全局搜索、概览活动与新文档内容判断按 AST 块树提取正文纯文本（含对象 alt/caption/title），不命中 JSON 字段。 |

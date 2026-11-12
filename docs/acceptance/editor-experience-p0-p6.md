@@ -64,8 +64,8 @@ Document Operations 读写。
 | 图片与文件 | 选择/拖入/粘贴图片；粘贴 data URL 物化为资产；附件在 Host 文件白名单内原样保存，白名单外（含空串/未知/可执行类型）统一降级为 `application/octet-stream`，保留原始 name 作下载文件名，非图片以 attachment + nosniff 提供；图片通道白名单不变（png/jpeg/webp/gif，≤4 MiB），文件上限 8 MiB；上传失败显示 Host 的真实 message | 自动（资产物化）+ 人工 |
 | 撤销与重做 | 编辑内撤销重做（含输入规则单步撤销、纯文本 undo/redo）；保存后编辑面不重建 | 自动（撤销/重做）+ 人工（保存后不重建） |
 | 自动保存 | 约 700ms 防抖、成功静默、失败显示「保存失败，重试」 | 自动 + 人工 |
-| 评论 | 划词不再自动弹出输入框（输入框只在「添加评论」工具栏动作或点击已评论文字时打开）；光标进入/离开评论文本时上报 `onCommentAtCaretChange`，评论轨卡片与正文高亮跟随光标；卡片发布/编辑/补充/解决、quote 随编辑更新；激活评论背景调浅（有意视觉增量） | 自动（锚点/光标）+ 人工 |
-| 附加内容 | 底部「子文档 / 全文评论」tab、历史评论弹窗 | 人工 |
+| 评论 | 划词不再自动弹出输入框（输入框只在「添加评论」工具栏动作或点击已评论文字时打开）；光标进入/离开评论文本时上报 `onCommentAtCaretChange`，评论轨卡片与正文高亮跟随光标；卡片发布/编辑/补充/解决、quote 随编辑更新；删除为软删除（离开评论轨与正文高亮、进「历史评论」，见 D9）；激活评论背景调浅（有意视觉增量） | 自动（锚点/光标/删除）+ 人工 |
+| 附加内容 | 底部「子文档 / 全文评论」tab（只列 open 评论）、历史评论弹窗（采纳与已删除合并按时间倒序） | 自动 + 人工 |
 | 历史 | 版本列表、差异预览（AST→冻结 HTML 投影）、恢复（CAS） | 自动 + 人工 |
 | 导出 | 导出 Markdown 投影 | 人工 |
 | 输入法 | 中文/日文组合输入不误保存、不丢字 | 人工（未专项覆盖） |
@@ -100,6 +100,12 @@ Document Operations 读写。
 - [x] **D4 降级**：未知/不支持标记转为可见内容并给出 warning，不静默丢弃。
 - [x] **D5 资产**：粘贴 data URL 图片/文件在保存前上传为资产并改写引用；上传失败保留原内容并提示重试。
 - [x] **D6 评论锚点**：quote 唯一匹配时写入 `{blockId, offset, length}`；歧义或无匹配不写锚点。
+- [x] **D9 评论删除与历史**：删除是软删除——行留在 `listComments`（`status='deleted'` + `deletedAt`），
+  离开评论轨/全文评论/正文高亮，在「历史评论」里与已采纳评论合并按时间倒序；正文写入让评论 quote 从
+  新正文消失时（删块、`update_text`、整块替换、unwrap、撤销、版本恢复），Host 在同一事务里级联软删除
+  该 open 评论，resolved 与无 quote 的全文评论不受影响；对墓碑的编辑/补充/采纳是幂等 no-op。
+  契约见 [space-comment-v0.md](../specs/space-comment-v0.md)；
+  证据：`tests/integration/host/comment-cascade.test.ts`、`tests/ui/document/page/comments-history.test.ts`。
 - [x] **D7 版本**：历史预览把 AST 版本投影为冻结 HTML 做差异；恢复走 `doc.restoreVersion` 并以当前
   revision 作为 CAS base。
 - [x] **D8 外部更新**：外部 revision 变化时重载编辑面（有测试）；自身保存回显不重建编辑面

@@ -47,7 +47,7 @@ updated: 2026-11-12
 - `dryRun` 只返回 diff 与校验结果：不写 AST、不追加 op log、不递增 revision。
 - **评论级联在同一事务内**：写入提交时，`open` 且 `quote` 非空的评论，若其 `quote` 在新正文扁平文本中
   不再出现，同一事务内被软删除（`status='deleted'`，进「历史评论」）。判据与触发细节见
-  [document-model-v0.md](document-model-v0.md) §4.1；`dryRun` 不触发，`undo` 只回滚正文、不恢复评论。
+  [space-comment-v0.md](space-comment-v0.md)；`dryRun` 不触发，`undo` 只回滚正文、不恢复评论。
 
 ## 3. Operation 集 v0
 

@@ -88,8 +88,20 @@ describe('deleting a comment', () => {
     const doc = sampleDoc();
     const client = createPageClient(doc);
     const openComment = comment({ id: 'c-open', body: '我会被删除' });
-    const listComments = vi.fn(async () => [openComment]);
-    const deleteComment = vi.fn(async () => undefined);
+    // First read: the open comment. Every read after the delete: the Host's
+    // tombstone (authoritative status + deletedAt).
+    const deleteComment = vi.fn(async () => ({ status: 'deleted' }));
+    const listComments = vi.fn(async () =>
+      deleteComment.mock.calls.length === 0
+        ? [openComment]
+        : [
+            {
+              ...openComment,
+              status: 'deleted' as const,
+              deletedAt: '2026-11-06T00:00:00.000Z',
+            },
+          ],
+    );
     const page = mountDocumentPage(makeNode(doc), client, {
       listComments,
       deleteComment,
@@ -106,9 +118,15 @@ describe('deleting a comment', () => {
 
     // (a) the rail no longer shows it, Host rejected nothing.
     expect(deleteComment).toHaveBeenCalledWith('c-open');
+    // The authoritative list is re-read after the delete (tombstone + time
+    // come from the Host, not from a local clock).
+    await waitFor(() => expect(listComments).toHaveBeenCalledTimes(2));
     await waitFor(() =>
       expect(within(rail).queryByText('我会被删除')).toBeNull(),
     );
+    // The rail's stale comment icon may still sit next to the (now collapsed)
+    // rail until re-measured; what matters is that no card renders the body.
+    expect(within(rail).queryByText('我会被删除')).toBeNull();
     expect(page.toast).toHaveBeenCalledWith('评论已删除');
     expect(screen.queryByRole('dialog')).toBeNull();
 
@@ -181,7 +199,6 @@ describe('历史评论 modal', () => {
 
 describe('body saves', () => {
   it('re-reads the comment list so cascaded deletes disappear', async () => {
-    vi.useFakeTimers();
     const doc = sampleDoc();
     const client = createPageClient(doc);
     const inline = comment({ id: 'c-inline', body: '会被级联删除的评论' });
@@ -195,24 +212,23 @@ describe('body saves', () => {
     listComments.mockImplementation(async () => [
       { ...inline, status: 'deleted', deletedAt: '2026-11-06T00:00:00.000Z' },
     ]);
+    // Real timers here: the save debounce must actually elapse, and jest-style
+    // fake timers stall `waitFor` (it lives on the same clock).
     await page.replaceFirstBlockText('改写后的正文');
-    await vi.advanceTimersByTimeAsync(1000);
-    await settle();
-    console.log('SAVE', client.applyOperations.mock.calls.length, 'LIST', listComments.mock.calls.length);
-    await vi.advanceTimersByTimeAsync(5000);
-    await settle();
-    console.log('SAVE2', client.applyOperations.mock.calls.length, 'LIST', listComments.mock.calls.length);
+    await waitFor(() => expect(client.applyOperations).toHaveBeenCalled());
 
-    expect(client.applyOperations).toHaveBeenCalled();
+    // The save-success path refreshes the list exactly once — a refresh must
+    // never be triggered by `comments` changing (no loop).
+    await waitFor(() => expect(listComments).toHaveBeenCalledTimes(2));
+    await settle();
     expect(listComments).toHaveBeenCalledTimes(2);
-    // The remembered quote is not written back: the Host no longer has it open.
-    const quoteWrites = (
-      page.service.updateComment as ReturnType<typeof vi.fn>
-    ).mock.calls.filter((call) => 'quote' in ((call[1] ?? {}) as object));
-    expect(quoteWrites).toEqual([]);
+
+    // The tombstone leaves the rail and keeps its text in history.
     const rail = screen.getByLabelText('评论');
-    await waitFor(() =>
-      expect(within(rail).queryByText('会被级联删除的评论')).toBeNull(),
-    );
+    expect(within(rail).queryByText('会被级联删除的评论')).toBeNull();
+    await openMenuAction('历史评论');
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('会被级联删除的评论')).toBeTruthy();
+    expect(within(dialog).getByText(/已删除$/)).toBeTruthy();
   });
 });

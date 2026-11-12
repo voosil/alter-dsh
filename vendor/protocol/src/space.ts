@@ -127,10 +127,13 @@ export interface Comment {
   quote: string | null;
   anchor: CommentAnchor | null;
   /**
-   * `deleted` is a soft delete: the row stays in `listComments` as a tombstone
-   * (body/quote/supplements kept) and the UI moves it to the history panel.
-   * A comment is only removed physically when deleting its document block
-   * cascades, which drops the tombstone with that block.
+   * `deleted` is a terminal soft delete: the row stays in `listComments` as a
+   * tombstone (body/quote/supplements kept) and the UI shows it in the history
+   * panel. A body write that deletes the quoted text turns `open` comments into
+   * tombstones and leaves existing ones untouched; writes against a tombstone
+   * are no-ops that return it unchanged. There is no per-comment permanent
+   * delete — a tombstone only goes away with its document (space delete or
+   * trash emptying).
    */
   status: 'open' | 'resolved' | 'deleted';
   createdAt: string;

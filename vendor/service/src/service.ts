@@ -822,10 +822,15 @@ export function createContentService(
             comment.editedAt = toIso(now());
           }
         }
-        if (patch.quote !== undefined) {
-          // An empty quote is the "commented text is gone" marker clients use;
-          // store it as "no quote" so the cascade never reconsiders it.
-          comment.quote = patch.quote === '' ? null : patch.quote;
+        // An empty quote is the client's "the quoted text is gone" signal and
+        // is ignored here on purpose: deletion is decided by the body-write
+        // cascade, and the quote it judges must survive until that write
+        // lands. The client's quote write-back is debounced shorter than the
+        // body save, so accepting an empty quote would clear the only
+        // evidence before the cascade runs and strand the comment as a
+        // full-document comment instead of a tombstone.
+        if (patch.quote !== undefined && patch.quote !== '') {
+          comment.quote = patch.quote;
         }
         if (patch.anchor !== undefined) {
           comment.anchor = readCommentAnchor(patch.anchor);

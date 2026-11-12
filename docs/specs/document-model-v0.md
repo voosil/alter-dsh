@@ -99,24 +99,8 @@ v0 行内子集与投影：
 - 评论以 `Comment.anchor = { blockId, offset, length }` 锚定到某个顶层块的展平文本（inline text 原样、
   hardBreak 记 `\n`、嵌套块之间以 `\n` 连接）；颜色、字号 v0 不做；新增 mark 必须升 `schemaVersion`。
 
-### 4.1 评论生命周期与删除墓碑
-
-`Comment.status` 三态：`open`（评论轨与正文高亮可见）、`resolved`（已采纳，进「历史评论」）、
-`deleted`（已删除的墓碑）。删除**不移除记录**：`body`/`quote`/`anchor`/`supplements` 原样保留，
-只写 `status: 'deleted'` 与 `deletedAt`，因此被删评论仍可在「历史评论」中查看。
-
-- **两个删除入口**：用户显式删除（`space.deleteComment`，软删除）；正文写入使评论 `quote` 消失后的
-  级联删除。两者语义相同，都只改状态。
-- **`deleted` 是终态，写入幂等**：重复删除不改 `deletedAt`；对墓碑的编辑、补充、采纳一律 no-op 并返回
-  墓碑本身（客户端回写 quote 与 Host 级联删除天然竞态，不把竞态变成错误）。
-- **级联判据**（Host 权威，与具体 Operation 无关）：一次正文写入提交后，`status='open'`、`quote` 非空
-  的评论，若其 `quote` 在新正文的扁平文本中**不再出现**，即置为 `deleted`。扁平文本与锚点同一约定：
-  顶层块按文档顺序、inline text 原样、hardBreak 与块边界记为换行；比较前折叠空白。
-  「文本仍在但不再唯一匹配」只是锚点歧义，不算删除。
-- **不参与级联**：`resolved` 评论（已在历史中）与 `quote` 为空的全文评论。
-- **墓碑只读**：`deleted` 评论不可编辑、不可补充、不可再采纳，也不再参与锚点修复、评论轨与正文高亮。
-- **撤销不回滚评论**：`undo` 只回滚正文 Operation，已级联删除的评论保持「已删除」。
-- **清理随文档**：墓碑随文档一起失效（删除空间 / 清空回收站按 `docId` 连带删除），不提供单独永久删除。
+评论的生命周期（三态、软删除墓碑、正文写入的级联删除）与客户端可见面见
+[space-comment-v0.md](space-comment-v0.md)。
 
 ## 5. 文档级元数据
 
@@ -253,6 +237,7 @@ interface NodeTypeDefinition {
 ## 相关文档
 
 - [document-operations-v0.md](document-operations-v0.md) — 写入契约：信封、Operation 集、错误码、对象/资产
+- [space-comment-v0.md](space-comment-v0.md) — 评论生命周期：软删除墓碑与正文级联删除
 - [agent-tools-v1.md](agent-tools-v1.md) — 模型可调用工具、投影预算与质量验收基线
 - [system-architecture.md](system-architecture.md) — 分层、持久化与传输约束
 - [文档内容架构](../designs/document-content-architecture.md) — 为什么选择 JSON AST + Markdown 投影

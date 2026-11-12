@@ -17,30 +17,32 @@ interface HistoryEntry {
 }
 
 /**
+ * When a comment left the live rails.
+ *
+ * Soft deletes use `deletedAt`, approvals `resolvedAt`; a row persisted before
+ * either field falls back to its creation time. The page shares this rule with
+ * the history panel so the menu state and the list never disagree.
+ */
+export function historyCommentAt(comment: Comment): string {
+  return (
+    (comment.status === 'deleted' ? comment.deletedAt : comment.resolvedAt) ??
+    comment.createdAt
+  );
+}
+
+/**
  * History entries, newest first.
  *
  * Resolved and deleted comments share one timeline ordered by when each of
- * them happened (deleted by `deletedAt`, resolved by `resolvedAt`).
+ * them happened.
  */
 function toHistoryEntries(comments: readonly Comment[]): HistoryEntry[] {
   return comments
     .flatMap((comment): HistoryEntry[] => {
       if (comment.status === 'deleted')
-        return [
-          {
-            comment,
-            at: comment.deletedAt ?? comment.createdAt,
-            label: '已删除',
-          },
-        ];
+        return [{ comment, at: historyCommentAt(comment), label: '已删除' }];
       if (comment.status === 'resolved')
-        return [
-          {
-            comment,
-            at: comment.resolvedAt ?? comment.createdAt,
-            label: '采纳',
-          },
-        ];
+        return [{ comment, at: historyCommentAt(comment), label: '采纳' }];
       return [];
     })
     .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
