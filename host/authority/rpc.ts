@@ -12,6 +12,7 @@ import type {
   SpacePatch,
   SpaceService,
 } from '@alter/protocol';
+import type { ChatService } from '@alter/protocol';
 import {
   MAX_ASSET_BYTES,
   MAX_FILE_BYTES,
@@ -81,6 +82,7 @@ export const SPACE_METHODS = [
   'listAgents',
   'createAgent',
   'listDirectories',
+  'getWorkspaceLink',
 ] as const;
 
 /** hub.* business methods on the browser whitelist. */
@@ -123,11 +125,24 @@ export const DOCUMENT_METHODS = [
 /** object.* methods on the browser whitelist. */
 export const OBJECT_METHODS = ['get'] as const;
 
+/** chat.* methods on the browser whitelist. */
+export const CHAT_METHODS = [
+  'listChats',
+  'getChat',
+  'createChat',
+  'updateChat',
+  'deleteChat',
+  'setChatRefs',
+  'addChatRef',
+  'listChatsForRef',
+] as const;
+
 const SPACE_METHOD_SET: ReadonlySet<string> = new Set(SPACE_METHODS);
 const HUB_METHOD_SET: ReadonlySet<string> = new Set(HUB_METHODS);
 const STORAGE_METHOD_SET: ReadonlySet<string> = new Set(STORAGE_METHODS);
 const DOCUMENT_METHOD_SET: ReadonlySet<string> = new Set(DOCUMENT_METHODS);
 const OBJECT_METHOD_SET: ReadonlySet<string> = new Set(OBJECT_METHODS);
+const CHAT_METHOD_SET: ReadonlySet<string> = new Set(CHAT_METHODS);
 
 /** Settings endpoints served by the plugin core, not by an authority backend. */
 export const SETTINGS_METHODS = ['get', 'update', 'test'] as const;
@@ -205,6 +220,17 @@ export interface SpaceRpcOptions {
   agentDocument?: DocumentService;
   /** Document asset store; absent disables `doc.importAsset` / `doc.importFile`. */
   assets?: DocumentAssets;
+  /**
+   * Conversation records (page chats + side chats). Browser-only: Agent tools
+   * never expose the chat surface, so no alter stack exists for it.
+   */
+  chat?: ChatService;
+  /**
+   * Space ↔ workspace binding reader for `space.getWorkspaceLink`. The
+   * binding is plugin sidecar data outside `SpaceService`, so the route takes
+   * it as a resolver; server mode passes the same runtime store.
+   */
+  workspaceLink?: (spaceId: string) => { workspaceId: string } | undefined;
   /**
    * How the route selects the write-identity stack. The local Host route is a
    * user browser (`browser`): it always selects the user stack and ignores any
@@ -491,6 +517,10 @@ export function createSpaceRpc(options: SpaceRpcOptions): SpaceRpcHandler {
         return { value: await storage.set(patch) };
       }
       if (group === 'space' && SPACE_METHOD_SET.has(method)) {
+        if (method === 'getWorkspaceLink') {
+          const link = options.workspaceLink?.(String(args[0]));
+          return { value: link ?? null };
+        }
         if (method === 'deleteSpace')
           await takeDeleteRecoveryPoint(options.snapshotBeforeSpaceDelete);
         const sync = options.workspaceSync?.();
@@ -592,6 +622,17 @@ export function createSpaceRpc(options: SpaceRpcOptions): SpaceRpcHandler {
           throw new SpaceRpcError('doc/unavailable', '文档模型服务未启用');
         if (method === 'get')
           return { value: (await document.getObject(String(args[0]))) ?? null };
+      }
+      if (group === 'chat' && CHAT_METHOD_SET.has(method)) {
+        const chat = options.chat;
+        if (chat === undefined)
+          throw new SpaceRpcError('chat/unavailable', '会话记录服务未启用');
+        const target = chat as unknown as Record<
+          string,
+          (...callArgs: unknown[]) => unknown
+        >;
+        const value = await target[method](...args);
+        return { value: value === undefined ? null : value };
       }
       if (group === 'hub' && HUB_METHOD_SET.has(method)) {
         const target = activeService.hub as unknown as Record<

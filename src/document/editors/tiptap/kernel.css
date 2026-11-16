@@ -30,7 +30,7 @@
   margin: 0;
 }
 .kernelSurface li > p + p {
-  margin-top: 10px;
+  margin-top: var(--doc-gap);
 }
 .kernelSurface li > :is(ul, ol) {
   margin-top: 4px;
@@ -41,7 +41,7 @@
   margin: 0;
 }
 .kernelSurface :is(td, th) > p + p {
-  margin-top: 10px;
+  margin-top: var(--doc-gap);
 }
 
 /* Quotes: the frozen `<blockquote>` puts its first paragraph inline. */
@@ -49,7 +49,7 @@
   margin: 0;
 }
 .kernelSurface blockquote > p + p {
-  margin-top: 10px;
+  margin-top: var(--doc-gap);
 }
 
 /* Task rows: the frozen DOM is a flex row of [box, text]; the text span holds
@@ -58,11 +58,12 @@
   margin: 0;
 }
 .kernelSurface [data-todo-text] > p + p {
-  margin-top: 10px;
+  margin-top: var(--doc-gap);
 }
-/* The task-list grouping node is structural only: frozen rows are flat. */
+/* The task-list grouping node is structural only: frozen rows are flat. Its
+   bottom margin keeps a task list on the same block rhythm as a list. */
 .kernelSurface [data-task-list] {
-  margin: 0;
+  margin: 0 0 var(--doc-gap);
   padding: 0;
   list-style: none;
 }

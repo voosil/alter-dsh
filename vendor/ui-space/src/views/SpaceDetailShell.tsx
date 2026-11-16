@@ -13,6 +13,7 @@ import { WorkbenchToggle } from '@alter/ui-workbench';
 import { useSpaceContext } from '../runtime';
 import { useHub, hubPath } from '../hub/context';
 import { DirectoryButton } from '../components/DirectoryButton';
+import { RightbarButton } from '../components/RightbarButton';
 import styles from './SpaceDetailShell.module.css';
 
 export function SpaceDetailShell({
@@ -56,6 +57,8 @@ export function SpaceDetailShell({
             {current?.label ?? '插件'}
           </span>
         </nav>
+        {/* 空间主界面（概览/活动/配置等）与页面共用同一个右侧栏开关。 */}
+        <RightbarButton />
         {workbench ? (
           <WorkbenchToggle
             hideWhenOpen

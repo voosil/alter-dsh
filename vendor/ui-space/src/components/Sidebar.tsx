@@ -137,11 +137,14 @@ export function Sidebar({
       return;
     }
     if (lastDocRef.current === route.id) return;
-    lastDocRef.current = route.id;
     const node = nodes.find((item) => item.id === route.id);
+    // A deep link (or the default-document redirect) can put the route on a
+    // document before its list has loaded. Latching here would then keep the
+    // user tab selected for an Agent-written document, so wait for the node
+    // instead: the next render with a loaded list retries this sync.
     if (!node) return;
-    const timer = window.setTimeout(() => setTab(node.creator), 0);
-    return () => window.clearTimeout(timer);
+    lastDocRef.current = route.id;
+    setTab(node.creator);
   }, [route.id, route.view, nodes]);
 
   async function createDoc(parentId: string | null) {

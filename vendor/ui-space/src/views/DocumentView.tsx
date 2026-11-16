@@ -25,11 +25,12 @@ import {
   ListTodo,
   MessageSquare,
   MoreHorizontal,
+  PanelRight,
   Plus,
   Quote,
   Text,
 } from 'lucide-react';
-import type { Comment, SpaceNode } from '@alter/protocol';
+import type { Chat, Comment, SpaceNode } from '@alter/protocol';
 import {
   alterDocToEditorHtml,
   anchorForQuote,
@@ -51,6 +52,7 @@ import {
   type DocumentSaveSnapshot,
 } from '@alter-space/document-runtime';
 import { useSpaceContext } from '../runtime';
+import { uiBridge } from '../bridge';
 import { documentModelOf } from '../document-model';
 import { docPath, overviewPath } from '../space-route';
 import { ancestorsOf, displayTitle } from '../utils/tree';
@@ -65,6 +67,8 @@ import {
   HistoryCommentsModal,
   historyCommentAt,
 } from '../components/HistoryCommentsModal';
+import { RelatedChatsDialog } from '../components/RelatedChatsDialog';
+import { RightbarButton } from '../components/RightbarButton';
 import {
   Button,
   Dialog,
@@ -261,6 +265,19 @@ export function DocumentView({
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyCommentsOpen, setHistoryCommentsOpen] = useState(false);
+  /**
+   * 相关会话弹层（页面菜单「相关会话」）。
+   *
+   * 数量（`relatedChats.length`）在页面挂载与切换后预取，菜单项按数量显隐：
+   * 0 条不出现，>0 时点击直接复用预取结果。列表/加载/失败态都留在弹层内
+   * 呈现，不使用 toast；预取失败按 0 条处理，不打扰用户。
+   */
+  const [relatedOpen, setRelatedOpen] = useState(false);
+  const [relatedChats, setRelatedChats] = useState<Chat[]>([]);
+  const [relatedLoading, setRelatedLoading] = useState(false);
+  const [relatedError, setRelatedError] = useState<string | null>(null);
+  /** 重取触发器：点击菜单时预取还没落地（或失败后重试）才 +1。 */
+  const [relatedRefresh, setRelatedRefresh] = useState(0);
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>(
     'saved',
   );
@@ -348,6 +365,12 @@ export function DocumentView({
   const anchorSweepRef = useRef(false);
   const anchorWarnedRef = useRef(false);
   commentsRef.current = comments;
+  /**
+   * 弹层当前是否打开：预取失败只在用户打开的弹层里行内提示，
+   * 关闭态不留错误（也不弹 toast）。
+   */
+  const relatedOpenRef = useRef(false);
+  relatedOpenRef.current = relatedOpen;
   /** Open comment ids — the only ones the page may still write to. */
   const liveIdsRef = useRef(new Set<string>());
   liveIdsRef.current = new Set(
@@ -565,6 +588,44 @@ export function DocumentView({
       controllerRef.current?.dispose();
     };
   }, [service, node.id]);
+
+  // 预取「相关会话」数量：挂载与页面切换（`node.id`）后各拉一次，菜单项据此
+  // 显隐，所以要在用户打开菜单之前拿到。桥缺失或请求失败都按 0 条处理，不报错、
+  // 不 toast；`relatedRefresh` 只在点击时尚未拿到列表的情况下 +1 触发重取，
+  // 保证不会每次渲染都发请求。
+  useEffect(() => {
+    setRelatedChats([]);
+    setRelatedError(null);
+    const bridge = uiBridge();
+    if (bridge === null) {
+      setRelatedLoading(false);
+      return;
+    }
+    let alive = true;
+    setRelatedLoading(true);
+    void bridge
+      .relatedChats({ spaceId, nodeId: node.id })
+      .then((items) => {
+        if (!alive || !aliveRef.current) return;
+        setRelatedChats(items);
+      })
+      .catch(() => {
+        if (!alive || !aliveRef.current) return;
+        // 预取失败等价于「没有相关会话」；只有用户主动打开的弹层才需要
+        // 行内失败提示（列表为空，菜单项随之隐藏）。
+        if (relatedOpenRef.current) {
+          setRelatedError('相关会话加载失败，请重试');
+        }
+      })
+      .finally(() => {
+        if (!alive || !aliveRef.current) return;
+        setRelatedLoading(false);
+      });
+    return () => {
+      // 页面切换或卸载后旧请求的结果不再写回。
+      alive = false;
+    };
+  }, [spaceId, node.id, relatedRefresh]);
 
   useEffect(() => {
     if (!controllerRef.current?.hasPending()) {
@@ -1272,6 +1333,74 @@ export function DocumentView({
     }
   }
 
+  /**
+   * 文档菜单「AI 对话」：经桥在空间映射工作区里创建一个页面对话并打开。
+   *
+   * 创建失败用页内 toast 告知（菜单动作没有可挂行内提示的表面；这是本组
+   * 新功能唯一使用 toast 的地方）。
+   */
+  function startPageChat(): void {
+    const bridge = uiBridge();
+    if (bridge === null) return;
+    void bridge
+      .startPageChat({ spaceId, nodeId: node.id, nodeTitle: node.title })
+      .catch((error: unknown) => {
+        const reason =
+          error instanceof Error && error.message.trim() !== ''
+            ? error.message
+            : '';
+        toast(
+          reason === ''
+            ? '对话创建失败，请重试'
+            : `对话创建失败，请重试（${reason}）`,
+        );
+      });
+  }
+
+  /**
+   * 文档菜单「相关会话」：打开弹层，优先复用预取到的列表。
+   *
+   * 菜单项只在数量 >0 时出现，所以走到这里通常已有数据，直接展示即可、不再
+   * 二次请求；只有预取还没落地时才 bump `relatedRefresh` 让预取副作用重取一次，
+   * 弹层先行打开并显示加载态。失败文案走弹层行内提示，不用 toast。
+   */
+  function openRelatedChats(): void {
+    const bridge = uiBridge();
+    if (bridge === null) return;
+    setRelatedOpen(true);
+    setRelatedError(null);
+    if (relatedChats.length > 0) return;
+    setRelatedRefresh((value) => value + 1);
+  }
+
+  /** 相关会话行点击：经桥打开该对话（页面对话进主会话，侧边对话进右栏）。 */
+  function openRelatedChat(chat: Chat): void {
+    uiBridge()?.openChat(chat);
+    setRelatedOpen(false);
+  }
+
+  /**
+   * 相关会话行「删除」：桥删除成功后从弹层列表移除该行。
+   *
+   * 数量由列表长度派生，删除即同步减少；减到 0 时菜单项随之消失。
+   */
+  function deleteRelatedChat(chatId: string): void {
+    const bridge = uiBridge();
+    if (bridge === null) return;
+    void bridge
+      .deleteChat(chatId)
+      .then(() => {
+        if (!aliveRef.current) return;
+        setRelatedChats((items) =>
+          items.filter((chat) => chat.id !== chatId),
+        );
+      })
+      .catch(() => {
+        if (!aliveRef.current) return;
+        setRelatedError('对话删除失败，请重试');
+      });
+  }
+
   async function unarchive() {
     await service.setArchived(node.id, false);
     refresh();
@@ -1305,6 +1434,7 @@ export function DocumentView({
   const documentEmpty = title.trim().length === 0 && !bodyHasContent;
   const showFooter =
     bodyHasContent || children.length > 0 || comments.length > 0;
+  const bridge = uiBridge();
   const menuActions: MenuAction[] = [
     {
       id: 'copy',
@@ -1312,6 +1442,39 @@ export function DocumentView({
       icon: <Link2 />,
       onSelect: () => void copyLink(),
     },
+    {
+      id: 'ai-chat',
+      label: 'AI 对话',
+      icon: <MessageSquare />,
+      disabled: bridge === null,
+      onSelect: startPageChat,
+    },
+    // 相关会话数量由预取得知：0 条时菜单项不出现（N=0 不显示），>0 时点击
+    // 直接复用预取结果。
+    ...(relatedChats.length > 0
+      ? [
+          {
+            id: 'related-chats',
+            label: '相关会话',
+            icon: <History />,
+            disabled: bridge === null,
+            onSelect: openRelatedChats,
+          },
+        ]
+      : []),
+    // 嵌入式页面已经在右侧栏里，不再提供「在右侧栏打开」。
+    ...(embedded
+      ? []
+      : [
+          {
+            id: 'open-rightbar',
+            label: '在右侧栏打开',
+            icon: <PanelRight />,
+            disabled: bridge === null,
+            onSelect: () =>
+              bridge?.openPageInRightbar({ spaceId, nodeId: node.id }),
+          },
+        ]),
     {
       id: 'new-child',
       label: '新建子文档',
@@ -1569,6 +1732,8 @@ export function DocumentView({
               ) : null}
             </>
           ) : null}
+          {/* 右侧栏开关：嵌入模式（右栏内打开）不渲染，右栏已经展开。 */}
+          {!embedded ? <RightbarButton nodeId={node.id} /> : null}
           <IconButton
             label="文档菜单"
             icon={<MoreHorizontal />}
@@ -1900,6 +2065,17 @@ export function DocumentView({
         open={historyCommentsOpen}
         comments={historyComments}
         onClose={() => setHistoryCommentsOpen(false)}
+      />
+      <RelatedChatsDialog
+        open={relatedOpen}
+        chats={relatedChats}
+        sessionGone={(chat) => chat.sessionId !== null
+          && bridge?.sessionGone?.(chat.sessionId) === true}
+        loading={relatedLoading}
+        error={relatedError}
+        onClose={() => setRelatedOpen(false)}
+        onOpenChat={openRelatedChat}
+        onDeleteChat={deleteRelatedChat}
       />
       <Dialog
         open={draftPrompt !== null}

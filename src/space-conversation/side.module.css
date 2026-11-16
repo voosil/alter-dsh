@@ -1,0 +1,590 @@
+/* 侧边对话 surfaces (side.tsx / side-tab.tsx / side-history.tsx).
+ *
+ * Colors use the host conversation's `--dsw-alias-*` tokens so every surface
+ * follows the DSH light/dark theme; each falls back to the plugin's own
+ * `--alter-*` token (vendor/ui-system/src/styles/tokens.css) for surfaces
+ * without the host palette. Spacing, radius and type stay on the Space token
+ * scale. DSH does not apply the plugin's reset inside its own surfaces, so
+ * every control carries its own box/border/font resets. */
+
+/* --- 划选动作浮层（conversation.chat.text-interaction） ------------------- */
+
+.selectionAction {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+/* 两个动作并列，高度与原单按钮面板一致（单行，不换行）；间距 8px。 */
+.selectionButtons {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.selectionButton {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 5px 10px;
+  border: 1px solid var(--dsw-alias-border-l2, var(--alter-border));
+  border-radius: var(--alter-radius-pill);
+  background: var(--dsw-alias-bg-layer-2, var(--alter-action-background));
+  color: var(--dsw-alias-label-primary, var(--alter-action-text));
+  font: inherit;
+  line-height: var(--alter-line-ui);
+  cursor: pointer;
+  transition: background-color var(--alter-duration-fast) ease;
+}
+
+.selectionButton:focus-visible {
+  outline: var(--alter-focus-width) solid var(--dsw-alias-border-selected, var(--alter-accent));
+  outline-offset: var(--alter-focus-offset);
+}
+
+.selectionButton:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover, var(--alter-action-hover));
+}
+
+.selectionButton:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.selectionError {
+  box-sizing: border-box;
+  margin: 0;
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+  color: var(--dsw-alias-state-error-primary, var(--alter-danger));
+}
+
+/* --- 助手回复动作（conversation.chat.assistant-actions） ------------------- */
+
+/* 与 DSH 消息图标行同尺寸（28px 方块、透明底），保持行内节奏不变。 */
+.assistantAction {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(28px + var(--dsh-content-font-delta, 0px));
+  height: calc(28px + var(--dsh-content-font-delta, 0px));
+  margin: 0;
+  padding: 6px;
+  border: none;
+  border-radius: var(--dsw-radius-sm, var(--alter-radius-xs));
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary, var(--alter-text-faint));
+  font: inherit;
+  cursor: pointer;
+  transition: background-color var(--alter-duration-fast) ease;
+}
+
+.assistantAction:focus-visible {
+  outline: var(--alter-focus-width) solid var(--dsw-alias-border-selected, var(--alter-accent));
+  outline-offset: calc(-1 * var(--alter-focus-width));
+}
+
+.assistantAction:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover, var(--alter-surface-hover));
+  color: var(--dsw-alias-label-secondary, var(--alter-text-muted));
+}
+
+.assistantAction:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.assistantError {
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+  color: var(--dsw-alias-state-error-primary, var(--alter-danger));
+  white-space: nowrap;
+}
+
+/* --- 右栏标签页（sidebar.right.pane.tab） --------------------------------- */
+
+.tabBody {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+
+/* 分支横幅：一行来源声明，不可点、不展开。 */
+.banner {
+  box-sizing: border-box;
+  flex: none;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1, var(--alter-border));
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+  color: var(--dsw-alias-label-secondary, var(--alter-text-muted));
+  user-select: none;
+}
+
+.chatArea {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.chatArea > * {
+  flex: 1;
+  min-height: 0;
+}
+
+.notice {
+  box-sizing: border-box;
+  flex: none;
+  margin: 0;
+  padding: 16px;
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+  color: var(--dsw-alias-label-secondary, var(--alter-text-muted));
+}
+
+/* --- 侧边对话历史（conversation.view） ------------------------------------ */
+
+.history {
+  box-sizing: border-box;
+  min-height: 100%;
+  padding: 16px;
+}
+
+.historyHeading {
+  margin: 0 0 12px;
+  font-size: var(--alter-font-title-sm);
+  font-weight: 600;
+  line-height: var(--alter-line-display);
+  color: var(--dsw-alias-label-primary, var(--alter-text));
+}
+
+.historyList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+}
+
+/* P1 工具栏：搜索 + 按来源分组。与列表同宽，不抢标题行。 */
+.historyToolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+}
+
+.historySearch {
+  box-sizing: border-box;
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 4px 10px;
+  border: 1px solid var(--dsw-alias-border-l2, var(--alter-control-border));
+  border-radius: var(--alter-radius-xs);
+  background: var(--dsw-alias-bg-layer-2, var(--alter-surface));
+  color: var(--dsw-alias-label-primary, var(--alter-text));
+  font: inherit;
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+}
+
+.historyToggle {
+  box-sizing: border-box;
+  flex: none;
+  margin: 0;
+  padding: 4px 10px;
+  border: 1px solid var(--dsw-alias-border-l2, var(--alter-control-border));
+  border-radius: var(--alter-radius-xs);
+  background: var(--dsw-alias-bg-layer-2, var(--alter-surface));
+  color: var(--dsw-alias-label-secondary, var(--alter-text-muted));
+  font: inherit;
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+  cursor: pointer;
+}
+
+.historyToggle[aria-pressed='true'] {
+  border-color: var(--dsw-alias-border-selected, var(--alter-accent));
+  color: var(--dsw-alias-label-primary, var(--alter-text));
+}
+
+.historyToggle:focus-visible,
+.historySearch:focus-visible {
+  outline: var(--alter-focus-width) solid var(--dsw-alias-border-selected, var(--alter-accent));
+  outline-offset: var(--alter-focus-offset);
+}
+
+.historyNoMatch {
+  margin: 0;
+  padding: 12px 0;
+  font-size: var(--alter-font-body-sm);
+  line-height: var(--alter-line-ui);
+  color: var(--dsw-alias-label-secondary, var(--alter-text-muted));
+}
+
+.historyGroups {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.historyGroup {
+  display: flex;
+  flex-direction: column;
+}
+
+.historyGroupHeading {
+  margin: 8px 0 0;
+  font-size: var(--alter-font-caption);
+  font-weight: 600;
+  line-height: var(--alter-line-ui);
+  color: var(--dsw-alias-label-tertiary, var(--alter-text-faint));
+}
+
+.historyRow {
+  box-sizing: border-box;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--dsw-alias-border-l1, var(--alter-border));
+}
+
+.historyRowMain {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.historyRowTitle {
+  font-size: var(--alter-font-body-sm);
+  font-weight: 500;
+  line-height: var(--alter-line-ui);
+  color: var(--dsw-alias-label-primary, var(--alter-text));
+  overflow-wrap: anywhere;
+}
+
+.renameInput {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--dsw-alias-border-l2, var(--alter-control-border));
+  border-radius: var(--alter-radius-xs);
+  background: var(--dsw-alias-bg-base, var(--alter-surface));
+  color: var(--dsw-alias-label-primary, var(--alter-text));
+  font: inherit;
+  font-size: var(--alter-font-body-sm);
+  line-height: var(--alter-line-ui);
+}
+
+.renameInput:focus-visible {
+  outline: var(--alter-focus-width) solid var(--dsw-alias-border-selected, var(--alter-accent));
+  outline-offset: var(--alter-focus-offset);
+}
+
+.historyRowSource {
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+  color: var(--dsw-alias-label-secondary, var(--alter-text-muted));
+}
+
+.historyRowQuote {
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+  color: var(--dsw-alias-label-tertiary, var(--alter-text-faint));
+  overflow-wrap: anywhere;
+}
+
+.historyRowTime {
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+  color: var(--dsw-alias-label-tertiary, var(--alter-text-faint));
+}
+
+/* 时间与运行状态同一行；状态只在能确定时出现。 */
+.historyRowMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.historyRowStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+  color: var(--dsw-alias-label-tertiary, var(--alter-text-faint));
+  white-space: nowrap;
+}
+
+.historyRowStatus[data-running] {
+  color: var(--dsw-alias-label-secondary, var(--alter-text-muted));
+}
+
+.historyRowStatus[data-completed] {
+  color: var(--dsw-alias-label-primary, var(--alter-text));
+}
+
+/* 生成中：呼吸点（1.4s，静息态不明显，动起来才看得见）。 */
+.historyRowStatusDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dsw-alias-state-success-primary, var(--alter-accent));
+  animation: sideStatusBreath 1.4s ease-in-out infinite;
+}
+
+/* 已完成未读：实心点（主题强调色，静止）。 */
+.historyRowStatusDotDone {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dsw-alias-label-selected, var(--alter-accent));
+}
+
+@keyframes sideStatusBreath {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .historyRowStatusDot {
+    animation: none;
+    opacity: 1;
+  }
+}
+
+.historyRowActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.secondaryButton {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 4px 12px;
+  border: 1px solid var(--dsw-alias-border-l2, var(--alter-control-border));
+  border-radius: var(--alter-radius-xs);
+  background: var(--dsw-alias-bg-layer-2, var(--alter-surface));
+  color: var(--dsw-alias-label-primary, var(--alter-text));
+  font: inherit;
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+  cursor: pointer;
+  transition: background-color var(--alter-duration-fast) ease;
+}
+
+.secondaryButton:focus-visible {
+  outline: var(--alter-focus-width) solid var(--dsw-alias-border-selected, var(--alter-accent));
+  outline-offset: var(--alter-focus-offset);
+}
+
+.secondaryButton:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover, var(--alter-surface-hover));
+}
+
+.secondaryButton:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.iconButton {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: var(--alter-radius-xs);
+  background: transparent;
+  color: var(--dsw-alias-label-secondary, var(--alter-text-muted));
+  font: inherit;
+  cursor: pointer;
+  transition: background-color var(--alter-duration-fast) ease;
+}
+
+.iconButton:focus-visible {
+  outline: var(--alter-focus-width) solid var(--dsw-alias-border-selected, var(--alter-accent));
+  outline-offset: var(--alter-focus-offset);
+}
+
+.iconButton:hover {
+  background: var(--dsw-alias-interactive-bg-hover, var(--alter-surface-hover));
+  color: var(--dsw-alias-label-primary, var(--alter-text));
+}
+
+.menuAnchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: var(--alter-layer-popup, 10);
+  min-width: 96px;
+  margin: 0;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--dsw-alias-border-l2, var(--alter-border));
+  border-radius: var(--alter-radius-control);
+  background: var(--dsw-alias-bg-layer-2, var(--alter-surface-raised));
+  box-shadow: var(--alter-shadow-popover);
+}
+
+.menuItem {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 5px 10px;
+  border: none;
+  border-radius: var(--alter-radius-xs);
+  background: transparent;
+  color: var(--dsw-alias-label-primary, var(--alter-text));
+  font: inherit;
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--alter-duration-fast) ease;
+}
+
+.menuItem:focus-visible {
+  outline: var(--alter-focus-width) solid var(--dsw-alias-border-selected, var(--alter-accent));
+  outline-offset: calc(-1 * var(--alter-focus-width));
+}
+
+.menuItem:hover {
+  background: var(--dsw-alias-interactive-bg-hover, var(--alter-surface-hover));
+}
+
+.menuItemDanger {
+  color: var(--dsw-alias-state-error-primary, var(--alter-danger));
+}
+
+.confirmBar {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--dsw-alias-border-l2, var(--alter-danger-soft));
+  border-radius: var(--alter-radius-control);
+  background: var(--dsw-alias-bg-layer-1, var(--alter-danger-soft));
+}
+
+.confirmText {
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+  color: var(--dsw-alias-label-primary, var(--alter-text));
+}
+
+.confirmActions {
+  display: flex;
+  gap: 8px;
+}
+
+.dangerButton {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 4px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--alter-radius-xs);
+  background: var(--dsw-alias-state-error-primary, var(--alter-danger));
+  color: var(--dsw-alias-label-primary, var(--alter-surface));
+  font: inherit;
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+  cursor: pointer;
+  transition: background-color var(--alter-duration-fast) ease;
+}
+
+.dangerButton:focus-visible {
+  outline: var(--alter-focus-width) solid var(--dsw-alias-border-selected, var(--alter-accent));
+  outline-offset: var(--alter-focus-offset);
+}
+
+.dangerButton:hover {
+  background: var(--alter-danger-strong);
+}
+
+/* --- 空态 ----------------------------------------------------------------- */
+
+.historyEmpty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 24px 0;
+}
+
+.historyEmptyText {
+  margin: 0;
+  font-size: var(--alter-font-body-sm);
+  line-height: var(--alter-line-ui);
+  color: var(--dsw-alias-label-secondary, var(--alter-text-muted));
+}
+
+/* Toolbar above an embedded conversation in a right-sidebar tab. */
+.tabBar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--alter-border);
+}
+
+.branchButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--alter-border);
+  border-radius: var(--alter-radius-control);
+  background: var(--alter-surface);
+  color: var(--alter-text);
+  font: inherit;
+  font-size: var(--alter-font-caption);
+  cursor: pointer;
+}
+
+.branchButton:hover:not(:disabled) {
+  background: var(--alter-surface-hover);
+}
+
+.branchButton:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.branchError {
+  font-size: var(--alter-font-caption);
+  color: var(--alter-danger);
+}

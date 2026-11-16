@@ -30,6 +30,7 @@ import {
 import type { Creator, SpaceNode } from '@alter/protocol';
 import { useSpaceContext } from '../runtime';
 import {
+  ancestorsOf,
   childrenMap,
   descendantIds,
   displayTitle,
@@ -289,6 +290,30 @@ export function Directory({
   const [deleteNode, setDeleteNode] = useState<SpaceNode | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [renameTarget, setRenameTarget] = useState<SpaceNode | null>(null);
+  const directoryRef = useRef<HTMLDivElement | null>(null);
+
+  // Keep the open document's row in sight: opening a document through a link,
+  // the default-document redirect or a creator tab switch must not leave the
+  // highlighted row scrolled out of the directory pane. A collapsed ancestor
+  // is re-opened first, otherwise the row would have no node to scroll to.
+  useLayoutEffect(() => {
+    const row = directoryRef.current?.querySelector<HTMLElement>('[data-active]');
+    if (row === null || row === undefined) {
+      if (selectedId === undefined) return;
+      const ancestors = ancestorsOf(nodes, selectedId);
+      setCollapsed((current) => {
+        const hidden = ancestors.filter((node) => current.has(node.id));
+        if (hidden.length === 0) return current;
+        const next = new Set(current);
+        for (const node of hidden) next.delete(node.id);
+        return next;
+      });
+      return;
+    }
+    if (typeof row.scrollIntoView === 'function') {
+      row.scrollIntoView({ block: 'nearest' });
+    }
+  }, [selectedId, creator, viewMode, showArchived, collapsed, nodes]);
 
   const creatorNodes = useMemo(
     () => nodes.filter((node) => node.creator === creator),
@@ -799,7 +824,7 @@ export function Directory({
     : 0;
 
   return (
-    <div className={styles.directory} aria-label="空间文档">
+    <div ref={directoryRef} className={styles.directory} aria-label="空间文档">
       {pinnedDocs.length ? (
         <section className={styles.pinnedSection} aria-label="置顶文档">
           {pinnedRows.map(({ doc, rows }) => (

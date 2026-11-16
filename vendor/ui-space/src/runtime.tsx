@@ -9,6 +9,11 @@ import type {
 import type { SpaceRouter } from './types';
 
 export interface SpaceContextValue {
+  /**
+   * 这个空间视图渲染在 DSH 右栏的标签里（「空间页面」标签）。嵌入时不再给
+   * 「右侧栏」开关：右栏本来就是展开的，点它只会把自己所在的列收起来。
+   */
+  embedded?: boolean;
   workbench?: {
     controller: import('@alter/ui-workbench').WorkbenchController;
     scopeKey: string;

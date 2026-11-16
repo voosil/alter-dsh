@@ -80,6 +80,7 @@ export function SpaceApp({
   service,
   router,
   workbench,
+  embedded = false,
   hubRegistry: providedRegistry,
 }: SpaceCapabilities) {
   const [hubRegistry] = useState(createSpaceHubRegistry);
@@ -248,6 +249,7 @@ export function SpaceApp({
     return {
       service,
       router,
+      embedded,
       spaces,
       agents,
       space: activeSpace,
@@ -287,6 +289,7 @@ export function SpaceApp({
   }, [
     service,
     router,
+    embedded,
     spaces,
     agents,
     activeSpace,

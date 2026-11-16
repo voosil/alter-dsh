@@ -3,6 +3,7 @@ import { Button } from '@alter/ui-system';
 import { useSpaceContext } from '../runtime';
 import { docPath, overviewPath } from '../space-route';
 import { DirectoryButton } from '../components/DirectoryButton';
+import { RightbarButton } from '../components/RightbarButton';
 import { EmptyState } from '../components/EmptyState';
 import styles from './SpaceHome.module.css';
 
@@ -28,6 +29,10 @@ export function SpaceHome() {
     <section className={styles.page} aria-label={space.name}>
       <header className={styles.toolbar}>
         <DirectoryButton />
+        {/* 空间首页只在主面板打开（右栏标签里不挂 SpaceHome），开关自己判断。 */}
+        <span style={{ marginLeft: 'auto' }}>
+          <RightbarButton />
+        </span>
       </header>
       <div className={styles.scroll}>
         <div className={styles.body}>

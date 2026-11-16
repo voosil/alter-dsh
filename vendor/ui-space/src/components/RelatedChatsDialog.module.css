@@ -1,0 +1,132 @@
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 320px;
+  overflow: auto;
+  padding: 3px;
+  border: 1px solid var(--alter-border);
+  border-radius: var(--alter-radius-panel);
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.rowMain {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+  align-items: stretch;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--alter-radius-control);
+  background: transparent;
+  color: var(--alter-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.rowMain:hover {
+  background: var(--alter-surface-hover);
+}
+
+/* 会话已从 DSH 列表消失：整行置灰、不可打开，仍可删除记录。 */
+.row[data-gone] .rowMain,
+.row[data-gone] .rowMain:hover {
+  background: transparent;
+  color: var(--alter-text-faint);
+  cursor: not-allowed;
+}
+
+.rowGone {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border-radius: var(--alter-radius-xs);
+  background: var(--alter-surface);
+  color: var(--alter-text-faint);
+  font-size: var(--alter-font-caption);
+  text-decoration: line-through;
+}
+.rowMain:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: 1px;
+}
+.rowTop {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.badge {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border-radius: var(--alter-radius-xs);
+  background: var(--alter-surface);
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+}
+.rowTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--alter-font-body-sm);
+}
+.rowTime {
+  flex-shrink: 0;
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+}
+.rowMeta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+}
+.refLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.refLabel[data-stale] {
+  opacity: 0.55;
+  text-decoration: line-through;
+}
+.rowDelete {
+  flex-shrink: 0;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: var(--alter-radius-xs);
+  background: transparent;
+  color: var(--alter-text-muted);
+  font: inherit;
+  font-size: var(--alter-font-caption);
+  cursor: pointer;
+}
+.rowDelete:hover {
+  background: var(--alter-danger-soft);
+  color: var(--alter-danger);
+}
+.rowDelete:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: 1px;
+}
+.empty {
+  margin: 6px 0;
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-caption);
+  text-align: center;
+}
+.error {
+  margin: 0 0 10px;
+  color: var(--alter-danger);
+  font-size: var(--alter-font-caption);
+}

@@ -8,6 +8,8 @@ export interface SpaceCapabilities {
   hubRegistry?: import('./hub/registry').SpaceHubRegistry;
   service: import('@alter/protocol').SpaceService;
   router: SpaceRouter;
+  /** 空间视图渲染在 DSH 右栏标签里：隐藏「打开右侧栏」入口。 */
+  embedded?: boolean;
   workbench?: {
     controller: import('@alter/ui-workbench').WorkbenchController;
     service: import('@alter/mock-workbench').WorkbenchService;

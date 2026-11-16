@@ -160,6 +160,11 @@ export function createSpaceHttpServer(
       document: runtime.document,
       agentDocument: runtime.agentDocument,
       assets: runtime.assets,
+      chat: runtime.chat,
+      workspaceLink: (spaceId) => {
+        const link = runtime.store.getWorkspaceLink(spaceId);
+        return link === undefined ? undefined : { workspaceId: link.workspaceId };
+      },
       workspaceSync: () => undefined,
       // The bridge speaks for a user browser or an Agent tool; its stamped
       // actor selects the identity stack so attribution survives the hop.

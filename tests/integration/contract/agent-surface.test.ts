@@ -24,6 +24,7 @@ import {
 } from '../../../host/authority/capabilities.js';
 import { READ_ENDPOINTS, isReadEndpoint } from '../../../host/authority/endpoints.js';
 import {
+  CHAT_METHODS,
   DOCUMENT_METHODS,
   HUB_METHODS,
   MIGRATION_METHODS,
@@ -52,6 +53,7 @@ import type { SpaceModeController } from '../../../host/core/mode.js';
 function hostWhitelist(): string[] {
   return [
     ...SPACE_METHODS.map((method) => `space.${method}`),
+    ...CHAT_METHODS.map((method) => `chat.${method}`),
     ...HUB_METHODS.map((method) => `hub.${method}`),
     ...STORAGE_METHODS.map((method) => `storage.${method}`),
     ...DOCUMENT_METHODS.map((method) => `doc.${method}`),
@@ -226,6 +228,10 @@ describe('read classification', () => {
     'space.getOverview',
     'space.listAgents',
     'space.listDirectories',
+    'space.getWorkspaceLink',
+    'chat.listChats',
+    'chat.getChat',
+    'chat.listChatsForRef',
     'hub.get',
     'storage.get',
     'storage.estimate',

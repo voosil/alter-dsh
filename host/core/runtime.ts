@@ -23,6 +23,8 @@ import { gcDocumentArtifacts } from '../document/gc.js';
 import { createStructuredSpaceService } from '../document/editors/legacy/notes.js';
 import { createArchiveSweeper } from '../../vendor/service/src/service.js';
 import type { SpaceStoreData } from '../../vendor/service/src/contracts.js';
+import { createChatService } from '../chat/service.js';
+import type { ChatService } from '@alter/protocol';
 import {
   createDocumentService,
   type DocumentService,
@@ -51,6 +53,8 @@ export interface LocalSpaceRuntime {
   readonly agentDocument: DocumentService;
   readonly assets: DocumentAssets;
   readonly storage: SpaceStorageApi;
+  /** Conversation records (page chats + side chats), user identity. */
+  readonly chat: ChatService;
   /**
    * Snapshot the current data even when today already has one.
    *
@@ -131,6 +135,10 @@ export async function createLocalSpaceRuntime(
         ? undefined
         : createSnapshotScheduler({ store, directory, now, logger });
     snapshots?.start();
+    // Conversation records (page chats + side chats) are a side surface: the
+    // browser RPC is the only writer (Agent tools never expose them), so one
+    // user-identity service serves both stacks.
+    const chat = createChatService({ store, now });
     // Idle auto-archiving runs on its own clock: reads must not write, and a
     // migration freeze makes them read-only, so the sweep cannot live in them.
     const sweeper = createArchiveSweeper({
@@ -165,6 +173,7 @@ export async function createLocalSpaceRuntime(
       agentDocument,
       assets,
       storage,
+      chat,
       snapshotNow() {
         if (snapshots !== undefined) return snapshots.forceRunNow();
         return forceDailySnapshot({ store, directory, now, logger });

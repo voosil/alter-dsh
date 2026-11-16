@@ -547,7 +547,15 @@ describe('version restore guard', () => {
     const historical = docOf([paragraph('blk_old', '历史版本内容')], 2);
     versions.set('ver-1', historical);
     const node = makeNodeForServer(server);
-    const page = mountDocumentPage(node, client, {
+    // The case is about the restore guard, not about autosave timing: hold the
+    // body save in flight so the 700ms debounce cannot flush the pending edit
+    // before the guard is asked (that race made the case fail only when the
+    // surrounding suite was busy enough).
+    const heldClient = {
+      ...client,
+      applyOperations: vi.fn(() => new Promise<never>(() => {})),
+    };
+    const page = mountDocumentPage(node, heldClient, {
       listVersions: vi.fn(async () => [
         {
           id: 'ver-1',
@@ -565,21 +573,31 @@ describe('version restore guard', () => {
       })),
     });
     await waitFor(() => expect(page.surface()).toBeTruthy());
-    await page.replaceFirstBlockText('未保存的本地内容');
 
     fireEvent.click(screen.getByRole('button', { name: '文档菜单' }));
     fireEvent.click(
       await screen.findByRole('menuitem', { name: /历史记录/ }),
     );
-    fireEvent.click(
-      await screen.findByRole('button', { name: /还原到此版本/ }),
-    );
+    const restoreButton = await screen.findByRole('button', {
+      name: /还原到此版本/,
+    });
+    // Edit only after the history panel finished loading: autosave debounces at
+    // 700ms, so an edit made before the asynchronous panel load could be handed
+    // to the save controller before the click and the guard would never be
+    // asked. The case is about the guard, not about that race.
+    await page.replaceFirstBlockText('未保存的本地内容');
+    fireEvent.click(restoreButton);
     const dialog = await screen.findByRole('dialog', {
       name: '存在未保存修改',
     });
     fireEvent.click(within(dialog).getByRole('button', { name: '取消' }));
     expect(restoreVersion).not.toHaveBeenCalled();
 
+    // Re-arm the unsaved window: autosave debounces at 700ms, so a slow first
+    // half could hand the edit to the save controller before this second
+    // click, and the guard would then never be asked. Editing again right
+    // before the click keeps the case about the guard, not about timing.
+    await page.replaceFirstBlockText('未保存的本地内容（第二次）');
     fireEvent.click(screen.getByRole('button', { name: /还原到此版本/ }));
     const confirm = await screen.findByRole('dialog', {
       name: '存在未保存修改',

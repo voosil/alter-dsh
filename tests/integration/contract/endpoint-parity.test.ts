@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { isReadEndpoint, READ_ENDPOINTS } from '../../../host/authority/endpoints.js';
 import {
+  CHAT_METHODS,
   DOCUMENT_METHODS,
   HUB_METHODS,
   MIGRATION_METHODS,
@@ -28,7 +29,13 @@ import {
 import { SPACE_RPC_CHANNEL, SPACE_RPC_ENDPOINT } from '../../../src/client/rpc.js';
 
 const root = dirname(dirname(dirname(dirname(fileURLToPath(import.meta.url)))));
-const BROWSER_CLIENTS = ['src/client/rpc.ts', 'src/client/storage.ts'];
+// 对话记录（chat.*）的浏览器映射在 `src/chat/client.ts`，与 storage 一样纳入
+// browser ↔ host parity 扫描。
+const BROWSER_CLIENTS = [
+  'src/client/rpc.ts',
+  'src/client/storage.ts',
+  'src/chat/client.ts',
+];
 
 /** `call('space.x')` / `request('settings.y')` — fully qualified. */
 const QUALIFIED_CALL =
@@ -57,6 +64,7 @@ function hostControlEndpoints(): string[] {
 function hostWhitelist(): string[] {
   return [
     ...SPACE_METHODS.map((method) => `space.${method}`),
+    ...CHAT_METHODS.map((method) => `chat.${method}`),
     ...HUB_METHODS.map((method) => `hub.${method}`),
     ...STORAGE_METHODS.map((method) => `storage.${method}`),
     ...DOCUMENT_METHODS.map((method) => `doc.${method}`),

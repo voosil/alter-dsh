@@ -28,6 +28,11 @@ import type {
 
 export type { SpaceStoreData } from '../../vendor/service/src/contracts.js';
 import type { SpaceActor } from '../../vendor/protocol/src/space.js';
+import type { Creator } from '../../vendor/protocol/src/space.js';
+import type {
+  ChatKind,
+  ChatRefKind,
+} from '../../vendor/protocol/src/chat.js';
 import { assertAttribution, backfillAttribution } from './attribution.js';
 import type {
   DocumentAssetRecord,
@@ -50,7 +55,7 @@ export const DEFAULT_SPACE_ID = 'sp-inbox';
 /** Default space name. */
 export const DEFAULT_SPACE_NAME = '日常';
 
-export const SPACE_DB_FORMAT_VERSION = 3;
+export const SPACE_DB_FORMAT_VERSION = 4;
 const ORDER_PREFIX = 'order:';
 /** Sidecar table owning the Space ↔ DSH workspace binding (schema v2). */
 const WORKSPACE_LINKS_TABLE = 'workspace_links';
@@ -68,6 +73,25 @@ const DOCUMENT_SCHEMA = [
   CREATE_DOCUMENT_ASSETS,
   CREATE_DOCUMENT_OPS,
   CREATE_DOCUMENT_OPS_INDEX,
+].join('\n');
+/**
+ * Conversation sidecar tables (schema v4).
+ *
+ * Chats and their space/page references are a side table, not a
+ * `SpaceStoreData` collection: reference validity depends on live space and
+ * page state, so every read resolves it instead of persisting it.
+ */
+const CHATS_TABLE = 'chats';
+const CHAT_REFS_TABLE = 'chat_refs';
+const CREATE_CHATS = `CREATE TABLE IF NOT EXISTS ${CHATS_TABLE} (id TEXT PRIMARY KEY, updated_at TEXT NOT NULL, data TEXT NOT NULL) STRICT;`;
+const CREATE_CHAT_REFS = `CREATE TABLE IF NOT EXISTS ${CHAT_REFS_TABLE} (id TEXT PRIMARY KEY, chat_id TEXT NOT NULL, space_id TEXT NOT NULL, node_id TEXT, data TEXT NOT NULL) STRICT;`;
+const CREATE_CHAT_REFS_CHAT_INDEX = `CREATE INDEX IF NOT EXISTS ${CHAT_REFS_TABLE}_chat ON ${CHAT_REFS_TABLE} (chat_id);`;
+const CREATE_CHAT_REFS_TARGET_INDEX = `CREATE INDEX IF NOT EXISTS ${CHAT_REFS_TABLE}_target ON ${CHAT_REFS_TABLE} (space_id, node_id);`;
+const CHAT_SCHEMA = [
+  CREATE_CHATS,
+  CREATE_CHAT_REFS,
+  CREATE_CHAT_REFS_CHAT_INDEX,
+  CREATE_CHAT_REFS_TARGET_INDEX,
 ].join('\n');
 /** Corruption copies kept on disk at most. */
 const MAX_CORRUPT_BACKUPS = 2;
@@ -130,6 +154,36 @@ export interface SpaceWorkspaceLink {
   updatedAt: string;
 }
 
+/**
+ * One persisted conversation row.
+ *
+ * `refs` deliberately lives in `chat_refs` rather than in this JSON blob, so a
+ * conversation's reference set is one atomic write and the reverse index
+ * ("which conversations reference this page") is a table query.
+ */
+export interface ChatRecord {
+  id: string;
+  kind: ChatKind;
+  sessionId: string | null;
+  title: string;
+  sideOf: { sessionId: string; title: string } | null;
+  quote: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** One persisted space/page reference row. */
+export interface ChatRefRecord {
+  id: string;
+  chatId: string;
+  kind: ChatRefKind;
+  spaceId: string;
+  nodeId: string | null;
+  label: string;
+  addedAt: string;
+  addedBy: Creator;
+}
+
 /** Persisted authority, plus the operations the Host lifecycle needs. */
 export interface SpaceStoreHandle extends SpaceStore {
   /** Absolute database file path. */
@@ -156,6 +210,24 @@ export interface SpaceStoreHandle extends SpaceStore {
   setWorkspaceLink(link: SpaceWorkspaceLink): Promise<void>;
   /** Drop one binding; resolves after COMMIT. */
   deleteWorkspaceLink(spaceId: string): Promise<void>;
+  /** Read one raw conversation row (reference state unresolved). */
+  getChat(id: string): ChatRecord | undefined;
+  /** Read every raw conversation row, newest activity first. */
+  listChats(): ChatRecord[];
+  /** Read the reference rows of one conversation, in insertion order. */
+  listChatRefs(chatId: string): ChatRefRecord[];
+  /** Read the reference rows pointing at one space or one page. */
+  listChatRefsForTarget(spaceId: string, nodeId: string | null): ChatRefRecord[];
+  /** Insert or replace one conversation row; resolves after COMMIT. */
+  putChat(record: ChatRecord): Promise<void>;
+  /** Delete one conversation and its references; resolves after COMMIT. */
+  deleteChat(id: string): Promise<void>;
+  /**
+   * Replace the reference set of one conversation atomically: references that
+   * left the set are deleted, arriving ones are inserted with their existing
+   * identity preserved where the caller read it. Resolves after COMMIT.
+   */
+  replaceChatRefs(chatId: string, refs: readonly ChatRefRecord[]): Promise<void>;
   /** Read one structured/application object sidecar row. */
   getDocumentObject(id: string): DocumentObjectRecord | undefined;
   /** Read every object row owned by one document. */
@@ -204,6 +276,7 @@ const SCHEMA = [
   CREATE_TABLE('hub', 'space_id'),
   CREATE_WORKSPACE_LINKS,
   DOCUMENT_SCHEMA,
+  CHAT_SCHEMA,
 ].join('\n');
 
 function defaultSpace(now: Date) {
@@ -644,6 +717,63 @@ function readAllDocumentAssets(db: DatabaseSync): DocumentAssetRecord[] {
   return records;
 }
 
+/** Rebuild one conversation row from its column + JSON payload. */
+function parseChatRow(id: string, raw: string): ChatRecord | undefined {
+  const parsed = parseJsonObject(raw);
+  if (parsed === undefined) return undefined;
+  const { kind, sessionId, title, sideOf, quote, createdAt, updatedAt } = parsed;
+  if (
+    (kind !== 'page' && kind !== 'side') ||
+    typeof title !== 'string' ||
+    typeof createdAt !== 'string' ||
+    typeof updatedAt !== 'string'
+  )
+    return undefined;
+  let side: ChatRecord['sideOf'] = null;
+  if (isPlainObject(sideOf) && typeof sideOf.sessionId === 'string') {
+    side = {
+      sessionId: sideOf.sessionId,
+      title: typeof sideOf.title === 'string' ? sideOf.title : '',
+    };
+  }
+  return {
+    id,
+    kind,
+    sessionId:
+      typeof sessionId === 'string' && sessionId !== '' ? sessionId : null,
+    title,
+    sideOf: side,
+    quote: typeof quote === 'string' ? quote : null,
+    createdAt,
+    updatedAt,
+  };
+}
+
+/** Rebuild one reference row from its columns + JSON payload. */
+function parseChatRefRow(row: {
+  id: string;
+  chat_id: string;
+  space_id: string;
+  node_id: string | null;
+  data: string;
+}): ChatRefRecord | undefined {
+  const parsed = parseJsonObject(row.data);
+  if (parsed === undefined) return undefined;
+  const nodeId = typeof row.node_id === 'string' ? row.node_id : null;
+  const kind: ChatRefKind = nodeId === null ? 'space' : 'page';
+  return {
+    id: row.id,
+    chatId: row.chat_id,
+    kind,
+    spaceId: row.space_id,
+    nodeId,
+    label: typeof parsed.label === 'string' ? parsed.label : '',
+    addedAt:
+      typeof parsed.addedAt === 'string' ? parsed.addedAt : new Date(0).toISOString(),
+    addedBy: parsed.addedBy === 'alter' ? 'alter' : 'me',
+  };
+}
+
 function flushDocumentWrites(
   db: DatabaseSync,
   writes: readonly DocumentSidecarWrite[],
@@ -987,10 +1117,12 @@ export async function openSpaceStore(
     db.exec(`PRAGMA user_version = ${SPACE_DB_FORMAT_VERSION}`);
     version = SPACE_DB_FORMAT_VERSION;
   } else if (version < SPACE_DB_FORMAT_VERSION) {
-    // v1 → v2: Space ↔ workspace sidecar; v2 → v3: document-model sidecars.
-    // Business tables are untouched, so every step is an idempotent CREATE.
+    // v1 → v2: Space ↔ workspace sidecar; v2 → v3: document-model sidecars;
+    // v3 → v4: conversation sidecars. Business tables are untouched, so every
+    // step is an idempotent CREATE.
     db.exec(CREATE_WORKSPACE_LINKS);
     db.exec(DOCUMENT_SCHEMA);
+    db.exec(CHAT_SCHEMA);
     db.exec(`PRAGMA user_version = ${SPACE_DB_FORMAT_VERSION}`);
     version = SPACE_DB_FORMAT_VERSION;
   }
@@ -998,6 +1130,7 @@ export async function openSpaceStore(
   // healed here instead of failing every later write.
   db.exec(CREATE_WORKSPACE_LINKS);
   db.exec(DOCUMENT_SCHEMA);
+  db.exec(CHAT_SCHEMA);
 
   const storageSettings = parseStorageSettings(readStorageSettingsValue(db));
 
@@ -1240,6 +1373,160 @@ export async function openSpaceStore(
     });
   }
 
+  function withTransaction(work: () => void): void {
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      work();
+      db.exec('COMMIT');
+    } catch (error) {
+      try {
+        db.exec('ROLLBACK');
+      } catch {
+        // A failed transaction may already have been rolled back by SQLite.
+      }
+      throw error;
+    }
+  }
+
+  function readChat(id: string): ChatRecord | undefined {
+    const row = db
+      .prepare(`SELECT data FROM ${CHATS_TABLE} WHERE id = ?`)
+      .get(id) as { data: string } | undefined;
+    return row === undefined ? undefined : parseChatRow(id, row.data);
+  }
+
+  function readChats(): ChatRecord[] {
+    const rows = db
+      .prepare(
+        `SELECT id, data FROM ${CHATS_TABLE} ORDER BY updated_at DESC, rowid DESC`,
+      )
+      .all() as Array<{ id: string; data: string }>;
+    const records: ChatRecord[] = [];
+    for (const row of rows) {
+      const record = parseChatRow(row.id, row.data);
+      if (record !== undefined) records.push(record);
+    }
+    return records;
+  }
+
+  function readChatRefs(chatId: string): ChatRefRecord[] {
+    const rows = db
+      .prepare(
+        `SELECT id, chat_id, space_id, node_id, data FROM ${CHAT_REFS_TABLE}
+         WHERE chat_id = ? ORDER BY rowid ASC`,
+      )
+      .all(chatId) as Array<{
+      id: string;
+      chat_id: string;
+      space_id: string;
+      node_id: string | null;
+      data: string;
+    }>;
+    const refs: ChatRefRecord[] = [];
+    for (const row of rows) {
+      const ref = parseChatRefRow(row);
+      if (ref !== undefined) refs.push(ref);
+    }
+    return refs;
+  }
+
+  function readChatRefsForTarget(
+    spaceId: string,
+    nodeId: string | null,
+  ): ChatRefRecord[] {
+    const rows = (
+      nodeId === null
+        ? db
+            .prepare(
+              `SELECT id, chat_id, space_id, node_id, data FROM ${CHAT_REFS_TABLE}
+               WHERE space_id = ? AND node_id IS NULL ORDER BY rowid ASC`,
+            )
+            .all(spaceId)
+        : db
+            .prepare(
+              `SELECT id, chat_id, space_id, node_id, data FROM ${CHAT_REFS_TABLE}
+               WHERE space_id = ? AND node_id = ? ORDER BY rowid ASC`,
+            )
+            .all(spaceId, nodeId)
+    ) as Array<{
+      id: string;
+      chat_id: string;
+      space_id: string;
+      node_id: string | null;
+      data: string;
+    }>;
+    const refs: ChatRefRecord[] = [];
+    for (const row of rows) {
+      const ref = parseChatRefRow(row);
+      if (ref !== undefined) refs.push(ref);
+    }
+    return refs;
+  }
+
+  function putChat(record: ChatRecord): Promise<void> {
+    return enqueue(() => {
+      const statement = db.prepare(
+        `INSERT INTO ${CHATS_TABLE} (id, updated_at, data) VALUES (?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at, data = excluded.data`,
+      );
+      try {
+        statement.run(record.id, record.updatedAt, JSON.stringify(record));
+      } finally {
+        closeStatement(statement);
+      }
+    });
+  }
+
+  const writeChat = putChat;
+
+  function removeChat(id: string): Promise<void> {
+    return enqueue(() => {
+      withTransaction(() => {
+        db.prepare(`DELETE FROM ${CHAT_REFS_TABLE} WHERE chat_id = ?`).run(id);
+        db.prepare(`DELETE FROM ${CHATS_TABLE} WHERE id = ?`).run(id);
+      });
+    });
+  }
+
+  function writeChatRefs(
+    chatId: string,
+    refs: readonly ChatRefRecord[],
+  ): Promise<void> {
+    return enqueue(() => {
+      const keep = new Set(refs.map((ref) => ref.id));
+      const prune = db.prepare(
+        `SELECT id FROM ${CHAT_REFS_TABLE} WHERE chat_id = ?`,
+      );
+      const remove = db.prepare(`DELETE FROM ${CHAT_REFS_TABLE} WHERE id = ?`);
+      const put = db.prepare(
+        `INSERT INTO ${CHAT_REFS_TABLE} (id, chat_id, space_id, node_id, data)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET chat_id = excluded.chat_id,
+           space_id = excluded.space_id, node_id = excluded.node_id, data = excluded.data`,
+      );
+      withTransaction(() => {
+        const existing = prune.all(chatId) as Array<{ id: string }>;
+        for (const row of existing) if (!keep.has(row.id)) remove.run(row.id);
+        for (const ref of refs) {
+          put.run(
+            ref.id,
+            chatId,
+            ref.spaceId,
+            ref.nodeId,
+            JSON.stringify({
+              label: ref.label,
+              addedAt: ref.addedAt,
+              addedBy: ref.addedBy,
+            }),
+          );
+        }
+      });
+      closeStatement(prune);
+      closeStatement(remove);
+      closeStatement(put);
+    });
+  }
+
   return {
     file,
     read: () => data,
@@ -1271,6 +1558,17 @@ export async function openSpaceStore(
     listWorkspaceLinks: () => [...workspaceLinks.values()].map((link) => ({ ...link })),
     setWorkspaceLink: writeWorkspaceLink,
     deleteWorkspaceLink: removeWorkspaceLink,
+    getChat: (id) => {
+      const record = readChat(id);
+      return record === undefined ? undefined : { ...record };
+    },
+    listChats: () => readChats().map((record) => ({ ...record })),
+    listChatRefs: (chatId) => readChatRefs(chatId).map((ref) => ({ ...ref })),
+    listChatRefsForTarget: (spaceId, nodeId) =>
+      readChatRefsForTarget(spaceId, nodeId).map((ref) => ({ ...ref })),
+    putChat: writeChat,
+    deleteChat: removeChat,
+    replaceChatRefs: writeChatRefs,
     getDocumentObject: (id) => readDocumentObject(db, id),
     listDocumentObjects: (docId) => readDocumentObjects(db, docId),
     listAllDocumentObjects: () => readAllDocumentObjects(db),

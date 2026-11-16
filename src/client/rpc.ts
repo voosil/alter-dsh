@@ -5,6 +5,10 @@
  * `SpaceApp` only knows the `SpaceService` interface, so this
  * module is the seam that turns each product call into one RPC endpoint. The
  * Host owns the data; the browser keeps no business state.
+ *
+ * 对话记录（chat.*）与工作区绑定（space.getWorkspaceLink）的浏览器映射不在
+ * 本文件：前者在 `src/chat/client.ts`（含其 store），后者由装配层按需调用；
+ * 两者与这里使用同一通道（`/api` + `alter-space`）。
  */
 import type { SpaceService } from '@alter/protocol';
 

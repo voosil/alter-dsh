@@ -1,0 +1,12 @@
+# DSH right Sidebar override.
+#
+# The shipped column renders only while the Conversation fills the centre
+# (`RightbarRoot`: activePanelId === null; README: "No surface without a
+# session"). The product design needs the same column beside the Space panel, so
+# this bundle replaces the shipped row with an identical build whose two gates
+# name the selected Session regardless of which main panel is active.
+- id: ui-sidebar-right
+  disabled: true
+- insert:
+    - id: alter-rightbar-host
+      name: "@alter-dsh/rightbar-host"

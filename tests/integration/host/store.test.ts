@@ -3,9 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
+import { createSpaceAuthority } from '../../../host/authority/compose.js';
 import {
   DEFAULT_SPACE_ID,
   SPACE_DB_FILE,
+  SPACE_DB_FORMAT_VERSION,
   openSpaceStore,
   type SpaceWorkspaceLink,
 } from '../../../host/persistence/store.js';
@@ -281,6 +283,8 @@ describe('SQLite Space store', () => {
 
     // Simulate a database written by the v1 plugin release.
     const legacy = new DatabaseSync(file);
+    legacy.exec('DROP TABLE chat_refs');
+    legacy.exec('DROP TABLE chats');
     legacy.exec('DROP TABLE document_ops');
     legacy.exec('DROP TABLE document_assets');
     legacy.exec('DROP TABLE document_objects');
@@ -304,7 +308,68 @@ describe('SQLite Space store', () => {
     const version = probe.prepare('PRAGMA user_version').get() as {
       user_version?: number;
     };
-    expect(Number(version.user_version)).toBe(3);
+    // The upgrade lands on the current format; the literal would only pin one
+    // release's number and break on every legitimate sidecar addition.
+    expect(Number(version.user_version)).toBe(SPACE_DB_FORMAT_VERSION);
+    probe.close();
+  });
+
+  it('adds the conversation sidecars to a v3 database without touching business rows', async () => {
+    const dir = await tempDir();
+    const file = join(dir, SPACE_DB_FILE);
+    const seed = await openSpaceStore({ directory: dir, now: fixedNow });
+    // Business rows come from the real service so the attribution guard sees
+    // a complete, legal entity rather than a hand-shaped stub.
+    const authority = createSpaceAuthority(seed, fixedNow);
+    const node = await authority.user.createNode({
+      spaceId: DEFAULT_SPACE_ID,
+      kind: 'folder',
+      title: 'v3 目录',
+    });
+    await seed.close();
+
+    // Simulate a database written before conversation records existed.
+    const legacy = new DatabaseSync(file);
+    legacy.exec('DROP TABLE chat_refs');
+    legacy.exec('DROP TABLE chats');
+    legacy.exec('PRAGMA user_version = 3');
+    legacy.close();
+
+    const upgraded = await openSpaceStore({ directory: dir, now: fixedNow });
+    expect(upgraded.read().nodes.map((item) => item.id)).toContain(node.id);
+    // The freshly created sidecars accept a conversation and its reference.
+    await upgraded.putChat({
+      id: 'ch-upgraded',
+      kind: 'page',
+      sessionId: 'sess-upgraded',
+      title: '升级后登记',
+      sideOf: null,
+      quote: null,
+      createdAt: fixedNow().toISOString(),
+      updatedAt: fixedNow().toISOString(),
+    });
+    await upgraded.replaceChatRefs('ch-upgraded', [
+      {
+        id: 'cr-upgraded',
+        chatId: 'ch-upgraded',
+        kind: 'page',
+        spaceId: DEFAULT_SPACE_ID,
+        nodeId: node.id,
+        label: 'v3 目录',
+        addedAt: fixedNow().toISOString(),
+        addedBy: 'me',
+      },
+    ]);
+    expect(upgraded.listChatRefs('ch-upgraded').map((ref) => ref.nodeId)).toEqual([
+      node.id,
+    ]);
+    await upgraded.close();
+
+    const probe = new DatabaseSync(file);
+    const version = probe.prepare('PRAGMA user_version').get() as {
+      user_version?: number;
+    };
+    expect(Number(version.user_version)).toBe(SPACE_DB_FORMAT_VERSION);
     probe.close();
   });
 

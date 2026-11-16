@@ -62,6 +62,28 @@ function append(dir: string, relativePath: string, text: string): void {
   appendFileSync(join(dir, relativePath), text);
 }
 
+/**
+ * Raise the fixture's own quantity budgets by `extra` slots.
+ *
+ * Lifecycle cases inject synthetic documents into a copy of the real knowledge
+ * base. Those injections are about age and checkbox rules, not about quantity,
+ * so the fixture raises its copied manifest instead of deleting real documents
+ * (which are cross-linked and would fail the link rule) — the same move the
+ * repository makes when a feature legitimately adds records.
+ * @param dir - fixture root.
+ * @param extra - additional document slots.
+ */
+function relaxQuantities(dir: string, extra: number): void {
+  const file = join(dir, 'scripts', 'docs', 'doc-budgets.json');
+  const manifest = JSON.parse(readFileSync(file, 'utf8')) as {
+    counts: { maxDocsPerFolder: number; maxActiveDocs: number; warnActiveDocs: number };
+  };
+  manifest.counts.maxDocsPerFolder += extra;
+  manifest.counts.maxActiveDocs += extra;
+  manifest.counts.warnActiveDocs += extra;
+  writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
 /** Replace one literal occurrence; fails loudly when the target moved. */
 function replaceOnce(dir: string, relativePath: string, from: string, to: string): void {
   const file = join(dir, relativePath);
@@ -344,6 +366,7 @@ describe('docs-check lifecycle rules', () => {
 
   it('reports settled aged acceptance as due for deletion, not archiving', () => {
     const result = withFixture((dir) => {
+      relaxQuantities(dir, 2);
       writeFileSync(
         join(dir, 'docs/acceptance/settled-record.md'),
         '---\ntype: acceptance\nstatus: active\nupdated: 2026-01-01\n---\n\n# Settled\n\n- [x] done\n',

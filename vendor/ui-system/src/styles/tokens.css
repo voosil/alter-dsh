@@ -36,7 +36,7 @@
   --alter-rail-width: 64px;
   --alter-space-sidebar-width: 312px;
   --alter-space-splitter-width: 4px;
-  --alter-doc-width: 700px;
+  --alter-doc-width: 760px;
   --alter-comment-rail-width: 284px;
   --alter-doc-gap: 48px;
   --alter-mobile-bar: 54px;
@@ -73,6 +73,18 @@
   --alter-danger-soft: #f9e9e4;
   --alter-highlight: #fbe8c9;
   --alter-code-surface: #f0f0ea;
+  /* 正文代码块的语法高亮色板：暖调、低饱和的九个色相，浅色主题下不刺眼。
+     每个值在 `--alter-code-surface` 上的对比度：注释/元信息 4.7:1，其余 ≥5.3:1。
+     暗色主题只需要换这一组值。 */
+  --alter-code-comment: #6f6a64;
+  --alter-code-keyword: #a33a1a;
+  --alter-code-string: #4a6b30;
+  --alter-code-number: #8a5510;
+  --alter-code-title: #7a4394;
+  --alter-code-type: #2c6b60;
+  --alter-code-variable: #4a6472;
+  --alter-code-tag: #a33a1a;
+  --alter-code-meta: #6f6a64;
   --alter-diff-add: #e7efe1;
   --alter-diff-add-text: #37502c;
   --alter-diff-remove: #f9e9e4;

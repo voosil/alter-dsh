@@ -1,0 +1,101 @@
+/* Space reference cards inside sent user messages (conversation.user.text.node).
+ *
+ * Colors use the host conversation's `--dsw-alias-*` tokens so the card follows
+ * the DSH light/dark theme; each falls back to the plugin's own `--alter-*`
+ * token (vendor/ui-system/src/styles/tokens.css) for surfaces without the host
+ * palette. Spacing, radius and type stay on the Space token scale. */
+
+.card {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  margin: 0 1px;
+  padding: 1px 8px;
+  border: 1px solid var(--dsw-alias-border-l2, var(--alter-border));
+  border-radius: var(--alter-radius-control);
+  background: var(--dsw-alias-bg-layer-2, var(--alter-surface-hover));
+  color: var(--dsw-alias-label-primary, var(--alter-text));
+  font: inherit;
+  line-height: var(--alter-line-ui);
+  vertical-align: middle;
+  user-select: none;
+}
+
+/* A reference whose target is missing or archived: readable, not prominent. */
+.faded {
+  border-style: dashed;
+  color: var(--dsw-alias-label-tertiary, var(--alter-text-faint));
+}
+
+.faded .name {
+  text-decoration: line-through;
+}
+
+/* The interactive card (page tab or space entry); invalid cards keep the default cursor. */
+.clickable {
+  cursor: pointer;
+  transition: background-color var(--alter-duration-fast) ease;
+}
+
+.clickable:hover {
+  background: var(--dsw-alias-interactive-bg-hover, var(--alter-surface-selected));
+}
+
+.card:focus-visible {
+  outline: var(--alter-focus-width) solid var(--dsw-alias-border-selected, var(--alter-accent));
+  outline-offset: var(--alter-focus-offset);
+}
+
+.icon {
+  flex: none;
+}
+
+.name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.tag {
+  flex: none;
+  font-size: var(--alter-font-caption);
+  color: var(--dsw-alias-label-secondary, var(--alter-text-muted));
+}
+
+/* 悬停预览卡（P1）：viewport 定位，脱离 transcript 的 overflow-y: clip。 */
+.preview {
+  position: fixed;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  box-sizing: border-box;
+  max-width: 260px;
+  margin: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--dsw-alias-border-l2, var(--alter-border));
+  border-radius: var(--alter-radius-xs);
+  background: var(--dsw-alias-bg-layer-3, var(--alter-surface));
+  box-shadow: 0 4px 12px rgb(0 0 0 / 12%);
+  color: var(--dsw-alias-label-primary, var(--alter-text));
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+  text-align: left;
+  white-space: normal;
+  pointer-events: none;
+}
+
+.previewTitle {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.previewMeta {
+  color: var(--dsw-alias-label-secondary, var(--alter-text-muted));
+}

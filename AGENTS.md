@@ -78,4 +78,3 @@ pnpm check         # lint + build + verify + 自动归档 + docs:check + typeche
 - 提交信息用 Conventional Commits：`<type>(<scope>): <一句话说明>`，scope 写具体模块或范畴
   （如 `host`、`document`、`editor`、`workspace`、`settings`、`build`、`docs`）改动横跨多层时按主变更面取一个 scope，其余改动在提交正文说明。
 - 文档只写当前有效内容；变更历史交给 git，不写流水账、不贴源码、不写逐文件实现说明。
-- 样式/UX 类验证对 Agent 耗时很长、对人却很简单：这类验证不要自己做，输出条理清晰的验证清单交用户 Review。

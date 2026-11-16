@@ -2,15 +2,16 @@
 /**
  * Link action bar parity (`docs/acceptance/editor-experience-p0-p6.md` §2).
  *
- * Frozen behaviour: hovering or focusing `a[data-web-link]` / `[data-link-card]`
- * shows a dark bar with 转为卡片/转为行内 and 编辑; it hides 180ms after the
- * pointer leaves, positions itself 42px above the link and clamps into the
- * viewport. Conversion keeps the URL and rewrites the body into the other AST
- * shape; 编辑 reports the link so the page can render its dialog, and clicking a
- * link opens it (the page routes web links / document links when it provides
- * callbacks, otherwise a new tab is opened).
+ * The bar opens above `a[data-web-link]` / `[data-link-card]` only after the
+ * pointer rests there for SHOW_DELAY_MS (focus opens it immediately) and closes
+ * in the same pointer event that leaves the link, so a passing pointer and a
+ * scroll never show it. It positions itself 42px above the link and clamps into
+ * the viewport. Conversion keeps the URL and rewrites the body into the other
+ * AST shape; 编辑 reports the link so the page can render its dialog, and
+ * clicking a link opens it (the page routes web links / document links when it
+ * provides callbacks, otherwise a new tab is opened).
  */
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Editor } from '@tiptap/core';
 import {
   createKernelEditor,
@@ -19,6 +20,7 @@ import {
 import { blocksToPmDoc, pmDocToBlocks } from '../../../../../src/document/editors/tiptap/convert';
 import {
   createLinkOverlay,
+  SHOW_DELAY_MS,
   type LinkOverlayHandlers,
 } from '../../../../../src/document/editors/tiptap/overlays';
 import { KERNEL_CLASS } from '../../../../../src/document/editors/tiptap/classes';
@@ -133,6 +135,10 @@ function fileDoc(): AlterDoc {
 }
 
 const cleanups: Array<() => void> = [];
+// The show delay is the subject of the hover tests, so time is always controlled.
+beforeEach(() => {
+  vi.useFakeTimers();
+});
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -199,8 +205,20 @@ function pressBar(label: string): void {
   button!.click();
 }
 
-function hover(element: Element): void {
+/** A pointer that only passes over the element (no dwell, so no bar). */
+function passOver(element: Element): void {
   element.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+}
+
+/** A pointer that rests on the element for the whole show delay. */
+function hover(element: Element): void {
+  passOver(element);
+  vi.advanceTimersByTime(SHOW_DELAY_MS);
+}
+
+/** Pointer coordinates far away from any (zero-sized) jsdom rectangle. */
+function away(x = 640, y = 480): MouseEventInit {
+  return { bubbles: true, clientX: x, clientY: y };
 }
 
 function click(element: Element): MouseEvent {
@@ -280,28 +298,106 @@ describe('link bar', () => {
     expect(linkBar()?.style.display).toBe('none');
   });
 
-  it('shows on focus as well as hover', () => {
+  it('opens on focus immediately, without waiting for the pointer', () => {
     const kernel = mount(inlineLinkDoc());
     const anchor = kernel.editor.view.dom.querySelector('a[data-web-link]')!;
     anchor.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+    // No timer is advanced: keyboard focus never waits for hover intent.
     expect(linkBar()?.style.display).not.toBe('none');
   });
 
-  it('hides 180ms after the pointer leaves and cancels while the bar is hovered', () => {
-    vi.useFakeTimers();
+  it('does not open while the pointer merely passes over the link', () => {
+    expect(SHOW_DELAY_MS).toBe(150);
     const kernel = mount(inlineLinkDoc());
     const anchor = kernel.editor.view.dom.querySelector('a[data-web-link]')!;
-    hover(anchor);
-    expect(linkBar()?.style.display).not.toBe('none');
-    kernel.editor.view.dom.dispatchEvent(new MouseEvent('mouseleave'));
-    vi.advanceTimersByTime(179);
-    expect(linkBar()?.style.display).not.toBe('none');
-    linkBar()!.dispatchEvent(new MouseEvent('mouseenter'));
-    vi.advanceTimersByTime(500);
-    expect(linkBar()?.style.display).not.toBe('none');
-    linkBar()!.dispatchEvent(new MouseEvent('mouseleave'));
-    vi.advanceTimersByTime(180);
+    passOver(anchor);
+    vi.advanceTimersByTime(SHOW_DELAY_MS - 1);
     expect(linkBar()?.style.display).toBe('none');
+    // Dwell reaches the delay: now it opens.
+    vi.advanceTimersByTime(1);
+    expect(linkBar()?.style.display).not.toBe('none');
+  });
+
+  it('never opens when the pointer leaves before the delay elapses', () => {
+    const kernel = mount(inlineLinkDoc());
+    const dom = kernel.editor.view.dom;
+    const anchor = dom.querySelector('a[data-web-link]')!;
+    passOver(anchor);
+    vi.advanceTimersByTime(SHOW_DELAY_MS - 1);
+    dom.querySelector('p')!.dispatchEvent(new MouseEvent('mouseover', away()));
+    vi.advanceTimersByTime(SHOW_DELAY_MS * 10);
+    expect(linkBar()?.style.display).toBe('none');
+  });
+
+  it('hides in the same pointer event that leaves the link', () => {
+    const kernel = mount(inlineLinkDoc());
+    const dom = kernel.editor.view.dom;
+    hover(dom.querySelector('a[data-web-link]')!);
+    expect(linkBar()?.style.display).not.toBe('none');
+    // Outside the target/bar box: no timer may keep the bar around.
+    dom.querySelector('p')!.dispatchEvent(new MouseEvent('mouseover', away()));
+    expect(linkBar()?.style.display).toBe('none');
+  });
+
+  it('hides in the same event that leaves the body', () => {
+    const kernel = mount(inlineLinkDoc());
+    hover(kernel.editor.view.dom.querySelector('a[data-web-link]')!);
+    expect(linkBar()?.style.display).not.toBe('none');
+    kernel.editor.view.dom.dispatchEvent(new MouseEvent('mouseleave', away()));
+    expect(linkBar()?.style.display).toBe('none');
+  });
+
+  it('stays open while the pointer travels from the link to the bar', () => {
+    const kernel = mount(inlineLinkDoc());
+    const anchor = kernel.editor.view.dom.querySelector('a[data-web-link]')!;
+    anchor.getBoundingClientRect = () => rect(100, 200);
+    hover(anchor);
+    const bar = linkBar()!;
+    bar.getBoundingClientRect = () => rect(100, 158);
+    // Crossing the gap and landing on the bar stays inside the union box.
+    document.dispatchEvent(new MouseEvent('mousemove', away(120, 180)));
+    expect(bar.style.display).not.toBe('none');
+    bar.dispatchEvent(new MouseEvent('mouseleave', away(120, 165)));
+    expect(bar.style.display).not.toBe('none');
+    // Stepping off the bar into the page closes it at once.
+    bar.dispatchEvent(new MouseEvent('mouseleave', away(900, 900)));
+    expect(bar.style.display).toBe('none');
+  });
+
+  it('closes on scroll instead of following the page', () => {
+    const kernel = mount(inlineLinkDoc());
+    hover(kernel.editor.view.dom.querySelector('a[data-web-link]')!);
+    const bar = linkBar()!;
+    const left = bar.style.left;
+    document.dispatchEvent(new Event('scroll'));
+    expect(bar.style.display).toBe('none');
+    expect(bar.style.left).toBe(left);
+  });
+
+  it('never opens when the page scrolls before the delay elapses', () => {
+    const kernel = mount(inlineLinkDoc());
+    passOver(kernel.editor.view.dom.querySelector('a[data-web-link]')!);
+    vi.advanceTimersByTime(SHOW_DELAY_MS - 1);
+    document.dispatchEvent(new Event('scroll'));
+    vi.advanceTimersByTime(SHOW_DELAY_MS * 10);
+    expect(linkBar()?.style.display).toBe('none');
+  });
+
+  it('does not open for a link that merely scrolled under a still pointer', () => {
+    const kernel = mount(inlineLinkDoc());
+    const dom = kernel.editor.view.dom;
+    const anchor = dom.querySelector('a[data-web-link]')!;
+    // The page scrolls, then the browser reports the element that slid under
+    // the stationary pointer; that is not hover intent.
+    document.dispatchEvent(new Event('scroll'));
+    passOver(anchor);
+    vi.advanceTimersByTime(SHOW_DELAY_MS * 5);
+    expect(linkBar()?.style.display).toBe('none');
+    // A real pointer move re-enables intent for the next entry.
+    document.dispatchEvent(new MouseEvent('mousemove', away(200, 200)));
+    passOver(anchor);
+    vi.advanceTimersByTime(SHOW_DELAY_MS);
+    expect(linkBar()?.style.display).not.toBe('none');
   });
 
   it('positions itself 42px above the link with the frozen clamp', () => {

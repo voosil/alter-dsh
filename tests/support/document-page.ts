@@ -396,18 +396,21 @@ export interface MountedPage extends PageContext {
  * @param node - document node to render.
  * @param client - document client double.
  * @param serviceOverrides - per-test service members.
+ * @param props - extra page props (e.g. `embedded` when the page is opened in
+ *   the right column rather than the main panel).
  */
 export function mountDocumentPage(
   node: SpaceNode,
   client: PageClient,
   serviceOverrides: Record<string, unknown> = {},
+  props: Record<string, unknown> = {},
 ): MountedPage {
   const context = createPageContext(node, client, serviceOverrides);
   const result: RenderResult = render(
     createElement(
       SpaceContext.Provider,
       { value: context.value as never },
-      createElement(DocumentView, { node } as never),
+      createElement(DocumentView, { node, ...props } as never),
     ),
   );
   return {

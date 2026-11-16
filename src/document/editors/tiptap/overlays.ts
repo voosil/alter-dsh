@@ -6,15 +6,22 @@
  * literal class name would never match). Frozen behaviour
  * (`docs/acceptance/editor-experience-p0-p6.md` §2):
  *
- * - **链接操作** appears above `a[data-web-link]` / `[data-link-card]` on hover
- *   or focus, offers 转为卡片/转为行内 plus 编辑, hides 180ms after the pointer
- *   leaves the body (and immediately when a link is opened or edited);
- * - **表格操作** appears above a hovered table, offers 选中 first and then
- *   上移 / 下移 / 删除 once the table is the selected block;
+ * - **链接操作** appears above `a[data-web-link]` / `[data-link-card]` once the
+ *   pointer rests there for {@link SHOW_DELAY_MS} (focus opens it at once),
+ *   offers 转为卡片/转为行内 plus 编辑, and hides in the same pointer event that
+ *   leaves the link (and immediately when a link is opened or edited);
+ * - **表格操作** appears above a table the pointer rested on, offers 选中 first
+ *   and then 上移 / 下移 / 删除 once the table is the selected block;
  * - clicking a card / inline link / document link / file card activates it
  *   (the page owns browser integration through the callbacks below);
  * - moving and deleting a table change the document through a ProseMirror
  *   transaction, so the kernel's normal update/save path runs.
+ *
+ * Both bars are pointer-intent surfaces: a pointer that merely passes over the
+ * document never opens one, and an open bar closes in the very event that
+ * reports the pointer outside the target/bar box, on any scroll, or on an
+ * explicit close. Caret- and selection-driven table surfaces keep rendering
+ * from the selection state.
  *
  * Nothing here writes `data-selected` for dividers or images: that state
  * machine lives in `block-selection.ts` and both bars read it.
@@ -33,15 +40,20 @@ import {
 } from './block-selection';
 import { KERNEL_CLASS } from './classes';
 
-/** Delay before a bar hides after the pointer leaves (frozen 180ms). */
-const HIDE_DELAY_MS = 180;
+/**
+ * How long the pointer must rest on a target before its bar opens.
+ *
+ * Long enough that a pointer crossing the document never opens a bar, short
+ * enough that a deliberate hover feels direct.
+ */
+export const SHOW_DELAY_MS = 150;
 
 /** One overlay bar over a document target. */
 export interface OverlayBar {
   element: HTMLElement;
   /** Re-measure and re-render the bar for the current state. */
   update(): void;
-  /** Hide the bar immediately (an already scheduled shared hide is unaffected). */
+  /** Hide the bar immediately and drop any pending hover intent. */
   hide(): void;
   destroy(): void;
 }
@@ -88,36 +100,13 @@ interface OverlayHandle {
 const barsByView = new WeakMap<EditorView, Set<OverlayHandle>>();
 
 /**
- * One hide timer per editor view.
+ * Hide every body-level action bar of one editor (frozen clearFloatingUi).
  *
- * The frozen editor shares a single timer between both bars: leaving the body
- * or either bar hides both, entering either bar keeps both. Reproducing that
- * coupling here keeps the two overlays behaving as one surface.
+ * Both bars hide synchronously and drop their own pending pointer intent, so no
+ * timer can re-open a bar after this call.
  */
-const hideTimers = new WeakMap<EditorView, number>();
-
-function cancelPendingHide(view: EditorView): void {
-  const timer = hideTimers.get(view);
-  if (timer === undefined) return;
-  window.clearTimeout(timer);
-  hideTimers.delete(view);
-}
-
-function schedulePendingHide(view: EditorView): void {
-  cancelPendingHide(view);
-  const timer = window.setTimeout(() => {
-    hideTimers.delete(view);
-    const handles = barsByView.get(view);
-    if (handles === undefined) return;
-    for (const handle of [...handles]) handle.hide();
-  }, HIDE_DELAY_MS);
-  hideTimers.set(view, timer);
-}
-
-/** Hide every body-level action bar of one editor (frozen clearFloatingUi). */
 export function closeOverlayBars(target: EditorTarget): void {
   const view = resolveEditorView(target);
-  cancelPendingHide(view);
   const handles = barsByView.get(view);
   if (handles === undefined) return;
   for (const handle of [...handles]) handle.hide();
@@ -131,6 +120,172 @@ function registerBar(view: EditorView, handle: OverlayHandle): void {
 
 function unregisterBar(view: EditorView, handle: OverlayHandle): void {
   barsByView.get(view)?.delete(handle);
+}
+
+// ---------------------------------------------------------------------------
+// Hover intent
+// ---------------------------------------------------------------------------
+
+/** The subset of `DOMRect` the pointer guard compares against. */
+interface Bounds {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+/** Bounding box of every measured rectangle, or `null` when none exists. */
+function unionBounds(rects: Array<Bounds | null>): Bounds | null {
+  let box: Bounds | null = null;
+  for (const rect of rects) {
+    if (rect === null) continue;
+    box =
+      box === null
+        ? {
+            left: rect.left,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
+          }
+        : {
+            left: Math.min(box.left, rect.left),
+            top: Math.min(box.top, rect.top),
+            right: Math.max(box.right, rect.right),
+            bottom: Math.max(box.bottom, rect.bottom),
+          };
+  }
+  return box;
+}
+
+/**
+ * Whether one pointer event happened inside a box.
+ *
+ * Edges are inclusive on purpose: a target without layout (jsdom, or an element
+ * measured before its first paint) still contains its own origin, so the guard
+ * degrades to "the pointer never left" instead of hiding on every move.
+ */
+function insideBox(box: Bounds | null, event: MouseEvent): boolean {
+  if (box === null) return false;
+  const x = event.clientX;
+  const y = event.clientY;
+  return x >= box.left && x <= box.right && y >= box.top && y <= box.bottom;
+}
+
+/** The bar state a {@link HoverIntent} observes. */
+interface HoverIntentState {
+  /** Open the bar on the target the bar recorded for the pending entry. */
+  show(): void;
+  /** Forget the pending target when the delayed open is suppressed. */
+  dropPending(): void;
+  /** Hide the bar synchronously. */
+  hide(): void;
+  /** Whether the bar currently shows any target. */
+  visible(): boolean;
+  /** Whether that target was opened by pointer intent (guarded by movement). */
+  hoverDriven(): boolean;
+  /** Rectangles the pointer may bridge while the bar stays open. */
+  bounds(): Array<Bounds | null>;
+}
+
+/** Pointer intent of one bar: dwell to open, leave to close. */
+interface HoverIntent {
+  /** Arm the delayed open for the target the bar just recorded. */
+  enter(): void;
+  /** The pointer left the hovered target during this event. */
+  leave(event: MouseEvent): void;
+  /** The pointer left the editor body or the bar itself. */
+  exit(event: MouseEvent): void;
+  /** Drop a pending open without touching what the bar shows. */
+  abort(): void;
+  destroy(): void;
+}
+
+/**
+ * Track pointer intent for one bar.
+ *
+ * {@link HoverIntent.enter} only arms a timer: the bar opens if the pointer is
+ * still there when it fires. Leaving the target, leaving the bar, moving
+ * outside the target/bar box and scrolling all close the bar in the event that
+ * reports it, never through a trailing timer.
+ */
+function createHoverIntent(state: HoverIntentState): HoverIntent {
+  let timer: number | null = null;
+  /**
+   * Whether the pointer really moved since the last scroll.
+   *
+   * A scroll slides a fresh element under a still pointer and browsers report
+   * that element as hovered; dwelling on it is not intent. A move to different
+   * coordinates re-enables intent.
+   */
+  let movedSinceScroll = true;
+  let pointerX = Number.NaN;
+  let pointerY = Number.NaN;
+
+  function abort(): void {
+    if (timer === null) return;
+    window.clearTimeout(timer);
+    timer = null;
+  }
+
+  function pointerInside(event: MouseEvent): boolean {
+    return insideBox(unionBounds(state.bounds()), event);
+  }
+
+  /** An open hover bar closes as soon as the pointer leaves target and bar. */
+  const onPointerMove = (event: MouseEvent): void => {
+    if (event.clientX !== pointerX || event.clientY !== pointerY) {
+      pointerX = event.clientX;
+      pointerY = event.clientY;
+      movedSinceScroll = true;
+    }
+    if (timer !== null || !state.hoverDriven()) return;
+    if (pointerInside(event)) return;
+    state.hide();
+  };
+
+  /** A scroll never drags an open hover bar to a new place. */
+  const onScroll = (): void => {
+    movedSinceScroll = false;
+    abort();
+    if (!state.hoverDriven()) return;
+    state.hide();
+  };
+
+  document.addEventListener('mousemove', onPointerMove, true);
+  document.addEventListener('scroll', onScroll, true);
+
+  return {
+    enter() {
+      abort();
+      timer = window.setTimeout(() => {
+        timer = null;
+        // Content that merely slid under the pointer is not intent.
+        if (!movedSinceScroll) {
+          state.dropPending();
+          return;
+        }
+        state.show();
+      }, SHOW_DELAY_MS);
+    },
+    leave(event) {
+      abort();
+      if (!state.hoverDriven()) return;
+      if (pointerInside(event)) return;
+      state.hide();
+    },
+    exit(event) {
+      abort();
+      if (!state.visible()) return;
+      if (pointerInside(event)) return;
+      state.hide();
+    },
+    abort,
+    destroy() {
+      abort();
+      document.removeEventListener('mousemove', onPointerMove, true);
+      document.removeEventListener('scroll', onScroll, true);
+    },
+  };
 }
 
 /** The frozen metadata rule: known titles are absent, host name is the title. */
@@ -363,7 +518,12 @@ export function createLinkOverlay(
 ): LinkOverlayBar {
   const view = editor.view;
   const element = createBar('链接操作');
+  /** The target the bar displays (opened by pointer intent or by focus). */
   let hovered: LinkTarget | null = null;
+  /** The target the pointer rests on, waiting for the show delay. */
+  let pending: LinkTarget | null = null;
+  /** Whether the current display came from pointer intent rather than focus. */
+  let hoverDriven = false;
 
   function render(): void {
     element.replaceChildren();
@@ -390,27 +550,52 @@ export function createLinkOverlay(
     );
   }
 
-  function show(target: LinkTarget): void {
-    cancelPendingHide(view);
-    if (
-      hovered !== null &&
-      hovered.element === target.element &&
-      hovered.kind === target.kind
-    ) {
-      return;
-    }
+  /** Open the bar on the target the pointer rested on. */
+  function commitPending(): void {
+    const target = pending;
+    pending = null;
+    if (target === null || !target.element.isConnected) return;
     hovered = target;
+    hoverDriven = true;
     render();
   }
 
+  /** Focus opens the bar at once: keyboard users never wait for intent. */
+  function showFocused(target: LinkTarget): void {
+    hover.abort();
+    pending = null;
+    hovered = target;
+    hoverDriven = false;
+    render();
+  }
+
+  /** Hide the bar and drop any pending open. */
   function hide(): void {
+    hover.abort();
+    pending = null;
+    hoverDriven = false;
     hovered = null;
     render();
   }
 
-  function scheduleHide(): void {
-    schedulePendingHide(view);
-  }
+  const hover = createHoverIntent({
+    show: commitPending,
+    dropPending: () => {
+      pending = null;
+    },
+    hide,
+    visible: () => hovered !== null && hovered.element.isConnected,
+    hoverDriven: () =>
+      hoverDriven && hovered !== null && hovered.element.isConnected,
+    bounds: () => {
+      if (hovered === null || !hovered.element.isConnected) return [];
+      // The pointer may cross the gap between the link and its bar.
+      return [
+        hovered.element.getBoundingClientRect(),
+        element.getBoundingClientRect(),
+      ];
+    },
+  });
 
   /** Open a URL through the page's browser integration, or a new tab. */
   function openWeb(url: string): void {
@@ -635,27 +820,51 @@ export function createLinkOverlay(
     handlers.onChange?.();
   }
 
+  /** Pointer movement only arms the delayed open, it never shows a bar. */
   const onMouseOver = (event: MouseEvent): void => {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
     const resolved = resolveLinkTarget(view, target);
-    if (resolved !== null) show(resolved);
+    if (resolved === null) {
+      // No link under the pointer any more: drop the pending open and close an
+      // open bar unless the pointer merely stepped onto the bar next to it.
+      pending = null;
+      hover.leave(event);
+      return;
+    }
+    if (
+      hovered !== null &&
+      hovered.element === resolved.element &&
+      hovered.kind === resolved.kind
+    ) {
+      return;
+    }
+    if (
+      pending !== null &&
+      pending.element === resolved.element &&
+      pending.kind === resolved.kind
+    ) {
+      return;
+    }
+    // Another link: the open bar belongs to a target the pointer has left.
+    hover.abort();
+    if (hovered !== null) hide();
+    pending = resolved;
+    hover.enter();
   };
 
   const onFocusIn = (event: FocusEvent): void => {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
     const resolved = resolveLinkTarget(view, target);
-    if (resolved !== null) show(resolved);
+    if (resolved !== null) showFocused(resolved);
   };
 
-  const onMouseLeave = (): void => scheduleHide();
+  /** Leaving the body or the bar closes the bar from that same event. */
+  const onMouseLeave = (event: MouseEvent): void => hover.exit(event);
   const onClick = (event: MouseEvent): void => activate(event);
-  const onBarEnter = (): void => cancelPendingHide(view);
-  const onBarLeave = (): void => scheduleHide();
 
-  element.addEventListener('mouseenter', onBarEnter);
-  element.addEventListener('mouseleave', onBarLeave);
+  element.addEventListener('mouseleave', onMouseLeave);
   view.dom.addEventListener('mouseover', onMouseOver);
   view.dom.addEventListener('focusin', onFocusIn);
   view.dom.addEventListener('mouseleave', onMouseLeave);
@@ -672,10 +881,12 @@ export function createLinkOverlay(
     applyEdit,
     destroy() {
       unregisterBar(view, handle);
+      hover.destroy();
       view.dom.removeEventListener('mouseover', onMouseOver);
       view.dom.removeEventListener('focusin', onFocusIn);
       view.dom.removeEventListener('mouseleave', onMouseLeave);
       view.dom.removeEventListener('click', onClick);
+      element.removeEventListener('mouseleave', onMouseLeave);
       element.remove();
     },
   };
@@ -857,19 +1068,65 @@ export function createTableOverlay(editor: Editor): OverlayBar {
   const view = editor.view;
   const element = createBar('表格操作');
   const selection = blockSelectionOf(view);
+  /** The table the bar presents from pointer intent. */
   let hovered: HTMLElement | null = null;
-  /** Set while the shared hide timer closed the bar; cleared on interaction. */
+  /** The table the pointer rests on, waiting for the show delay. */
+  let pendingTable: HTMLElement | null = null;
+  /** Whether `hovered` came from pointer intent rather than a bar action. */
+  let hoverDriven = false;
+  /** Set by an explicit close; cleared on interaction. */
   let dismissed = false;
 
-  function scheduleHide(): void {
-    schedulePendingHide(view);
-  }
-
+  /**
+   * Close from an explicit request: the caret/selection surfaces stay closed
+   * until the user interacts again.
+   */
   function hide(): void {
+    hover.abort();
+    pendingTable = null;
+    hoverDriven = false;
     dismissed = true;
     hovered = null;
     render();
   }
+
+  /**
+   * Close the pointer-driven bar.
+   *
+   * `dismissed` is deliberately untouched: the full toolbar and the
+   * whole-table buttons are selection-driven and must survive a pointer exit.
+   */
+  function hideHovered(): void {
+    hoverDriven = false;
+    hovered = null;
+    render();
+  }
+
+  /** Open the bar on the table the pointer rested on. */
+  function commitPending(): void {
+    const table = pendingTable;
+    pendingTable = null;
+    if (table === null || !table.isConnected) return;
+    dismissed = false;
+    hovered = table;
+    hoverDriven = true;
+    render();
+  }
+
+  const hover = createHoverIntent({
+    show: commitPending,
+    dropPending: () => {
+      pendingTable = null;
+    },
+    hide: hideHovered,
+    visible: () => hovered !== null && hovered.isConnected,
+    hoverDriven: () => hoverDriven && hovered !== null && hovered.isConnected,
+    bounds: () => {
+      if (hovered === null || !hovered.isConnected) return [];
+      // The pointer may cross the gap between the table and its bar.
+      return [hovered.getBoundingClientRect(), element.getBoundingClientRect()];
+    },
+  });
 
   function selectedTable(): HTMLElement | null {
     const selected = selection.selected();
@@ -1018,6 +1275,7 @@ export function createTableOverlay(editor: Editor): OverlayBar {
       onPress: () => {
         runTableCommand(editor, 'deleteTable');
         hovered = null;
+        hoverDriven = false;
         render();
       },
     });
@@ -1098,10 +1356,12 @@ export function createTableOverlay(editor: Editor): OverlayBar {
   function moveSelectedTable(delta: -1 | 1): void {
     if (!selection.moveSelected(delta)) return;
     // ProseMirror re-creates the moved node's DOM, so the hovered element is
-    // stale: follow the selection and keep the bar on the moved table.
+    // stale: follow the selection and keep the bar on the moved table. The bar
+    // is selection-driven from here on, not pointer-driven.
     const selected = selection.selected();
     hovered =
       selected !== null && selected.kind === 'table' ? selected.element : null;
+    hoverDriven = false;
     render();
   }
 
@@ -1135,6 +1395,7 @@ export function createTableOverlay(editor: Editor): OverlayBar {
     }
     selection.clear();
     hovered = moved?.element ?? null;
+    hoverDriven = false;
     dismissed = false;
     render();
   }
@@ -1154,25 +1415,36 @@ export function createTableOverlay(editor: Editor): OverlayBar {
   function remove(): void {
     if (!selection.removeSelected()) return;
     hovered = null;
+    hoverDriven = false;
     render();
   }
 
+  /** Pointer movement only arms the delayed open, it never shows a bar. */
   const onMouseOver = (event: MouseEvent): void => {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
     const table = target.closest('table');
-    if (!(table instanceof HTMLElement)) return;
-    dismissed = false;
+    if (!(table instanceof HTMLElement)) {
+      // No table under the pointer any more: drop the pending open and close an
+      // open bar unless the pointer merely stepped onto the bar next to it.
+      pendingTable = null;
+      hover.leave(event);
+      return;
+    }
     if (table === hovered) {
       render();
       return;
     }
-    cancelPendingHide(view);
-    hovered = table;
-    render();
+    if (table === pendingTable) return;
+    // Another table: the open bar belongs to a table the pointer has left.
+    hover.abort();
+    if (hovered !== null) hideHovered();
+    pendingTable = table;
+    hover.enter();
   };
 
-  const onMouseLeave = (): void => scheduleHide();
+  /** Leaving the body or the bar closes the bar from that same event. */
+  const onMouseLeave = (event: MouseEvent): void => hover.exit(event);
 
   /** Re-entering the body re-opens a dismissed full toolbar. */
   const onBodyMouseMove = (): void => {
@@ -1198,6 +1470,9 @@ export function createTableOverlay(editor: Editor): OverlayBar {
       return;
     }
     dismissed = true;
+    hover.abort();
+    pendingTable = null;
+    hoverDriven = false;
     if (hovered === null) return;
     hovered = null;
     render();
@@ -1213,11 +1488,7 @@ export function createTableOverlay(editor: Editor): OverlayBar {
     render();
   };
 
-  const onBarEnter = (): void => cancelPendingHide(view);
-  const onBarLeave = (): void => scheduleHide();
-
-  element.addEventListener('mouseenter', onBarEnter);
-  element.addEventListener('mouseleave', onBarLeave);
+  element.addEventListener('mouseleave', onMouseLeave);
   view.dom.addEventListener('mouseover', onMouseOver);
   view.dom.addEventListener('mousemove', onBodyMouseMove);
   view.dom.addEventListener('mouseleave', onMouseLeave);
@@ -1237,10 +1508,12 @@ export function createTableOverlay(editor: Editor): OverlayBar {
     hide,
     destroy() {
       unregisterBar(view, handle);
+      hover.destroy();
       view.dom.removeEventListener('mouseover', onMouseOver);
       view.dom.removeEventListener('mousemove', onBodyMouseMove);
       view.dom.removeEventListener('mouseleave', onMouseLeave);
       view.dom.removeEventListener('click', onClick);
+      element.removeEventListener('mouseleave', onMouseLeave);
       editor.off('selectionUpdate', onSelectionUpdate);
       document.removeEventListener('scroll', onScroll, true);
       unsubscribe();

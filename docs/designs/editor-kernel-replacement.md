@@ -150,7 +150,7 @@ Operations；IME、语义化撤销、粘贴清洗与跨块选区经过生产验�
 | 块身份 | 新块在进入文档时分配一次稳定 id；id 是评论锚点与 Operations diff 的身份，不随保存漂移 |
 | 列表/待办退格 | 空列表项/空待办行两段式退格：第一步原位退成空段落（待办只去掉 checkbox），第二步删掉空行、把被拆分的同名列表合并、光标回到上一行末尾；有文字的行首退格保持默认合并语义（有意偏离旧基线） |
 | 块级手柄 | hover 顶层 block 左侧显示六点手柄（28px 点击区、右缘距正文 10px，14px 图标不动；可见 hover 方块内缩 5px，与 block 底板留 5px 间隙）；hover 手柄时对应 block 以 `data-block-hover` 轻底色高亮（圆角底板，左右 10px、上下 3px 留白；代码块/卡片/图片沿用自身表面），并保持手柄可见；点击全选（文本块 TextSelection，atom/表格 NodeSelection 并标记 `data-block-selected`）；拖拽调整顺序（插入指示线、保留节点 id 与评论锚点、Esc/拖出取消、仅顶层 block、鼠标事件实现未覆盖触屏）；内核自有浮层 `block-handle.ts`，手柄与高亮样式在 `kernel.css`；两个标记是 ProseMirror 节点装饰（直接写 DOM 属性会被编辑器自身的 DOM 观察清除，装饰随视图状态存活） |
-| 表格增强 | 光标在表内显示完整深色工具条：上下插行、左右插列、删除行/列、合并/拆分单元格、表头开关（首行 th/td 反转，与 AST `headerRows` 一致）、上移/下移、删除表格；`data-table-action` + active/disabled 视觉；hover 仍显示旧「选中」，整表选中仍是旧 3 按钮；slash 新增「表格（无表头）」`table-plain`（3×3 全 td）；合并/拆分跨度随 AST 保存 |
+| 表格增强 | 光标在表内显示完整深色工具条：上下插行、左右插列、删除行/列、合并/拆分单元格、表头开关（首行 th/td 反转，与 AST `headerRows` 一致）、上移/下移、删除表格；`data-table-action` + active/disabled 视觉；hover 仍显示旧「选中」（悬停操作条停留约 150ms 才出现、离开即消失），整表选中仍是旧 3 按钮；slash 新增「表格（无表头）」`table-plain`（3×3 全 td）；合并/拆分跨度随 AST 保存 |
 | 浮层与键鼠 | slash 菜单（图标/文案/定位/方向固定/IME）、格式工具栏（文本类型菜单、定位翻转、选区字符数）、链接条与表格条、块选中状态机、输入规则、键盘边界、粘贴/拖入与资产上传逐项对齐冻结验收 |
 
 **bundle**：当前 `client.js` 1442 KiB / 162 KiB CSS（parity 收口 1483 / 160；旧内核退役 1424 / 160，

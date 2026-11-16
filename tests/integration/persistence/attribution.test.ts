@@ -10,6 +10,7 @@ import { AttributionGuardError } from '../../../host/persistence/attribution.js'
 import {
   DEFAULT_SPACE_ID,
   SPACE_DB_FILE,
+  SPACE_DB_FORMAT_VERSION,
   openSpaceStore,
   type SpaceStoreHandle,
 } from '../../../host/persistence/store.js';
@@ -371,7 +372,7 @@ describe('historical attribution backfill', () => {
     expect(reopened.read().events[0]?.source).toBe('agent');
     const probe = new DatabaseSync(file, { readOnly: true });
     const version = probe.prepare('PRAGMA user_version').get() as { user_version?: number };
-    expect(Number(version.user_version)).toBe(3);
+    expect(Number(version.user_version)).toBe(SPACE_DB_FORMAT_VERSION);
     probe.close();
     await reopened.close();
   });

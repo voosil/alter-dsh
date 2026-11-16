@@ -1,7 +1,7 @@
 ---
 type: acceptance
 status: active
-updated: 2026-11-12
+updated: 2026-11-13
 ---
 
 # 验收
@@ -21,6 +21,7 @@ updated: 2026-11-12
 | [dual-mode.md](dual-mode.md) | 本地/自部署服务端双模式、bridge 队列、设置与迁移的验收项 | 待复验 |
 | [document-editor-robustness.md](document-editor-robustness.md) | 文档编辑器的健壮性：数据安全、并发恢复、输入保真、保存可行性与规模观测 | A–G 自动化+真实浏览器验收基本通过；D1/A2/G3 的真实 IME/强杀/断网以等价方式覆盖并如实标注 |
 | [editor-experience-p0-p6.md](editor-experience-p0-p6.md) | 文档页体验 parity 与数据链路：冻结约束、体验行为、AST 读写链路、已知缺口与复验规则 | 还原与唯一 AST 内核切换已完成并通过自动化验收（真实浏览器记录含已退役内核时代）；对象卡人工入口等限制见清单 |
+| [space-conversations.md](space-conversations.md) | 空间对话：页面对话/侧边对话/引用的自动化基线与人工 Review 清单 | 待验收（P0 缺口见文首口径） |
 
 生命周期状态以每篇 frontmatter 的 `status` 为准，索引不复制。
 

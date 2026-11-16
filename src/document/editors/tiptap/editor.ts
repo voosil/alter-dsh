@@ -46,6 +46,7 @@ import {
 } from './block-selection';
 import { createBlockIdExtension } from './block-ids';
 import { BlockMarksExtension } from './block-marks';
+import { createCodeHighlight } from './code-highlight';
 import {
   createCommentExtension,
   repaintComments,
@@ -60,6 +61,30 @@ import {
 import { createBlockHandle } from './block-handle';
 // Kernel-owned structural normalization (scoped to `.kernelSurface`).
 import './kernel.css';
+
+/**
+ * Language a pasted/parsed `<pre>` declares, in the shapes that appear in the
+ * wild.
+ *
+ * ProseMirror parses the `<pre>` element, so the language marker can sit on the
+ * element itself (`data-lang`, our DOM) or on its first child (`<code
+ * class="language-ts">`, the GitHub/Markdown shape).
+ *
+ * @param element the parsed `<pre>` element.
+ * @returns the language tag, or `null` when the markup declares none.
+ */
+function codeLanguageOf(element: HTMLElement): string | null {
+  const declared = element.getAttribute('data-lang');
+  if (declared !== null && declared !== '') return declared;
+  const carriers = [element, element.firstElementChild];
+  for (const carrier of carriers) {
+    if (carrier === null) continue;
+    const pattern = /(?:^|\s)language-([A-Za-z0-9_+#.-]{1,32})(?:\s|$)/;
+    const match = pattern.exec(carrier.getAttribute('class') ?? '');
+    if (match?.[1] !== undefined) return match[1];
+  }
+  return null;
+}
 
 /**
  * Give a native Tiptap node the stable AST block id.
@@ -97,8 +122,11 @@ function withBlockId<T extends AnyExtension>(extension: T): T {
           ? {
               lang: {
                 default: null,
+                // `data-lang` is our own DOM; `class="language-x"` is what
+                // pasted GitHub/Markdown code carries, and keeping it means a
+                // paste keeps its language instead of falling back to guessing.
                 parseHTML: (element: HTMLElement): string | null =>
-                  element.getAttribute('data-lang'),
+                  codeLanguageOf(element),
                 renderHTML: (
                   attrs: Record<string, unknown>,
                 ): Record<string, string> => {
@@ -219,6 +247,7 @@ export function kernelExtensions(
     }),
     createBlockIdExtension(),
     BlockMarksExtension,
+    createCodeHighlight(),
     createCommentExtension(comments),
   ];
 }

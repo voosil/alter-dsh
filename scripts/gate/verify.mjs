@@ -566,6 +566,34 @@ check(
 );
 
 
+// --- Code-block syntax highlighting contract ------------------------------
+// Token class names are generated in TS (`code-highlight.ts`) and read by the
+// CSS module through `:global(...)`; nothing else type-checks that pair, so the
+// three sides (kernel token set, stylesheet rules, palette tokens) are compared
+// here.
+const editorCss = await read('vendor/ui-space/src/components/editor/Editor.module.css');
+const paletteCss = await read('vendor/ui-system/src/styles/tokens.css');
+const kernelSource = await read('src/document/editors/tiptap/code-highlight.ts');
+const tokenClasses = new Set(
+  [...editorCss.matchAll(/\.alter-code-([a-z-]+)\s*[,{)]/g)].map((match) => match[1]),
+);
+check(tokenClasses.size > 0, 'Editor.module.css must style the syntax-highlight token classes');
+for (const token of tokenClasses) {
+  check(
+    kernelSource.includes(`'${token}'`),
+    `highlight token class .alter-code-${token} has no matching token type in code-highlight.ts`,
+  );
+}
+const paletteTokens = new Set(
+  [...editorCss.matchAll(/var\((--alter-code-[a-z-]+)\)/g)].map((match) => match[1]),
+);
+for (const token of paletteTokens) {
+  check(
+    paletteCss.includes(`${token}:`),
+    `stylesheet references ${token} but tokens.css does not define it`,
+  );
+}
+
 const bytes = Buffer.byteLength(client);
 notes.push(`client.js size: ${(bytes / 1024).toFixed(0)} KiB`);
 

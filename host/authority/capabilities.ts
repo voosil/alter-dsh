@@ -105,6 +105,17 @@ export const CAPABILITIES: readonly Capability[] = [
   { endpoint: 'space.listAgents', kind: 'read', agent: { tool: 'space_collaborators', action: 'list_agents' } },
   { endpoint: 'space.createAgent', kind: 'write', agent: { tool: 'space_collaborators', action: 'create_agent' } },
   { endpoint: 'space.listDirectories', kind: 'read', agent: { tool: 'space_collaborators', action: 'list_directories' } },
+  // 工作区绑定是宿主侧插件数据，不在 Space 数据模型内，Agent 不读取。
+  { endpoint: 'space.getWorkspaceLink', kind: 'read', agent: { excluded: 'DSH 工作区绑定属于宿主概念，不在空间数据模型内' } },
+  // chat.* — business（对话记录是 DSH 会话域的插件侧登记，Agent 通过既有空间工具读引用对象本身）
+  { endpoint: 'chat.listChats', kind: 'read', agent: { excluded: '对话记录属于 DSH 会话域，Agent 不读取' } },
+  { endpoint: 'chat.getChat', kind: 'read', agent: { excluded: '对话记录属于 DSH 会话域，Agent 不读取' } },
+  { endpoint: 'chat.createChat', kind: 'write', agent: { excluded: '对话记录由浏览器在创建会话时登记' } },
+  { endpoint: 'chat.updateChat', kind: 'write', agent: { excluded: '对话记录由浏览器在创建会话时登记' } },
+  { endpoint: 'chat.deleteChat', kind: 'write', agent: { excluded: '对话记录由浏览器在创建会话时登记' } },
+  { endpoint: 'chat.setChatRefs', kind: 'write', agent: { excluded: '对话记录由浏览器在创建会话时登记' } },
+  { endpoint: 'chat.addChatRef', kind: 'write', agent: { excluded: '对话记录由浏览器在创建会话时登记' } },
+  { endpoint: 'chat.listChatsForRef', kind: 'read', agent: { excluded: '对话记录属于 DSH 会话域，Agent 不读取' } },
   // hub.* — business（概览/配置已暴露；事项/旅程/观察仍是 DEP-002 占位）
   { endpoint: 'hub.get', kind: 'read', agent: { tool: 'space_hub', action: 'get' } },
   { endpoint: 'hub.createMatter', kind: 'write', agent: { excluded: HUB_UNIMPLEMENTED } },

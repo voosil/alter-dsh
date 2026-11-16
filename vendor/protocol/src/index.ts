@@ -40,3 +40,4 @@ export type {
 export type * from './space.js';
 export { creatorOf, archiveSourceOf } from './space.js';
 export type * from './space-hub.js';
+export type * from './chat.js';

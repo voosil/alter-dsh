@@ -29,7 +29,13 @@
         "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-ui-layout",
         "@deepseek-ai/dsh-client-ui-sidebar",
-        "@deepseek-ai/dsh-client-connection"
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-api-session-controller",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-session",
+        "@deepseek-ai/dsh-client-ui-sidebar-right",
+        "@deepseek-ai/dsh-client-ui-workspace",
+        "@deepseek-ai/dsh-client-resources"
       ]
     }
   },
@@ -84,7 +90,9 @@
     "@vitest/coverage-v8": "^5.0.4",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
+    "highlight.js": "~11.11.2",
     "jsdom": "^31.0.0",
+    "lowlight": "^3.3.0",
     "lucide-react": "1.60.0",
     "oxlint": "^1.93.0",
     "react": "19.2.6",

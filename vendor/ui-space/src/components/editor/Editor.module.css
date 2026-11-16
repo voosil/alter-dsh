@@ -3,6 +3,14 @@
   --link-card-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 7h10v10'/%3E%3Cpath d='M7 17 17 7'/%3E%3C/svg%3E");
 }
 .surface {
+  /* 正文节奏令牌（只作用于正文内容区，不进全局 token 表）：
+     - `--doc-gap` 是纯文本块之间（段落、列表、分隔线）的间距；
+     - `--doc-gap-block` 是自带表面的块（代码块、表格、图片、引用、卡片）与上下文
+       的间距，比纯文本大一级，让"块"从文字流里浮出来；
+     - `--doc-indent` 是列表缩进，28px 能容下两位数序号。 */
+  --doc-gap: 16px;
+  --doc-gap-block: 20px;
+  --doc-indent: 1.75em;
   position: relative;
   min-height: 320px;
   outline: none;
@@ -28,11 +36,16 @@
   /* 半透明选区：选中状态下仍能透出行内高亮（mark）等文字背景色。 */
   background: rgba(26, 24, 23, 0.12);
 }
+/* 段间距与行距的关系：行高 1.9（30.4px）已经提供了较大的行内留白，段落之间
+   再加 16px 才有可辨识的断点（主流编辑器的段间距约为行盒的 0.67 倍）。 */
 .surface p {
-  margin: 0 0 10px;
+  margin: 0 0 var(--doc-gap);
 }
 /* 标题阶梯以正文字号（16px）为基准：文档标题 32 → h1 26 → h2 22 → h3 18 → h4 16 →
-   h5/h6 14。间距同样相对自身字号，上间距恒大于下间距，改阶梯时节奏自动跟随。 */
+   h5 14 → h6 13。h1 止步于 26px 是因为 32px 的文档标题占据了更大的一档；h6 用
+   13px 加降一级色调，与 h5 拉开距离。
+   间距相对自身字号（1.35–1.5em 上、0.45–0.5em 下），上间距恒大于下间距，改阶梯
+   时节奏自动跟随。 */
 .surface h1,
 .surface h2,
 .surface h3,
@@ -45,51 +58,64 @@
   letter-spacing: 0;
 }
 .surface h1 {
-  margin: 1.25em 0 0.5em;
+  margin: 1.35em 0 0.45em;
   font-size: 1.625em;
 }
 .surface h2 {
-  margin: 1.3em 0 0.5em;
+  margin: 1.35em 0 0.5em;
   font-size: 1.375em;
 }
 .surface h3 {
-  margin: 1.35em 0 0.55em;
+  margin: 1.4em 0 0.5em;
   font-size: 1.125em;
 }
 .surface h4 {
   margin: 1.4em 0 0.5em;
   font-size: 1em;
 }
-.surface h5,
-.surface h6 {
+.surface h5 {
   margin: 1.5em 0 0.5em;
   font-size: 0.875em;
 }
-/* 六级标题与加粗正文同号，靠色调降一级区分。 */
 .surface h6 {
+  margin: 1.5em 0 0.5em;
+  font-size: 0.8125em;
   color: var(--alter-text-muted);
 }
 .surface strong,
 .surface b {
   font-weight: 600;
 }
-.surface :is(h1, h2, h3, h4, h5, h6):first-child {
+/* 文档以任意块开头时都不该被它自己的上外边距从版心顶部推开：标题、列表、代码块、
+   表格、图片、引用、卡片一律归零。 */
+.surface > :first-child {
   margin-top: 0;
 }
-.surface ul,
-.surface ol {
-  margin: 4px 0 10px;
-  padding-left: 1.6em;
+/* 列表的上下间距由列表项撑开，首项的上外边距会穿过容器再次生效，单独归零。 */
+.surface > :is(ul, ol):first-child > li:first-child {
+  margin-top: 0;
+}
+/* 列表与段落同属一个节奏层：容器上下间距等于段间距，列表项之间 8px 让"同一项
+   的折行"（行距 30.4px）与"两项之间"（38.4px）可区分。 */
+.surface :is(ul, ol) {
+  margin: 0 0 var(--doc-gap);
+  padding-left: var(--doc-indent);
 }
 .surface li {
-  margin: 6px 0;
+  margin: 8px 0;
   padding-left: 2px;
 }
+/* 序号用等宽数字，两位数序号（9 → 10）不会让列表左缘跳动。 */
 .surface li::marker {
   color: var(--alter-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+/* 嵌套列表贴着它的父项，且不再把容器的下间距带进父项内部。 */
+.surface :is(ul, ol) > li > :is(ul, ol) {
+  margin-block: 4px 0;
 }
 .surface blockquote {
-  margin: 24px 0;
+  margin: var(--doc-gap-block) 0;
   padding-left: 20px;
   border-left: 1px solid var(--alter-control-border);
   /* 引用降一级：保留同一色相，靠色深拉开层级，而不是把边框加粗。 */
@@ -99,29 +125,71 @@
   margin-bottom: 0;
 }
 .surface pre {
-  margin: 24px 0;
-  padding: 14px 16px;
+  margin: var(--doc-gap-block) 0;
+  padding: 12px 16px;
   border-radius: var(--alter-radius-control);
   background: var(--alter-code-surface);
   font-family: var(--alter-font-mono);
-  font-size: var(--alter-font-body-sm);
+  /* 相对正文字号：0.875em = 16px 正文下的 14px，与行内代码同一比例。 */
+  font-size: 0.875em;
   line-height: var(--alter-line-ui);
   letter-spacing: 0;
+  /* Tab 缩进按 4 列展开（浏览器默认 8 列会把嵌套层级推出可视区）。 */
+  tab-size: 4;
   white-space: pre-wrap;
   overflow-x: auto;
+  overscroll-behavior-x: contain;
 }
 .surface pre code {
   padding: 0;
   background: transparent;
   font-size: inherit;
 }
+/* 行内代码跟随所处文字的字号缩小 12.5%：标题里的行内代码不会比标题小一大截，
+   内距用 em 表达，随字号缩放。 */
 .surface code {
-  padding: 1px 4px;
+  padding: 0.15em 0.35em;
   border-radius: var(--alter-radius-xs);
   background: var(--alter-code-surface);
   font-family: var(--alter-font-mono);
-  font-size: var(--alter-font-body-sm);
+  font-size: 0.875em;
   letter-spacing: 0;
+}
+/* 代码块语法高亮：token 类名由 kernel 的装饰器生成（TS 里的字面量，CSS Modules
+   看不见它们，所以用 :global 读出），颜色全部来自 `--alter-code-*` 令牌。
+   运算符与标点刻意不上色：括号、分隔符保持正文墨色，密集代码才不会变成调色盘。 */
+.surface :global(.alter-code-comment),
+.surface :global(.alter-code-meta) {
+  color: var(--alter-code-comment);
+}
+.surface :global(.alter-code-keyword) {
+  color: var(--alter-code-keyword);
+}
+.surface :global(.alter-code-tag) {
+  color: var(--alter-code-tag);
+}
+.surface :global(.alter-code-string),
+.surface :global(.alter-code-regexp) {
+  color: var(--alter-code-string);
+}
+.surface :global(.alter-code-number) {
+  color: var(--alter-code-number);
+}
+.surface :global(.alter-code-title) {
+  color: var(--alter-code-title);
+}
+.surface :global(.alter-code-type) {
+  color: var(--alter-code-type);
+}
+.surface :global(.alter-code-variable) {
+  color: var(--alter-code-variable);
+}
+/* diff 里的增删行沿用正文的差异色，代码块与版本对比面板同色。 */
+.surface :global(.alter-code-addition) {
+  color: var(--alter-diff-add-text);
+}
+.surface :global(.alter-code-deletion) {
+  color: var(--alter-diff-remove-text);
 }
 .surface mark {
   padding: 0 1px;
@@ -204,7 +272,7 @@
 .surface [data-link-card] {
   position: relative;
   display: block;
-  margin: 28px 0;
+  margin: var(--doc-gap-block) 0;
   padding: 16px 44px 16px 18px;
   border: 1px solid var(--alter-border);
   border-radius: var(--alter-radius-panel);
@@ -342,7 +410,7 @@
   line-height: var(--alter-line-body);
 }
 .surface [data-divider] {
-  margin: 10px 0;
+  margin: var(--doc-gap) 0;
   padding: 7px 0;
   cursor: pointer;
   border-radius: var(--alter-radius-xs);
@@ -362,7 +430,7 @@
   display: block;
   max-width: 100%;
   height: auto;
-  margin: 14px 0;
+  margin: var(--doc-gap-block) 0;
   border-radius: var(--alter-radius-xs);
   cursor: pointer;
 }
@@ -372,7 +440,7 @@
 }
 .surface table {
   width: 100%;
-  margin: 24px 0;
+  margin: var(--doc-gap-block) 0;
   border-collapse: collapse;
   font-size: inherit;
   line-height: inherit;
@@ -381,10 +449,11 @@
   outline: 2px solid var(--alter-focus-ring);
   outline-offset: 2px;
 }
+/* 单元格内距按主流取值（横向比纵向宽），表头靠底色而不是加粗边框区分。 */
 .surface th,
 .surface td {
   min-width: 72px;
-  padding: 7px 10px;
+  padding: 8px 12px;
   border: 1px solid var(--alter-border);
   vertical-align: top;
   text-align: left;

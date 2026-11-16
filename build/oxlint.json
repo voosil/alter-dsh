@@ -1,6 +1,12 @@
 {
   "$schema": "../node_modules/oxlint/configuration_schema.json",
-  "plugins": ["import", "vitest", "typescript", "unicorn", "oxc"],
+  "plugins": [
+    "import",
+    "vitest",
+    "typescript",
+    "unicorn",
+    "oxc"
+  ],
   "categories": {
     "correctness": "warn"
   },
@@ -22,7 +28,8 @@
     "vitest/expect-expect": "off",
     "vitest/no-conditional-expect": "off",
     "vitest/require-to-throw-message": "off",
-    "vitest/valid-expect": "off"
+    "vitest/valid-expect": "off",
+    "no-undef": "error"
   },
   "overrides": [
     {
@@ -40,18 +47,26 @@
       }
     },
     {
-      "files": ["**/tests/**"],
+      "files": [
+        "**/tests/**"
+      ],
       "rules": {
         "no-restricted-imports": [
           "error",
           {
             "patterns": [
               {
-                "group": ["**/*.test", "**/*.test.js", "**/tests/workspace/fixtures**"],
+                "group": [
+                  "**/*.test",
+                  "**/*.test.js",
+                  "**/tests/workspace/fixtures**"
+                ],
                 "message": "测试之间禁止互相引用；共享代码放 tests/support/。"
               },
               {
-                "group": ["**/tests/fixtures/**"],
+                "group": [
+                  "**/tests/fixtures/**"
+                ],
                 "message": "旧 fixtures 位置已废弃；共享代码放 tests/support/。"
               }
             ]
@@ -60,14 +75,20 @@
       }
     },
     {
-      "files": ["**/tests/ui/**"],
+      "files": [
+        "**/tests/ui/**"
+      ],
       "rules": {
         "no-restricted-imports": [
           "error",
           {
             "patterns": [
               {
-                "group": ["**/*.test", "**/*.test.js", "**/tests/workspace/fixtures**"],
+                "group": [
+                  "**/*.test",
+                  "**/*.test.js",
+                  "**/tests/workspace/fixtures**"
+                ],
                 "message": "测试之间禁止互相引用；共享代码放 tests/support/。"
               },
               {
@@ -88,14 +109,20 @@
       }
     },
     {
-      "files": ["**/tests/unit/**"],
+      "files": [
+        "**/tests/unit/**"
+      ],
       "rules": {
         "no-restricted-imports": [
           "error",
           {
             "patterns": [
               {
-                "group": ["**/*.test", "**/*.test.js", "**/tests/workspace/fixtures**"],
+                "group": [
+                  "**/*.test",
+                  "**/*.test.js",
+                  "**/tests/workspace/fixtures**"
+                ],
                 "message": "测试之间禁止互相引用；共享代码放 tests/support/。"
               },
               {
@@ -112,19 +139,27 @@
       }
     },
     {
-      "files": ["src/**", "tests/**", "build/**"],
+      "files": [
+        "src/**",
+        "tests/**",
+        "build/**"
+      ],
       "rules": {
         "unicorn/no-useless-spread": "off"
       }
     },
     {
-      "files": ["tests/support/**"],
+      "files": [
+        "tests/support/**"
+      ],
       "rules": {
         "no-console": "off"
       }
     },
     {
-      "files": ["vendor/**"],
+      "files": [
+        "vendor/**"
+      ],
       "rules": {
         "unicorn/no-useless-spread": "off"
       }
@@ -143,5 +178,11 @@
         "no-console": "off"
       }
     }
-  ]
+  ],
+  "env": {
+    "browser": true,
+    "node": true,
+    "es2024": true,
+    "vitest": true
+  }
 }

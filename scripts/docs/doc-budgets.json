@@ -13,8 +13,8 @@
   "counts": {
     "maxCategories": 6,
     "maxDocsPerFolder": 11,
-    "maxActiveDocs": 32,
-    "warnActiveDocs": 24,
+    "maxActiveDocs": 34,
+    "warnActiveDocs": 26,
     "maxArchiveDocs": 60
   },
   "lifecycleDays": {

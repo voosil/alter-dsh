@@ -2,19 +2,23 @@
 /**
  * Table action bar parity (`docs/acceptance/editor-experience-p0-p6.md` §2).
  *
- * Frozen behaviour: hovering a table offers 选中; the selected state marks the
- * table with `data-selected`, moves the caret out of the table and turns the
- * bar into 上移/下移/删除. Moving swaps siblings (ids preserved) and saves;
- * deleting removes the table, parks the caret on a typable neighbour and hides
- * the bar. The bar reuses the dark `.linkBar` look and hides 180ms after the
- * pointer leaves the body.
+ * A table the pointer rests on offers 选中 after SHOW_DELAY_MS and closes in the
+ * same pointer event that leaves the table; a scroll neither opens nor follows
+ * it. The selected state marks the table with `data-selected`, moves the caret
+ * out of the table and turns the bar into 上移/下移/删除. Moving swaps siblings
+ * (ids preserved) and saves; deleting removes the table, parks the caret on a
+ * typable neighbour and hides the bar. The bar reuses the dark `.linkBar` look;
+ * the caret-driven full toolbar keeps rendering from the selection state.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createKernelEditor } from '../../../../../src/document/editors/tiptap/editor';
 import { pmDocToBlocks } from '../../../../../src/document/editors/tiptap/convert';
 import { CellSelection } from '@tiptap/pm/tables';
 import type { Node as PmNode } from '@tiptap/pm/model';
-import { closeOverlayBars } from '../../../../../src/document/editors/tiptap/overlays';
+import {
+  closeOverlayBars,
+  SHOW_DELAY_MS,
+} from '../../../../../src/document/editors/tiptap/overlays';
 import { blockSelectionOf } from '../../../../../src/document/editors/tiptap/block-selection';
 import { KERNEL_CLASS } from '../../../../../src/document/editors/tiptap/classes';
 import type { AlterDoc, BlockNode } from '../../../../../src/document/types';
@@ -137,6 +141,10 @@ function docWithPlainTable(): AlterDoc {
 }
 
 const cleanups: Array<() => void> = [];
+// The show delay is the subject of the hover tests, so time is always controlled.
+beforeEach(() => {
+  vi.useFakeTimers();
+});
 afterEach(() => {
   vi.useRealTimers();
   for (const cleanup of cleanups) cleanup();
@@ -160,11 +168,24 @@ function tableBar(): HTMLElement | null {
   return document.querySelector<HTMLElement>('[aria-label="表格操作"]');
 }
 
-function hoverTable(kernel: ReturnType<typeof mount>): HTMLElement {
+/** A pointer that only passes over the table (no dwell, so no bar). */
+function passOverTable(kernel: ReturnType<typeof mount>): HTMLElement {
   const tableElement = kernel.editor.view.dom.querySelector('table');
   expect(tableElement, 'table is rendered').not.toBeNull();
   tableElement!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
   return tableElement!;
+}
+
+/** A pointer that rests on the table for the whole show delay. */
+function hoverTable(kernel: ReturnType<typeof mount>): HTMLElement {
+  const tableElement = passOverTable(kernel);
+  vi.advanceTimersByTime(SHOW_DELAY_MS);
+  return tableElement;
+}
+
+/** Pointer coordinates far away from any (zero-sized) jsdom rectangle. */
+function away(x = 640, y = 480): MouseEventInit {
+  return { bubbles: true, clientX: x, clientY: y };
 }
 
 function pressBar(label: string): void {
@@ -410,17 +431,62 @@ describe('table bar', () => {
     expect(pmDocToBlocks(kernel.capture()).value).toHaveLength(3);
   });
 
-  it('hides 180ms after the pointer leaves and keeps the selection meanwhile', () => {
-    vi.useFakeTimers();
+  it('opens only after the pointer rests on the table', () => {
+    expect(SHOW_DELAY_MS).toBe(150);
+    const kernel = mount(docWithTable());
+    passOverTable(kernel);
+    vi.advanceTimersByTime(SHOW_DELAY_MS - 1);
+    expect(tableBar()?.style.display).toBe('none');
+    vi.advanceTimersByTime(1);
+    expect(tableBar()?.style.display).not.toBe('none');
+  });
+
+  it('never opens when the pointer leaves before the delay elapses', () => {
+    const kernel = mount(docWithTable());
+    passOverTable(kernel);
+    vi.advanceTimersByTime(SHOW_DELAY_MS - 1);
+    kernel.editor.view.dom
+      .querySelector('p')!
+      .dispatchEvent(new MouseEvent('mouseover', away()));
+    vi.advanceTimersByTime(SHOW_DELAY_MS * 10);
+    expect(tableBar()?.style.display).toBe('none');
+  });
+
+  it('hides in the same pointer event that leaves the table', () => {
     const kernel = mount(docWithTable());
     hoverTable(kernel);
     expect(tableBar()?.style.display).not.toBe('none');
-    kernel.editor.view.dom.dispatchEvent(new MouseEvent('mouseleave'));
-    expect(tableBar()?.style.display).not.toBe('none');
-    vi.advanceTimersByTime(179);
-    expect(tableBar()?.style.display).not.toBe('none');
-    vi.advanceTimersByTime(1);
+    kernel.editor.view.dom
+      .querySelector('p')!
+      .dispatchEvent(new MouseEvent('mouseover', away()));
     expect(tableBar()?.style.display).toBe('none');
+  });
+
+  it('closes on scroll instead of following the page', () => {
+    const kernel = mount(docWithTable());
+    hoverTable(kernel);
+    const bar = tableBar()!;
+    const top = bar.style.top;
+    document.dispatchEvent(new Event('scroll'));
+    expect(bar.style.display).toBe('none');
+    expect(bar.style.top).toBe(top);
+  });
+
+  it('stays open while the pointer travels from the table to the bar', () => {
+    const kernel = mount(docWithTable());
+    const tableElement = kernel.editor.view.dom.querySelector('table')!;
+    tableElement.getBoundingClientRect = () => rect(300, 200);
+    hoverTable(kernel);
+    const bar = tableBar()!;
+    bar.getBoundingClientRect = () => rect(300, 166);
+    // Crossing the gap and landing on the bar stays inside the union box.
+    document.dispatchEvent(new MouseEvent('mousemove', away(320, 190)));
+    expect(bar.style.display).not.toBe('none');
+    bar.dispatchEvent(new MouseEvent('mouseleave', away(320, 175)));
+    expect(bar.style.display).not.toBe('none');
+    // Stepping off the bar into the page closes it at once.
+    bar.dispatchEvent(new MouseEvent('mouseleave', away(900, 900)));
+    expect(bar.style.display).toBe('none');
   });
 
   it('hides when a non-table area is clicked', () => {
@@ -438,7 +504,7 @@ describe('table bar', () => {
     const kernel = mount(docWithTable());
     const tableElement = kernel.editor.view.dom.querySelector('table')!;
     tableElement.getBoundingClientRect = () => rect(300, 200);
-    tableElement.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    hoverTable(kernel);
     expect(tableBar()?.style.left).toBe('300px');
     // top = max(10, rect.top - 34)
     expect(tableBar()?.style.top).toBe('166px');
@@ -448,17 +514,16 @@ describe('table bar', () => {
     const kernel = mount(docWithTable());
     const tableElement = kernel.editor.view.dom.querySelector('table')!;
     tableElement.getBoundingClientRect = () => rect(5000, 5);
-    tableElement.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    hoverTable(kernel);
     const bar = tableBar()!;
     // left = min(max(12, rect.left), max(12, innerWidth - 160))
     expect(bar.style.left).toBe(`${window.innerWidth - 160}px`);
     expect(bar.style.top).toBe('10px');
   });
 
-  it('shares the frozen hide timer with the link bar', () => {
-    // The frozen editor uses one timer for both bars: leaving the body keeps
-    // them visible while the pointer is over either bar, and hides both after.
-    vi.useFakeTimers();
+  it('keeps the link and table bars independent', () => {
+    // Each bar owns its pointer state: both may open on the same link inside a
+    // table, and closing one never closes the other.
     const linkedCell: BlockNode = block('blk_lc', 'tableCell', {}, {
       content: [
         {
@@ -487,24 +552,18 @@ describe('table bar', () => {
     );
     expect(anchor).not.toBeNull();
     anchor!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    vi.advanceTimersByTime(SHOW_DELAY_MS);
     const linkBarElement = document.querySelector<HTMLElement>(
       '[aria-label="链接操作"]',
     )!;
     expect(linkBarElement.style.display).not.toBe('none');
     expect(tableBar()?.style.display).not.toBe('none');
 
-    kernel.editor.view.dom.dispatchEvent(new MouseEvent('mouseleave'));
-    vi.advanceTimersByTime(179);
-    expect(linkBarElement.style.display).not.toBe('none');
-    linkBarElement.dispatchEvent(new MouseEvent('mouseenter'));
-    vi.advanceTimersByTime(500);
-    // Entering one bar cancels the shared hide for both.
-    expect(linkBarElement.style.display).not.toBe('none');
-    expect(tableBar()?.style.display).not.toBe('none');
-    linkBarElement.dispatchEvent(new MouseEvent('mouseleave'));
-    vi.advanceTimersByTime(180);
+    linkBarElement
+      .querySelector<HTMLButtonElement>('[aria-label="编辑链接"]')!
+      .click();
     expect(linkBarElement.style.display).toBe('none');
-    expect(tableBar()?.style.display).toBe('none');
+    expect(tableBar()?.style.display).not.toBe('none');
   });
 
   it('keeps the caret while the bar is pressed', () => {
@@ -521,6 +580,14 @@ describe('table bar', () => {
     hoverTable(kernel);
     expect(tableBar()?.style.display).not.toBe('none');
     closeOverlayBars(kernel.editor);
+    expect(tableBar()?.style.display).toBe('none');
+  });
+
+  it('drops a pending hover open when closed explicitly', () => {
+    const kernel = mount(docWithTable());
+    passOverTable(kernel);
+    closeOverlayBars(kernel.editor);
+    vi.advanceTimersByTime(SHOW_DELAY_MS * 5);
     expect(tableBar()?.style.display).toBe('none');
   });
 
@@ -569,6 +636,20 @@ describe('table toolbar (caret inside a table)', () => {
       'move-down',
       'delete-table',
     ]);
+  });
+
+  it('keeps following the selection on scroll', () => {
+    const kernel = mount(docWithTable());
+    const tableElement = kernel.editor.view.dom.querySelector('table')!;
+    caretInFirstCell(kernel);
+    expect(tableBar()?.style.display).not.toBe('none');
+    // The full toolbar is selection-driven, not hover-driven: a scroll
+    // re-measures it instead of closing it.
+    tableElement.getBoundingClientRect = () => rect(300, 200);
+    document.dispatchEvent(new Event('scroll'));
+    expect(tableBar()?.style.display).not.toBe('none');
+    expect(tableBar()?.style.top).toBe('158px');
+    expect(tableBar()?.style.left).toBe('300px');
   });
 
   it('keeps compact text with full aria labels and titles', () => {

@@ -1,0 +1,114 @@
+/*
+ * Right-sidebar tab that embeds the Space app.
+ *
+ * Everything is scoped to this container — nothing leaks to the document
+ * root. `SpaceApp` is authored as a full-window app (its `.space` root and
+ * loading/unavailable children assume the viewport height), so the
+ * attribute-scoped child rule below outranks the app's module classes and
+ * makes them fill the tab instead; vendor styles stay untouched. The Space
+ * design is light-only and typed, so color scheme and typography tokens are
+ * pinned here rather than at the document root.
+ */
+
+.pageTab {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--alter-surface);
+  color: var(--alter-text);
+  color-scheme: light;
+  font-family: var(--alter-font-family);
+  font-size: var(--alter-font-body-sm);
+  line-height: var(--alter-line-ui);
+  /* 窄面板里给目录一个收窄的默认宽度；用户拖拽后的像素值仍由 SpaceApp 以
+   * 内联样式覆写。百分比按容器解析，比 vendor 的固定 312px 更贴合侧栏。 */
+  --alter-space-sidebar-width: min(248px, 55%);
+}
+
+/* SpaceApp 的根节点（`.space`、加载中或空态的 div）：撑满标签页剩余高度。
+ * 元素+属性选择器无需点名应用的 module class 即可压过它（与主面板
+ * `.alter-space-host > div[class]` 同一手法），引导条是 header 不受影响。 */
+.pageTab[data-alter-space-page-tab] > :global(div[class]) {
+  flex: 1 1 auto;
+  height: 100%;
+  min-height: 0;
+}
+
+/* 标签页顶部一行工具条：左侧是当前引用目标（空态时是引导文案），右侧是
+ * 「新建对话」主按钮，失败文案行内排在按钮旁边（不使用 toast）。窄面板下允许
+ * 换行，最坏情况是两行而不是挤压按钮。 */
+.guide {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--alter-space-1) var(--alter-space-2);
+  padding: var(--alter-space-1) var(--alter-space-2) var(--alter-space-1)
+    var(--alter-space-3);
+  border-bottom: 1px solid var(--alter-border);
+  background: var(--alter-surface-nav);
+  color: var(--alter-text-secondary);
+  font-size: var(--alter-font-caption);
+}
+
+.guideText {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.guideError {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--alter-danger);
+  overflow-wrap: anywhere;
+}
+
+.newChat {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--alter-space-1);
+  height: 26px;
+  margin-left: auto;
+  padding: 0 var(--alter-space-2);
+  border: 1px solid var(--alter-action-background);
+  border-radius: var(--alter-radius-control);
+  background: var(--alter-action-background);
+  color: var(--alter-action-text);
+  font: inherit;
+  font-size: var(--alter-font-caption);
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background var(--alter-duration-fast) ease,
+    border-color var(--alter-duration-fast) ease,
+    color var(--alter-duration-fast) ease;
+}
+
+.newChat:hover:not(:disabled) {
+  border-color: var(--alter-action-hover);
+  background: var(--alter-action-hover);
+}
+
+.newChat:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: 1px;
+}
+
+.newChat:disabled {
+  border-color: var(--alter-border);
+  background: var(--alter-surface-hover);
+  color: var(--alter-text-muted);
+  cursor: not-allowed;
+}
+
+.unavailable {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--alter-text-muted);
+  font-size: var(--alter-font-body-sm);
+}

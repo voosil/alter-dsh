@@ -131,6 +131,11 @@ export function createLocalBackend(
     document: runtime.document,
     agentDocument: runtime.agentDocument,
     assets: runtime.assets,
+    chat: runtime.chat,
+    workspaceLink: (spaceId: string) => {
+      const link = runtime.store.getWorkspaceLink(spaceId);
+      return link === undefined ? undefined : { workspaceId: link.workspaceId };
+    },
     workspaceSync: options.workspaceSync ?? (() => undefined),
     // Deleting a space removes its documents, history and comments at once:
     // take a recovery point first, and abort the delete if it cannot be taken.

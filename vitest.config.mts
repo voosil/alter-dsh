@@ -11,6 +11,7 @@
  * `pnpm test:nightly` adds the nightly set. The rules and the rationale live in
  * `docs/specs/system-architecture.md` §5.
  */
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
@@ -24,6 +25,21 @@ import {
 const root = path.dirname(fileURLToPath(import.meta.url));
 const vendorSrc = (name) => path.join(root, 'vendor', name, 'src');
 const nightly = process.env.SPACE_NIGHTLY === '1';
+
+/**
+ * jsdom 层的并发上限。
+ *
+ * 每个测试文件都创建一个完整 DOM 环境；文件数超过可用核心后，工作线程互相
+ * 抢占会让异步等待（testing-library 的 `waitBy*` 默认 1s）在正确行为下也超时。
+ * 限流让并发回归核心数以内，断言强度不变。
+ */
+const CPU_COUNT = os.availableParallelism?.() ?? os.cpus().length ?? 4;
+
+/** 全局并发上限：不超过可用核心。 */
+const GLOBAL_MAX_WORKERS = Math.max(1, Math.min(6, CPU_COUNT));
+
+/** jsdom 层并发上限：DOM 环境创建是主要成本，再多的并发只会互相拖慢。 */
+const DOM_LAYER_MAX_WORKERS = Math.max(1, Math.min(4, Math.floor(CPU_COUNT / 2)));
 
 const alias = [
   {
@@ -74,18 +90,31 @@ const alias = [
  * Build one Vitest project entry for a test layer.
  * @param {string} name - layer name from `tests/layers.mjs`.
  */
-function project(name) {
+function project(name, index) {
   const definition = LAYER_DEFINITIONS[name];
   if (!definition) throw new Error(`unknown test layer: ${name}`);
+  const dom = definition.environment === 'dom';
   return {
     resolve: { alias },
     test: {
       name,
       include: definition.include,
       exclude: PR_EXCLUDE,
-      environment: definition.environment === 'dom' ? 'jsdom' : 'node',
+      environment: dom ? 'jsdom' : 'node',
       testTimeout: 30_000,
       hookTimeout: 30_000,
+      // jsdom 层的成本是一次完整 DOM 环境的创建，并发数超过 CPU 的可用核心后
+      // 只会互相拖慢：既有的异步断言（testing-library 默认 1s）会因调度排队而
+      // 超时。并发是时序类缺陷的直接成因，所以这里按层限流而不是放宽断言。
+      // 各项目 maxWorkers 不同，Vitest 要求同时给出唯一的 groupOrder。
+      ...(dom
+        ? {
+          maxWorkers: DOM_LAYER_MAX_WORKERS,
+          // 统一放宽 testing-library 的异步等待窗口，见该文件说明。
+          setupFiles: [path.join(root, 'tests', 'support', 'ui-setup.ts')],
+        }
+        : {}),
+      sequence: { groupOrder: index },
     },
   };
 }
@@ -102,11 +131,16 @@ const nightlyProject = {
     environment: 'node',
     testTimeout: 120_000,
     hookTimeout: 60_000,
+    // 与分层项目不同名不同并发，给一个不与 `LAYERS` 序号冲突的顺序值。
+    sequence: { groupOrder: 100 },
   },
 };
 
 export default defineConfig({
   test: {
+    // 全局并发上限：三个项目并行时，integration 的真 SQLite 与 ui 的 jsdom 会互相
+    // 抢占；核心数以内运行才能让异步断言只看行为，不看排队。
+    maxWorkers: GLOBAL_MAX_WORKERS,
     projects: nightly ? [nightlyProject] : LAYERS.map(project),
     coverage: {
       provider: 'v8',
