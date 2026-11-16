@@ -31,6 +31,10 @@ export interface SpaceSettingsState {
   serverUrl: string | null;
   tokenConfigured: boolean;
   updatedAt: string;
+  /** Last successful authenticated probe of the saved target, if any. */
+  lastVerifiedAt?: string;
+  /** Server version reported by that probe. */
+  lastVerifiedVersion?: string;
   connection: BackendConnectionStatus;
   capabilities: {
     remoteDirectories: boolean;
@@ -391,6 +395,12 @@ export function createSettingsRpcHandler(
       serverUrl: view.serverUrl,
       tokenConfigured: view.tokenConfigured,
       updatedAt: view.updatedAt,
+      ...(view.lastVerifiedAt === undefined
+        ? {}
+        : { lastVerifiedAt: view.lastVerifiedAt }),
+      ...(view.lastVerifiedVersion === undefined
+        ? {}
+        : { lastVerifiedVersion: view.lastVerifiedVersion }),
       connection,
       capabilities: {
         remoteDirectories: view.mode === 'server',
@@ -467,6 +477,25 @@ export function createSettingsRpcHandler(
           from: serverUrl,
           result: result.ok ? 'ok' : 'failed',
         });
+        // Only a probe of the persisted target with the persisted secret is
+        // evidence about what the settings page will actually use; a probe of
+        // a draft URL or a typed-but-unsaved token must not mark it verified.
+        if (
+          targetsConfiguredServer &&
+          token !== undefined &&
+          token === loaded.token &&
+          result.ok &&
+          result.authenticated === true
+        ) {
+          await deps.settings
+            .markVerified({
+              at: new Date().toISOString(),
+              ...(result.serverVersion === undefined
+                ? {}
+                : { version: result.serverVersion }),
+            })
+            .catch(() => undefined);
+        }
         return { value: result };
       }
       if (endpoint === 'sync.status')

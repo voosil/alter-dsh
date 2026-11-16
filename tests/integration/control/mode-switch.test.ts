@@ -175,6 +175,38 @@ describe('connection settings store', () => {
   });
 });
 
+
+  it('keeps a verification only while the target stays the same', async () => {
+    const store = createConnectionSettingsStore({
+      directory: await tempDir(),
+      logger: quietLogger(),
+    });
+    await store.save({
+      serverUrl: 'http://127.0.0.1:8787',
+      token: TOKEN,
+    });
+    await store.markVerified({
+      at: '2026-11-12T08:00:00.000Z',
+      version: '1.2.3',
+    });
+    expect(await store.view()).toMatchObject({
+      lastVerifiedAt: '2026-11-12T08:00:00.000Z',
+      lastVerifiedVersion: '1.2.3',
+    });
+
+    // Re-probing without a version must not leave the old one behind.
+    await store.markVerified({ at: '2026-11-12T09:00:00.000Z' });
+    expect((await store.view()).lastVerifiedVersion).toBeUndefined();
+
+    // A token edit invalidates the pair the probe proved.
+    await store.save({ token: 'rotated-token' });
+    expect((await store.view()).lastVerifiedAt).toBeUndefined();
+
+    await store.markVerified({ at: '2026-11-12T10:00:00.000Z' });
+    await store.save({ serverUrl: 'http://127.0.0.1:8788' });
+    expect((await store.view()).lastVerifiedAt).toBeUndefined();
+  });
+
 describe('mode switching and settings control plane', () => {
   it('switches local → server → local, routing all surfaces', async () => {
     const server = await startServer();
@@ -892,5 +924,56 @@ describe('settings control-plane guards', () => {
     expect(lines.some((line) => line.tokenChanged === true)).toBe(true);
     expect(JSON.stringify(lines)).not.toContain(TOKEN);
     expect(JSON.stringify(lines)).not.toContain(secondToken);
+  });
+});
+
+describe('connection verification metadata', () => {
+  it('records only an authenticated probe of the saved target', async () => {
+    const server = await startServer();
+    const directory = await tempDir();
+    const settings = createConnectionSettingsStore({
+      directory,
+      logger: quietLogger(),
+    });
+    const mode = new SpaceModeController({
+      directory,
+      settings,
+      logger: quietLogger(),
+    });
+    dispose(() => mode.close());
+    const handler = createSettingsRpcHandler({ settings, mode, directory });
+    await mode.open();
+
+    await settings.save({ serverUrl: server.url, token: TOKEN });
+
+    // A typed token is not the saved secret, so it proves nothing about the
+    // configuration the plugin will actually use.
+    const draft = (await handler('settings.test', {
+      op: 'settings.test',
+      args: [{ serverUrl: server.url, token: `${TOKEN}-draft` }],
+    })) as { value: { ok: boolean; authenticated?: boolean } };
+    expect(draft.value.ok).toBe(false);
+    expect((await settings.view()).lastVerifiedAt).toBeUndefined();
+
+    const tested = (await handler('settings.test', {
+      op: 'settings.test',
+      args: [{ serverUrl: server.url }],
+    })) as { value: { ok: boolean; authenticated?: boolean } };
+    expect(tested.value.ok).toBe(true);
+    expect(tested.value.authenticated).toBe(true);
+
+    const state = (await handler('settings.get', {
+      op: 'settings.get',
+      args: [],
+    })) as {
+      value: { lastVerifiedAt?: string; lastVerifiedVersion?: string };
+    };
+    expect(typeof state.value.lastVerifiedAt).toBe('string');
+    expect(typeof state.value.lastVerifiedVersion).toBe('string');
+
+    // Editing the secret drops the record: the settings page must stop
+    // claiming the old configuration works.
+    await settings.save({ token: `${TOKEN}-rotated` });
+    expect((await settings.view()).lastVerifiedAt).toBeUndefined();
   });
 });

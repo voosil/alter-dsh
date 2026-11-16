@@ -26,7 +26,8 @@ updated: 2026-11-12
   客户端不得绕过该链路读写业务数据。
 - 业务数据只存在于 Host 与 SQLite；浏览器 localStorage 只存 UI 偏好，刷新或重开面板后从 Host 重新读取。
 - 插件自有数据放 SQLite 侧表（如空间 ↔ 工作区绑定），不写入 `vendor/` 的实体结构。
-- 文档页与基线（`vendor/ui-space` 旧 UI）保持视觉与交互 parity：壳层与 CSS 不动。编辑器内核唯一为
+- 文档页与基线（`vendor/ui-space` 旧 UI）保持视觉与交互 parity：壳层与 CSS 不动（已批准增量见
+  [编辑器还原验收清单](../acceptance/editor-experience-p0-p6.md)）。编辑器内核唯一为
   AST 原生 Tiptap（`src/document/editors/tiptap`），旧 contentEditable 内核已退役；kernel-agnostic
   文档运行时在 `src/document/runtime`，经 `@alter-space/document-runtime` 别名接入，正文仍只经
   Document Operations 写入 Host。退役只在客户端：`host/document/editors/legacy/` 是 Host 权威实现，
@@ -51,11 +52,11 @@ updated: 2026-11-12
 
 | 端点 | 请求 | 结果 |
 | --- | --- | --- |
-| `settings.get` / `sync.status` | 无 | `{ mode, serverUrl, tokenConfigured, updatedAt, connection, capabilities, sync }` |
+| `settings.get` / `sync.status` | 无 | `{ mode, serverUrl, tokenConfigured, updatedAt, lastVerifiedAt?, lastVerifiedVersion?, connection, capabilities, sync }`；验证记录只在测试已保存目标且鉴权通过时更新，改变地址或 token 时清除 |
 | `settings.update` | `{ mode?, serverUrl?, token?: string \| null, discard?: boolean }` | 同上；不改变模式时可只保存地址/token 供迁移使用；切换模式必须 `discard: true`，服务端模式下更换地址且旧队列有未确认写入时也必须 `discard: true`，否则返回 `settings/migration-required`；落盘后后端切换失败时回滚已保存配置并保留旧后端 |
 | `settings.test` | `{ serverUrl?, token? }` | `{ ok, serverVersion?, protocolVersion?, authenticated?, message? }`；未配置的地址不得隐式使用已存 token |
 | `sync.flush` | 无 | 触发一次队列重放并返回状态 |
-| `sync.queue` | 无 | 每个存在未确认写入的文档一行：`{ docId, state: 'pending' \| 'conflict' \| 'failed', entries, baseRevision, lastError?, updatedAt }` |
+| `sync.queue` | 无 | 每个存在未确认写入的文档一行：`{ docId, title?, state: 'pending' \| 'conflict' \| 'failed', entries, baseRevision, lastError?, updatedAt }`；`title` 取自 bridge 本地影子，缺失时界面回退到 `docId` |
 | `sync.resolve` | `{ docId, action: 'retry' \| 'discard' }` | `{ resolved, state }`；`retry` 按服务端当前 revision 重新武装该文档的队列并重放（离线时返回 `remote/unavailable`），`discard` 丢弃该文档的本地写入与影子，内容和版本以服务端为准 |
 | `migration.preflight/start/status/cancel` | `{ direction: 'to-server' \| 'from-server', overwrite?, trimHistory? }` | 预检或任务状态（`status`、`phase`、`counts`、`backup` 等） |
 

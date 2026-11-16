@@ -65,8 +65,8 @@ curl http://127.0.0.1:8787/healthz
 - 网络：端口默认只绑 loopback；跨设备用 Tailscale 或 TLS 反代，公网不要直接暴露 8787；容器内监听
   `0.0.0.0`，启动日志里的 URL 不是客户端地址，客户端要填宿主机/反代地址。
 - 绑定宿主机目录到 `/data` 时须对容器内 `node`（uid 1000）可写：`sudo chown -R 1000:1000 <dir>`，或改用命名卷。
-- 接入：设置 → 服务器填 URL + token 并「测试连接」；保存地址/token 不切换数据权威。首次切换须走
-  「数据迁移 → 本地 → 服务端」，或显式确认放弃本地数据后切换；直接切换会被拒绝，不会静默换库。
+- 接入：设置 → 服务器填 URL + token，点「保存并测试」；保存地址/token 不切换数据权威，接入概览会给出
+  下一步。首次切换走「数据迁移 → 本地 → 服务端」，或显式确认放弃本地数据后切换；直接切换会被拒绝。
 - CLI 迁移（无 DSH 环境）：先 `pnpm build:host`，再单独运行
   `SPACE_SERVER_URL=... SPACE_TOKEN=... pnpm migrate --direction to-server`（环境变量只加在 `pnpm migrate` 上）。
 - 备份/恢复与升级/回滚：每日快照在 `<dataDir>/backups/`，定期复制到外部；升级前先备份，随后

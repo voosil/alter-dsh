@@ -30,6 +30,10 @@ export interface ConnectionSettings {
   serverUrl: string | null;
   /** ISO instant of the last persisted change. */
   updatedAt: string;
+  /** ISO instant of the last authenticated probe of the saved target. */
+  lastVerifiedAt?: string;
+  /** Server package version reported by that probe. */
+  lastVerifiedVersion?: string;
 }
 
 /** Loaded settings plus the resident token used by the bridge. */
@@ -45,6 +49,10 @@ export interface ConnectionSettingsView {
   serverUrl: string | null;
   tokenConfigured: boolean;
   updatedAt: string;
+  /** Last successful authenticated probe of the saved URL/token pair. */
+  lastVerifiedAt?: string;
+  /** Server version reported by that probe. */
+  lastVerifiedVersion?: string;
 }
 
 /** Settings patch accepted from the settings page or an Agent tool. */
@@ -112,6 +120,8 @@ interface SettingsFileShape {
   mode?: unknown;
   serverUrl?: unknown;
   updatedAt?: unknown;
+  lastVerifiedAt?: unknown;
+  lastVerifiedVersion?: unknown;
 }
 
 function isMode(value: unknown): value is SpaceAuthorityMode {
@@ -209,6 +219,12 @@ export interface ConnectionSettingsStore {
   view(): Promise<ConnectionSettingsView>;
   /** Replace the resident token without touching the mode/URL. */
   setToken(token: string | null): Promise<void>;
+  /**
+   * Record that the saved URL/token pair answered an authenticated probe.
+   * Verification is metadata about the connection, not a configuration
+   * change: `updatedAt` stays untouched, and changing the target clears it.
+   */
+  markVerified(result: { at: string; version?: string }): Promise<void>;
 }
 
 /**
@@ -245,7 +261,23 @@ export function createConnectionSettingsStore(options: {
         typeof parsed.updatedAt === 'string' && parsed.updatedAt !== ''
           ? parsed.updatedAt
           : now().toISOString();
-      return { mode, serverUrl, updatedAt };
+      const lastVerifiedAt =
+        typeof parsed.lastVerifiedAt === 'string' &&
+        parsed.lastVerifiedAt !== ''
+          ? parsed.lastVerifiedAt
+          : undefined;
+      const lastVerifiedVersion =
+        typeof parsed.lastVerifiedVersion === 'string' &&
+        parsed.lastVerifiedVersion !== ''
+          ? parsed.lastVerifiedVersion
+          : undefined;
+      return {
+        mode,
+        serverUrl,
+        updatedAt,
+        ...(lastVerifiedAt === undefined ? {} : { lastVerifiedAt }),
+        ...(lastVerifiedVersion === undefined ? {} : { lastVerifiedVersion }),
+      };
     } catch (error) {
       logger.warn?.(
         `[alter-dsh-space] connection.json 损坏，已回退本地模式：${
@@ -362,10 +394,25 @@ export function createConnectionSettingsStore(options: {
           '服务端模式需要配置 token',
         );
     }
+    // A verification belongs to one URL/token pair: changing either side
+    // invalidates it, so the settings page cannot claim a target works after
+    // its secret or address was edited.
+    const targetChanged =
+      nextUrl !== current.settings.serverUrl || normalizedToken !== undefined;
     const next: ConnectionSettings = {
       mode: nextMode,
       serverUrl: nextUrl,
       updatedAt: now().toISOString(),
+      ...(targetChanged
+        ? {}
+        : {
+            ...(current.settings.lastVerifiedAt === undefined
+              ? {}
+              : { lastVerifiedAt: current.settings.lastVerifiedAt }),
+            ...(current.settings.lastVerifiedVersion === undefined
+              ? {}
+              : { lastVerifiedVersion: current.settings.lastVerifiedVersion }),
+          }),
     };
     // Write the secret first: a crash between the two writes then leaves the
     // previous (still valid) mode/URL with the token it needs, instead of a
@@ -390,12 +437,38 @@ export function createConnectionSettingsStore(options: {
       serverUrl: loaded.settings.serverUrl,
       tokenConfigured: loaded.token !== undefined,
       updatedAt: loaded.settings.updatedAt,
+      ...(loaded.settings.lastVerifiedAt === undefined
+        ? {}
+        : { lastVerifiedAt: loaded.settings.lastVerifiedAt }),
+      ...(loaded.settings.lastVerifiedVersion === undefined
+        ? {}
+        : { lastVerifiedVersion: loaded.settings.lastVerifiedVersion }),
     };
+  }
+
+  async function markVerified(result: {
+    at: string;
+    version?: string;
+  }): Promise<void> {
+    const current = await readSettingsFile();
+    // A probe of the current target replaces the old record; a later server
+    // upgrade must not keep claiming the previous version.
+    const next: ConnectionSettings = {
+      mode: current.mode,
+      serverUrl: current.serverUrl,
+      updatedAt: current.updatedAt,
+      lastVerifiedAt: result.at,
+      ...(result.version === undefined
+        ? {}
+        : { lastVerifiedVersion: result.version }),
+    };
+    await writePrivateJson(settingsPath, next, directory);
+    void sweepTemp(directory);
   }
 
   async function setToken(token: string | null): Promise<void> {
     await writeToken(token);
   }
 
-  return { load, save, view, setToken };
+  return { load, save, view, setToken, markVerified };
 }

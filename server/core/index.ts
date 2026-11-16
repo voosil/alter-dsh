@@ -8,7 +8,7 @@
  *
  * @module @alter-dsh/space/space
  */
-import { realpathSync } from 'node:fs';
+import { accessSync, constants, realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createLocalSpaceRuntime } from '../../host/core/runtime.js';
@@ -62,6 +62,22 @@ function displayUrl(host: string, port: number): string {
 }
 
 /**
+ * Whether the process may write into its data directory.
+ *
+ * The runtime opened (and created) the directory before this probe runs, so a
+ * negative answer means a broken mount or permission set, not a missing path.
+ * A failed probe is a diagnostic, not a startup error: `/healthz` reports it.
+ */
+function isDataDirWritable(directory: string): boolean {
+  try {
+    accessSync(directory, constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Open the authority and start the HTTP listener.
  * @param config - parsed server configuration.
  * @param logger - optional log sink (tests stay quiet).
@@ -75,12 +91,17 @@ export async function startSpaceServer(
     logger,
     snapshots: config.snapshots,
   });
+  const dataDirWritable = isDataDirWritable(config.dataDir);
   const auth = createTokenAuthenticator(config.tokens);
   let migration: ServerMigration | undefined;
   const http = createSpaceHttpServer({
     runtime,
     auth,
     logger,
+    diagnostics: {
+      dataDirWritable,
+      snapshots: config.snapshots,
+    },
     migration: () => migration,
     // While the migration handler replaces the data directory it pauses the
     // runtime; business routes answer a stable 503 instead of touching the
@@ -110,6 +131,11 @@ export async function startSpaceServer(
     const url = displayUrl(config.host, port);
     logger.info?.(`数据目录 ${config.dataDir}；监听 ${config.host}:${String(port)}`);
     logger.info?.(`服务地址 ${url}；token ${auth.labels.join(', ')}`);
+    logger.info?.(
+      isWildcardHost(config.host)
+        ? `客户端在 DSH「设置 → 服务器」填写宿主机或反向代理地址；同机可先用 ${url}（容器内监听地址不是客户端地址）`
+        : `客户端在 DSH「设置 → 服务器」填写 ${url}；容器内监听地址不是客户端地址`,
+    );
     if (!isLoopbackHost(config.host)) {
       logger.warn?.(
         '监听地址不是 loopback：请只在私网使用，或用 TLS 反向代理暴露；服务端不提供 TLS 终止',

@@ -612,9 +612,8 @@
 
 /* Sync queue: one row per document with unsettled queued writes. */
 .queueList {
-  flex: 1;
+  display: flex;
   flex-direction: column;
-  align-items: stretch;
   gap: 8px;
   min-width: 0;
 }
@@ -645,4 +644,117 @@
   display: inline-flex;
   flex-shrink: 0;
   gap: 6px;
+}
+
+/* Access overview: one status line with its single next action. The dot
+ * borrows the server status tones, so the same state reads the same colour in
+ * both sections. */
+.overviewDot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.overviewText {
+  min-width: 0;
+  color: var(--alter-text);
+  font-size: var(--alter-font-body-sm);
+  line-height: var(--alter-line-ui);
+  overflow-wrap: anywhere;
+}
+
+.statusRunning {
+  color: var(--alter-accent);
+}
+
+.statusAttention {
+  color: var(--alter-accent-strong);
+}
+
+/* Actions that sit inside one row instead of in their own action line. */
+.inlineActions {
+  display: inline-flex;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+/* The connection row carries a status, a sync clock and three counts: allow
+ * it to use the row's free width and wrap inside that width on narrow panels. */
+.wrapControl {
+  flex: 2 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+/* A sync count that is also the shortcut to the queue below. */
+.countAction {
+  appearance: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--alter-text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+  font-variant-numeric: tabular-nums;
+  text-decoration: underline;
+  text-decoration-color: var(--alter-text-faint);
+  text-underline-offset: 2px;
+}
+
+.countAction:hover {
+  color: var(--alter-text);
+}
+
+.countAction:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: 2px;
+}
+
+/* Containers the overview/fix entries focus programmatically. */
+.focusTarget {
+  min-width: 0;
+}
+
+.focusTarget:focus {
+  outline: none;
+}
+
+.focusTarget:focus-visible {
+  outline: var(--alter-focus-width) solid var(--alter-focus-ring);
+  outline-offset: 4px;
+}
+
+/* Inline second confirmation for an irreversible queue/transfer action. */
+.confirmBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+  padding: 4px 0 10px;
+  color: var(--alter-danger);
+  font-size: var(--alter-font-caption);
+  line-height: var(--alter-line-ui);
+}
+
+/* Long single values (a server URL, a preflight message) may wrap instead of
+ * pushing the row wider than the panel. */
+.rowValueWrap {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* An action line with a disabled-reason label: let it wrap on narrow panels. */
+.wrapActions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }

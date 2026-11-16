@@ -10,7 +10,16 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { SpaceService } from '../../../vendor/protocol/src/index';
 import type { SpaceStorageClient } from '../../../src/client/storage';
+import type {
+  SpaceMigrationClient,
+  SpaceSettingsClient,
+} from '../../../src/client/rpc';
 import { SpaceSettingsPage } from '../../../src/settings/page';
+import {
+  migrationClient,
+  settingsClient,
+  snapshot as settingsSnapshot,
+} from './fixtures.js';
 
 const fakeEstimate = {
   documentCount: 3,
@@ -45,11 +54,17 @@ const fakeService = {
   },
 } as unknown as SpaceService;
 
-function render(storage?: SpaceStorageClient) {
+function render(
+  clients: {
+    storage?: SpaceStorageClient;
+    settings?: SpaceSettingsClient;
+    migration?: SpaceMigrationClient;
+  } = {},
+) {
   return renderToStaticMarkup(
     createElement(SpaceSettingsPage, {
       service: fakeService,
-      storage,
+      ...clients,
       onBack: () => {},
     }),
   );
@@ -86,7 +101,7 @@ describe('Space settings page', () => {
   });
 
   it('renders the storage policy as bounded steppers', () => {
-    const html = render(fakeStorage);
+    const html = render({ storage: fakeStorage });
     expect(html).toContain('存储与备份');
     expect(html).toContain('版本历史');
     expect(html).toContain('每日快照');
@@ -98,6 +113,22 @@ describe('Space settings page', () => {
 
   it('omits the storage section without a storage client', () => {
     expect(render()).not.toContain('存储与备份');
+  });
+
+  it('renders the access overview and both authority sections once settings clients exist', () => {
+    const settings = settingsClient({ initial: settingsSnapshot() });
+    const html = render({
+      settings: settings.client,
+      migration: migrationClient().client,
+    });
+    expect(html).toContain('接入概览');
+    expect(html).toContain('正在读取服务器与同步状态');
+    expect(html).toContain('服务器');
+    expect(html).toContain('数据迁移');
+    expect(html).toContain('当前数据位置');
+    // Server rendering never runs the snapshot effect, so about keeps the
+    // local default until the first read lands in the browser.
+    expect(html).toContain('保存在本机');
   });
 });
 

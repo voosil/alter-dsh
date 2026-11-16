@@ -175,6 +175,8 @@ function writeInput(payload: unknown): Record<string, unknown> | undefined {
  */
 export interface SyncQueueEntry {
   docId: string;
+  /** Cached document title; absent when no shadow has been read this session. */
+  title?: string;
   /** `pending` waits for the link; the others need a user decision. */
   state: 'pending' | 'conflict' | 'failed';
   /** Number of queue entries for this document. */
@@ -942,8 +944,10 @@ export function createRemoteBridge(
             ? 'conflict'
             : 'failed';
       if (existing === undefined) {
+        const title = cache.getShadow(entry.docId)?.title.trim();
         grouped.set(entry.docId, {
           docId: entry.docId,
+          ...(title === undefined || title === '' ? {} : { title }),
           state,
           entries: 1,
           baseRevision: entry.baseRevision,

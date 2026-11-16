@@ -40,10 +40,28 @@ interface LoggerLike {
   warn?(message: string): void;
 }
 
+/**
+ * Startup facts `/healthz` reports for remote diagnosis.
+ *
+ * These are computed once by the process that opened the data directory; the
+ * carrier itself never probes the filesystem per request.
+ */
+export interface SpaceServerDiagnostics {
+  /** Whether the data directory was writable when the server started. */
+  dataDirWritable: boolean;
+  /** Whether the daily snapshot scheduler is enabled for this deployment. */
+  snapshots: boolean;
+}
+
 /** Options for one standalone Space HTTP server. */
 export interface SpaceHttpServerOptions {
   runtime: LocalSpaceRuntime;
   auth: TokenAuthenticator;
+  /**
+   * Diagnostics reported by `/healthz`. Absent entries are reported as
+   * `false`, so a probe never claims a check the caller did not run.
+   */
+  diagnostics?: SpaceServerDiagnostics;
   /** Resolves the migration handler once the server lifecycle created it. */
   migration?: () => ServerMigration | undefined;
   /**
@@ -145,6 +163,11 @@ export function createSpaceHttpServer(
   const limit = options.maxRequestBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
   const logger = options.logger ?? {};
   const info: SpaceServerInfo = spaceServerInfo(SPACE_DB_FORMAT_VERSION);
+  const diagnostics = options.diagnostics ?? {
+    dataDirWritable: false,
+    snapshots: false,
+  };
+  const tokenCount = auth.count;
   let activeRuntime = options.runtime;
   let rpcRoute = buildRpcRoute(activeRuntime);
   let assetRoute = buildAssetRoute(activeRuntime);
@@ -232,6 +255,9 @@ export function createSpaceHttpServer(
         jsonResponse(200, {
           ok: true,
           ...info,
+          dataDirWritable: diagnostics.dataDirWritable,
+          snapshots: diagnostics.snapshots,
+          tokenCount,
         }),
       );
       return;
@@ -244,6 +270,8 @@ export function createSpaceHttpServer(
         );
         return;
       }
+      // The client handshake compares this payload against SpaceServerInfo;
+      // keep the shape exact and never append diagnostics here.
       await writeResponse(response, jsonResponse(200, info));
       return;
     }

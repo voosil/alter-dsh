@@ -48,6 +48,9 @@ async function startFixture(options: {
   const http = createSpaceHttpServer({
     runtime,
     auth: createTokenAuthenticator(tokens),
+    // The fixture mirrors the real server: the process that opened the data
+    // directory also reports its writability and snapshot switch.
+    diagnostics: { dataDirWritable: true, snapshots: false },
     ...(options.maxRequestBodyBytes === undefined
       ? {}
       : { maxRequestBodyBytes: options.maxRequestBodyBytes }),
@@ -153,11 +156,27 @@ describe('server HTTP routes', () => {
     expect(healthBody.ok).toBe(true);
     expect(healthBody.product).toBe('@alter-dsh/space');
     expect(healthBody.protocolVersion).toBe(1);
+    // Remote-diagnosis fields: deployment-level booleans plus the number of
+    // accepted tokens (labels only, never the secrets).
+    expect(healthBody.dataDirWritable).toBe(true);
+    expect(typeof healthBody.dataDirWritable).toBe('boolean');
+    expect(healthBody.snapshots).toBe(false);
+    expect(typeof healthBody.snapshots).toBe('boolean');
+    expect(healthBody.tokenCount).toBe(current.tokens.length);
+    expect(typeof healthBody.tokenCount).toBe('number');
 
     const version = await fetch(`${current.baseUrl}/version`);
     expect(version.status).toBe(200);
     const versionBody = (await version.json()) as Record<string, unknown>;
     expect(versionBody.databaseSchemaVersion).toBeGreaterThanOrEqual(3);
+    // The client handshake depends on the exact SpaceServerInfo shape, so
+    // diagnostics must never leak into `/version`.
+    expect(Object.keys(versionBody).sort()).toEqual([
+      'databaseSchemaVersion',
+      'product',
+      'protocolVersion',
+      'version',
+    ]);
   });
 
   it('rejects unauthenticated RPC and assets with 401', async () => {
@@ -227,15 +246,24 @@ describe('server HTTP routes', () => {
     expect(bytes.equals(png)).toBe(true);
   });
 
-  it('answers HEAD /version with headers and no body', async () => {
+  it('answers HEAD /version and /healthz with headers and no body', async () => {
     const current = fixture as Fixture;
-    const response = await fetch(`${current.baseUrl}/version`, {
+    const version = await fetch(`${current.baseUrl}/version`, {
       method: 'HEAD',
     });
-    expect(response.status).toBe(200);
-    expect(await response.text()).toBe('');
+    expect(version.status).toBe(200);
+    expect(await version.text()).toBe('');
+    const health = await fetch(`${current.baseUrl}/healthz`, {
+      method: 'HEAD',
+    });
+    expect(health.status).toBe(200);
+    expect(await health.text()).toBe('');
     const post = await fetch(`${current.baseUrl}/version`, { method: 'POST' });
     expect(post.status).toBe(405);
+    const postHealth = await fetch(`${current.baseUrl}/healthz`, {
+      method: 'POST',
+    });
+    expect(postHealth.status).toBe(405);
   });
 
   it('treats only the exact migration path as the migration surface', async () => {
@@ -288,8 +316,9 @@ describe('server HTTP routes', () => {
     fixture = undefined;
   });
 
-  it('logs a usable loopback URL when bound to all interfaces', async () => {
+  it('logs a usable client URL and reports startup diagnostics', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'space-server-wildcard-'));
+    const lines: string[] = [];
     const server = await startSpaceServer(
       {
         dataDir: directory,
@@ -298,11 +327,31 @@ describe('server HTTP routes', () => {
         tokens: [{ label: 'test', token: VALID_TOKEN }],
         snapshots: false,
       },
-      { info: () => undefined, warn: () => undefined },
+      {
+        info: (message) => lines.push(message),
+        warn: (message) => lines.push(message),
+      },
     );
     try {
       expect(server.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
-      expect((await fetch(`${server.url}/healthz`)).status).toBe(200);
+      const health = await fetch(`${server.url}/healthz`);
+      expect(health.status).toBe(200);
+      const body = (await health.json()) as Record<string, unknown>;
+      // The real process wires its data directory and snapshot switch into
+      // `/healthz`; tests do not need to re-probe anything.
+      expect(body.dataDirWritable).toBe(true);
+      expect(body.snapshots).toBe(false);
+      expect(body.tokenCount).toBe(1);
+      // The operator-facing hint names the URL a client should configure, so a
+      // container-internal bind address is not mistaken for a client address.
+      expect(
+        lines.some(
+          (line) =>
+            line.includes('DSH「设置 → 服务器」') && line.includes(server.url),
+        ),
+      ).toBe(true);
+      // Token labels may be logged; the secret itself never is.
+      expect(lines.join('\n')).not.toContain(VALID_TOKEN);
     } finally {
       await server.close();
       await rm(directory, { recursive: true, force: true });

@@ -352,6 +352,10 @@ export interface SpaceSettingsSnapshot {
   serverUrl: string | null;
   tokenConfigured: boolean;
   updatedAt: string;
+  /** Last successful authenticated probe of the saved target, if any. */
+  lastVerifiedAt?: string;
+  /** Server version reported by that probe. */
+  lastVerifiedVersion?: string;
   connection: SpaceConnectionStatus;
   capabilities: {
     remoteDirectories: boolean;
@@ -379,6 +383,8 @@ export interface SpaceRemoteTestResult {
 /** One document with queued writes that have not reached the server. */
 export interface SpaceSyncQueueEntry {
   docId: string;
+  /** Cached document title; the UI falls back to the id when absent. */
+  title?: string;
   /** `pending` waits for the link; the others need a user decision. */
   state: 'pending' | 'conflict' | 'failed';
   /** Number of queue entries for this document. */

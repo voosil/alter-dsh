@@ -5,28 +5,42 @@
  * layout while the appended storage section owned
  * another, so the two columns collided and every section carried its own
  * explanatory copy. This page renders the settings of the whole Space feature
- * on one surface — the DSH-only storage policy, archived space recovery, the
+ * on one surface — the access overview, the two authority modes and their
+ * migration, the DSH-only storage policy, archived space recovery, the
  * collaborator roster, keyboard shortcuts and about — in the same intro-column
  * grammar as the space configuration page.
+ *
+ * The page owns the shared settings snapshot and the migration job state: both
+ * are polled once here and handed to the overview and the two sections, so the
+ * whole surface agrees on one authority state instead of three independent
+ * copies.
  */
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Archive } from 'lucide-react';
 import { Button } from '@alter/ui-system';
 import type { Agent, Space, SpaceService } from '@alter/protocol';
 import { StorageSettingsSection } from './storage-section';
 import { ServerSettingsSection } from './server-section';
 import { MigrationSettingsSection } from './migration-section';
+import { AccessOverviewSection } from './overview-section';
 import { SettingsSection } from './section';
+import { focusSettingsTarget } from './shared';
 import type { SpaceStorageClient } from '../client/storage.js';
 import type {
   SpaceMigrationClient,
+  SpaceMigrationState,
   SpaceSettingsClient,
+  SpaceSettingsSnapshot,
 } from '../client/rpc.js';
 import styles from './settings.module.css';
 
 /** Keep in sync with package.json; shown as reference, not a feature surface. */
 const APP_VERSION = 'Alter 0.1.0';
-const ANNOUNCEMENT_MS = 2400;
+const ANNOUNCEMENT_MS = 2_400;
+/** Shared settings snapshot poll; also the idle migration poll. */
+const SNAPSHOT_POLL_MS = 5_000;
+/** A running migration needs a faster progress tick. */
+const MIGRATION_RUNNING_POLL_MS = 1_000;
 
 function formatArchivedAt(value: string): string {
   return new Intl.DateTimeFormat('zh-CN', {
@@ -66,6 +80,14 @@ export function SpaceSettingsPage({
   const [announcement, setAnnouncement] = useState('');
   /** Bumped by the retry control after a failed list read. */
   const [attempt, setAttempt] = useState(0);
+  /** One shared authority snapshot for the overview, server and migration. */
+  const [snapshot, setSnapshot] = useState<SpaceSettingsSnapshot | null>(null);
+  const [snapshotError, setSnapshotError] = useState('');
+  /** Live migration job; the overview reports its phase while running. */
+  const [migrationState, setMigrationState] =
+    useState<SpaceMigrationState | null>(null);
+  // Requests can resolve out of order; only the newest snapshot may win.
+  const snapshotSeq = useRef(0);
 
   useEffect(() => {
     let active = true;
@@ -85,6 +107,67 @@ export function SpaceSettingsPage({
       active = false;
     };
   }, [service, attempt]);
+
+  const refreshSnapshot = useCallback(async (): Promise<void> => {
+    if (settings === undefined) return;
+    const seq = ++snapshotSeq.current;
+    try {
+      const next = await settings.get();
+      if (seq !== snapshotSeq.current) return;
+      setSnapshot(next);
+      setSnapshotError('');
+    } catch (cause) {
+      if (seq !== snapshotSeq.current) return;
+      setSnapshotError(`读取服务器设置失败：${describeError(cause, '请重试')}`);
+    }
+  }, [settings]);
+
+  useEffect(() => {
+    if (settings === undefined) {
+      setSnapshot(null);
+      setSnapshotError('');
+      return;
+    }
+    void refreshSnapshot();
+    const timer = window.setInterval(() => {
+      void refreshSnapshot();
+    }, SNAPSHOT_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [settings, refreshSnapshot]);
+
+  const migrationRunning = migrationState?.status === 'running';
+
+  useEffect(() => {
+    if (migration === undefined) {
+      setMigrationState(null);
+      return;
+    }
+    let active = true;
+    const load = async () => {
+      try {
+        const next = await migration.status();
+        if (active) setMigrationState(next);
+      } catch {
+        // The overview keeps the last known state; settings reads report errors.
+      }
+    };
+    void load();
+    const timer = window.setInterval(
+      () => void load(),
+      migrationRunning ? MIGRATION_RUNNING_POLL_MS : SNAPSHOT_POLL_MS,
+    );
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [migration, migrationRunning]);
+
+  // A finished migration may have switched the authority; re-read the snapshot
+  // now instead of waiting for the next poll tick.
+  useEffect(() => {
+    if (migrationState?.status !== 'done') return;
+    void refreshSnapshot();
+  }, [migrationState?.status, refreshSnapshot]);
 
   useEffect(() => {
     if (!announcement) return;
@@ -118,6 +201,15 @@ export function SpaceSettingsPage({
     }
   }
 
+  const goTo = useCallback((target: Parameters<typeof focusSettingsTarget>[0]) => {
+    focusSettingsTarget(target);
+  }, []);
+
+  const dataLocation =
+    snapshot?.mode === 'server'
+      ? `保存在 ${snapshot.serverUrl ?? '服务器'}`
+      : '保存在本机';
+
   return (
     <div className={styles.page}>
       <header className={styles.toolbar}>
@@ -147,9 +239,51 @@ export function SpaceSettingsPage({
             </div>
           ) : null}
 
+          {snapshotError ? (
+            <div className={styles.errorBar}>
+              <span role="alert">{snapshotError}</span>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => void refreshSnapshot()}
+              >
+                重试
+              </Button>
+            </div>
+          ) : null}
+
           <div className={styles.sections}>
-            {settings ? <ServerSettingsSection client={settings} /> : null}
-            {migration ? <MigrationSettingsSection client={migration} /> : null}
+            {settings ? (
+              <AccessOverviewSection
+                snapshot={snapshot}
+                migration={migrationState}
+                client={settings}
+                onRefresh={refreshSnapshot}
+                onGo={goTo}
+                onAnnounce={setAnnouncement}
+              />
+            ) : null}
+            {settings ? (
+              <ServerSettingsSection
+                client={settings}
+                snapshot={snapshot}
+                onSnapshotChange={setSnapshot}
+                onRefresh={refreshSnapshot}
+                migrationRunning={migrationRunning}
+                onGoMigration={() => goTo('migration')}
+              />
+            ) : null}
+            {migration ? (
+              <MigrationSettingsSection
+                client={migration}
+                settings={settings}
+                snapshot={settings === undefined ? undefined : snapshot}
+                state={migrationState}
+                onStateChange={setMigrationState}
+                onRefreshSnapshot={refreshSnapshot}
+                onGo={goTo}
+              />
+            ) : null}
             {storage ? <StorageSettingsSection storage={storage} /> : null}
 
             {loadError ? null : (
@@ -246,7 +380,12 @@ export function SpaceSettingsPage({
                 </div>
                 <div className={`${styles.row} ${styles.rowCompact}`}>
                   <dt className={styles.rowLabel}>数据</dt>
-                  <dd className={styles.rowValue}>保存在本机</dd>
+                  <dd
+                    className={`${styles.rowValue} ${styles.rowValueWrap}`}
+                    data-testid="about-data-location"
+                  >
+                    {dataLocation}
+                  </dd>
                 </div>
               </dl>
             </SettingsSection>
@@ -254,7 +393,12 @@ export function SpaceSettingsPage({
         </div>
       </div>
 
-      <p className={styles.srOnly} role="status" aria-live="polite">
+      <p
+        className={styles.srOnly}
+        role="status"
+        aria-live="polite"
+        data-testid="settings-announcement"
+      >
         {announcement}
       </p>
     </div>

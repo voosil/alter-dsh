@@ -491,6 +491,35 @@ describe('remote bridge cache and outbox', () => {
     expect(bridge.status.conflicts).toBe(0);
   });
 
+  it('labels queue rows with the cached document title', async () => {
+    const harness = await startHarness();
+    const docId = await createDoc(harness.bridge);
+    const read = valueOf(
+      await harness.bridge.rpc('doc.get', rpcCall('doc.get', [docId])),
+    );
+    const title = read.title as string;
+    expect(typeof title).toBe('string');
+    expect(title.length).toBeGreaterThan(0);
+    await harness.server.close();
+    valueOf(
+      await harness.bridge.rpc(
+        'doc.applyOps',
+        rpcCall('doc.applyOps', [
+          {
+            docId,
+            baseRevision: read.revision as number,
+            ops: [INSERT_OP],
+          },
+        ]),
+      ),
+    );
+    // The settings page names a queued document by its cached title; the id
+    // stays the fallback when no shadow was read this session.
+    expect(harness.bridge.queueEntries()).toEqual([
+      expect.objectContaining({ docId, title }),
+    ]);
+  });
+
   it('marks a corrupt queued payload failed without blocking the link', async () => {
     const harness = await startHarness();
     const docId = await createDoc(harness.bridge);
