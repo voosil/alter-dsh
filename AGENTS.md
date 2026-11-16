@@ -78,4 +78,5 @@ pnpm check         # lint + build + verify + 自动归档 + docs:check + typeche
 - 提交前 `pnpm check` 全绿（其中含 `pnpm docs:check`）。
 - 提交信息用 Conventional Commits：`<type>(<scope>): <一句话说明>`，scope 写具体模块或范畴
   （如 `host`、`document`、`editor`、`workspace`、`settings`、`build`、`docs`）改动横跨多层时按主变更面取一个 scope，其余改动在提交正文说明。
+- 每次完成后自行commit当前对话中的变更
 - 文档只写当前有效内容；变更历史交给 git，不写流水账、不贴源码、不写逐文件实现说明。
