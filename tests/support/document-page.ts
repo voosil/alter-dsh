@@ -396,8 +396,8 @@ export interface MountedPage extends PageContext {
  * @param node - document node to render.
  * @param client - document client double.
  * @param serviceOverrides - per-test service members.
- * @param props - extra page props (e.g. `embedded` when the page is opened in
- *   the right column rather than the main panel).
+ * @param props - extra page props: `embedded` for the right column or a
+ *   Workbench preview, `autoFocusTitle` for a newly created document.
  */
 export function mountDocumentPage(
   node: SpaceNode,

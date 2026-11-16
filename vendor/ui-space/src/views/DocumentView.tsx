@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type CSSProperties,
   type KeyboardEvent,
 } from 'react';
 import {
@@ -58,8 +59,17 @@ import { docPath, overviewPath } from '../space-route';
 import { ancestorsOf, displayTitle } from '../utils/tree';
 import { formatRelativeTime } from '../utils/date';
 import { downloadMarkdown } from '../utils/markdown';
+import {
+  DEFAULT_DOC_WIDTH,
+  MIN_DOC_WIDTH,
+  canResizeDocWidth,
+  measureDocWidth,
+  useDocWidth,
+  useDocWidthMetrics,
+} from '../utils/useDocWidth';
 import editorStyles from '../components/editor/Editor.module.css';
 import { CommentRail } from '../components/CommentRail';
+import { DocWidthHandle } from '../components/DocWidthHandle';
 import { DocumentErrorBoundary } from '../components/DocumentErrorBoundary';
 import { DocumentComments } from '../components/DocumentComments';
 import { HistoryPanel } from '../components/HistoryPanel';
@@ -493,6 +503,7 @@ export function DocumentView({
 
   const quoteSavesRef = useRef(new Map<string, PendingQuoteSave>());
   const pageRef = useRef<HTMLElement>(null);
+  const paperRef = useRef<HTMLElement>(null);
   const [anchorRoot, setAnchorRoot] = useState<HTMLElement | null>(null);
   const [narrow, setNarrow] = useState(true);
   const workbenchScope = useSyncExternalStore(
@@ -1423,6 +1434,22 @@ export function DocumentView({
   const railHasContent = pendingQuote !== null || inlineComments.length > 0;
   const railOpen = commentsOpen && railHasContent;
 
+  // 正文栏宽度是浏览器的阅读偏好：默认走 token，拖动过才写内联变量。
+  // 上限随可用宽度收敛（评论轨打开、面板变窄时自动收窄），窄布局由 CSS 接管。
+  const docWidth = useDocWidth();
+  const docMetrics = useDocWidthMetrics(paperRef, railOpen);
+  const resolvedDocWidth = Math.min(
+    docWidth.width ?? DEFAULT_DOC_WIDTH,
+    docMetrics.maxWidth,
+  );
+  const docPageStyle =
+    docWidth.width === null
+      ? undefined
+      : ({
+          '--alter-doc-width': `${resolvedDocWidth}px`,
+        } as CSSProperties);
+  const docWidthResizable = !embedded && canResizeDocWidth(docMetrics);
+
   function handleFooterTabKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
     event.preventDefault();
@@ -1667,6 +1694,7 @@ export function DocumentView({
     <section
       ref={pageRef}
       className={styles.page}
+      style={docPageStyle}
       aria-label={displayTitle(node.title)}
     >
       <header className={styles.toolbar}>
@@ -1771,7 +1799,7 @@ export function DocumentView({
           data-columns={!stacked || undefined}
           data-comments={railOpen || undefined}
         >
-          <article className={styles.paper}>
+          <article className={styles.paper} ref={paperRef}>
             <header
               className={styles.header}
               data-empty={documentEmpty || undefined}
@@ -2013,6 +2041,17 @@ export function DocumentView({
                   />
                 </div>
               </section>
+            ) : null}
+            {docWidthResizable ? (
+              <DocWidthHandle
+                label="调整正文宽度"
+                width={resolvedDocWidth}
+                min={MIN_DOC_WIDTH}
+                max={docMetrics.maxWidth}
+                measure={() => measureDocWidth(paperRef.current)}
+                onChange={docWidth.resize}
+                onReset={docWidth.reset}
+              />
             ) : null}
           </article>
           {!stacked ? <div className={styles.commentColumn}>{rail}</div> : null}

@@ -1,0 +1,41 @@
+/*
+ * 正文栏右缘的拖动柄：热区在栏外 12px，静息不画任何东西；
+ * hover / 键盘聚焦 / 拖动时才显示强调色竖线。
+ * 12px 与 `useDocWidth.ts` 的 DOC_EDGE_GUTTER 对应（正文栏两侧各留一份）。
+ */
+.handle {
+  position: absolute;
+  top: 0;
+  right: -12px;
+  bottom: 0;
+  z-index: 2;
+  width: 12px;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+.handle::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 1px;
+  transform: translateX(-50%);
+  background: var(--alter-accent);
+  opacity: 0;
+  transition:
+    width var(--alter-duration-fast),
+    opacity var(--alter-duration-fast);
+}
+.handle:hover::before,
+.handle:focus-visible::before,
+.handle[data-dragging]::before {
+  width: 2px;
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .handle::before {
+    transition: none;
+  }
+}

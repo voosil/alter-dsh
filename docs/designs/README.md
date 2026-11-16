@@ -25,7 +25,7 @@ updated: 2026-11-13
 | [agent-doc-tools.md](agent-doc-tools.md) | Agent 读写空间为什么用 Host 原生工具、写入安全三件套、工具面现状与全量能力对齐决策、边界与风险 |
 | [document-editor-robustness.md](document-editor-robustness.md) | 文档编辑器还原后的健壮性现状、缺口、推进顺序、开放决策与风险 |
 | [editor-kernel-replacement.md](editor-kernel-replacement.md) | 体验不变、内核可换：为什么替换编辑器内核、唯一内核与文档运行时边界、选型、parity 验收与旧内核退役 |
-| [editor-content-typography.md](editor-content-typography.md) | 正文内容区的排版规则与依据：冻结范围收缩、标题阶梯与 em 间距、两级块节奏、列表、行内代码、代码块语法高亮（装饰器 + 色板）、块级外观取舍 |
+| [editor-content-typography.md](editor-content-typography.md) | 正文内容区的排版规则与依据：冻结范围收缩、标题阶梯与 em 间距、两级块节奏、列表、行内代码、代码块语法高亮（装饰器 + 色板）、块级外观取舍、正文栏宽度拖动 |
 | [space-deployment-modes.md](space-deployment-modes.md) | 空间部署形态：本地权威与自部署服务端的方向、模式边界、服务端约束与开放问题 |
 | [space-conversations.md](space-conversations.md) | 空间对话：复用 DSH 右侧栏、页面对话开进映射工作区、侧边对话 fork 语义、引用走既有工具、条件注册的历史 tab、「已完成未读」的置位与确认 |
 | [dsh-rightbar-override.md](dsh-rightbar-override.md) | 为什么需要 Loader 覆盖解除右栏「仅会话页」限制、改了哪两处、升级后如何重新应用与撤销 |

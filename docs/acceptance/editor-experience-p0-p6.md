@@ -36,6 +36,9 @@ Document Operations 读写。
   （选中/拖拽排序）、表格完整工具条与「表格（无表头）」、附件任意类型保存（未知 mime 降级
   `application/octet-stream`）、评论输入框不再随划词自动弹出、激活评论背景调浅（唯一有意视觉增量）。
   合并/拆分单元格的跨度随 AST 保存，不再是数据缺口。
+- **2026-11-12 正文栏宽度授权（产品批准）**：正文栏（`.paper`）宽度可拖动调整，允许其宽度/定位与
+  手柄样式的最小增量；默认宽度仍由 `--alter-doc-width` 决定（760px），其余壳层与浮层 CSS 仍冻结，
+  规则见[正文排版方案](../designs/editor-content-typography.md#正文栏宽度拖动)。
 - **数据层唯一入口**：内核只能报 canonical AST blocks，视图不得直接写 `node.content`，也不得绕过
   `doc.applyOps` / `doc.restoreVersion`；历史差异预览与粘贴导入用的冻结 HTML 投影/解析在
   `@alter-space/document-runtime`（`src/document/runtime`），内核不直接处理 HTML。
@@ -52,6 +55,7 @@ Document Operations 读写。
 | --- | --- | --- |
 | 标题与元数据 | 多行自适应标题 textarea、占位「无标题」、自动保存；创建者与更新时间 | 自动 + 人工 |
 | 新建与打开 | 新建文档后直接落在该文档（空空间不跳空间概览，已有文档不跳上一篇），光标落在标题可直接输入；重新打开已有文档不抢焦点 | 自动 |
+| 正文栏宽度 | 默认 760px；右缘手柄拖动 560–1120px，实际不超可用宽度（两侧各 12px），评论轨打开等可用宽度不足时收窄；双击手柄复位；方向键 ±16px、Shift + 方向键 ±48px、Home/End 到最小/最大（`role=separator` 带 aria 值）；刷新/重开保持本地偏好（只存 UI 偏好、不进 Host）；窄屏（视口 ≤1100px 或容器 ≤800px）与嵌入 Workbench 预览不显示手柄 | 自动 + 人工 |
 | 目录与面包屑 | 目录按钮；空间 / 祖先 / 当前文档面包屑；打开的文档决定目录归属页签（我创建的 / Alter 创建的）并滚动到高亮行，祖先文件夹已收起时自动展开 | 自动（归属页签/定位）+ 人工 |
 | 文档菜单 | 复制链接、新建子文档、历史记录、历史评论、导出 Markdown；已归档时出现「取消归档」（归档入口在目录侧栏/徽标） | 自动（历史/恢复）+ 人工 |
 | 已读记录 | 打开文档 `recordOpen`，目录未读态更新 | 人工 |
@@ -84,13 +88,13 @@ Document Operations 读写。
   （块手柄选中/拖拽/手柄 hover 高亮）、`slash.test.ts`、`toolbar.test.ts`、`keyboard.test.ts`、`input.test.ts`
   （输入规则/IME/粘贴拖入/两段式退格）、`overlays.test.ts`（表格工具条）、`link-overlay.test.ts`、
   `comments.test.ts`（Highlight 绘制、caret 上报与 quote 维护）、`kernel-mount.test.ts`/`body.test.ts`/`kernel.test.ts`（接线）；
-- 页面与运行时：`tests/ui/document/page/{view,recovery,resilience,anchors,document-page}.test.ts`、
+- 页面与运行时：`tests/ui/document/page/{view,recovery,resilience,anchors,doc-width,document-page}.test.ts`、
   `tests/ui/document/runtime/{adapter,save}.test.ts`，共享页面 harness 在 `tests/support/document-page.ts`；
   新建文档路由落点由 `tests/ui/app/navigation.test.ts`（内存服务替身 + 真 SpaceApp）约束；
 - 规模与随机走查：`tests/nightly/document/fuzz.test.ts`（G2 种子随机）；
-- 当前复核：编辑器相关套件全绿（内核 301 tests、`--project ui` 424 tests），`tsc`（客户端）、
-  `lint`、`build` 与 `docs:check` 通过；bundle `client.js` 1442 KiB / 162 KiB CSS；6 个 legacy
-  测试套件已随旧内核删除。全仓 `pnpm check` 以与并行改动合并后的工作树为准。
+- 当前复核：编辑器相关套件全绿（内核与 `--project ui` 均通过，新增 `doc-width.test.ts`），
+  客户端 `tsc`、`lint`、`build` 与 `docs:check` 通过；bundle 体积以 `pnpm build` 输出为准。
+  全仓 `pnpm check` 以合并后的工作树为准。
 
 以下真实浏览器验收记录产生于已退役的 contentEditable 内核时代（编辑/保存/刷新拼接、slash、撤销、
 崩溃草稿、版本恢复脏状态、粘贴安全、导出/历史/评论、样式冻结对照）；当前视觉基准为冻结
@@ -141,7 +145,9 @@ Document Operations 读写。
 - **有意视觉增量**：激活评论的文字背景在 `kernel.css` 中用
   `color-mix(in srgb, var(--alter-accent-soft) 40%, transparent)` 调浅（作用域
   `.kernelSurface::highlight(alter-comment-active)`），普通评论仍只有下划线；这是唯一有意偏离冻结
-  视觉的补丁。
+  视觉的补丁（正文栏宽度的手柄只在 hover/聚焦/拖动时可见，静息视觉不变）。
+- **正文栏宽度的手势判定**：拖动与点击按指针位移 10px 区分；两次各 ≤4px 的极小「拖动」会被当作点击，
+  其后的双击会复位到默认宽度（宽度变化 ≤8px、可一键拖回），属可接受取舍。
 - **新能力限制**：块手柄拖拽是鼠标事件实现，未覆盖触屏；多表头文档的「表头开关」只作用于首行
   （`toggleHeaderRow` 语义）；图片上传仍限 png/jpeg/webp/gif（4 MiB）。表格合并/拆分已可用且
   跨度随 AST 保存，不再是已知缺口。
@@ -165,7 +171,8 @@ Document Operations 读写。
 5. 人工复验重点（2026-11-12 增量）：列表/待办两步退格（第一步退成空段落、第二步删行合并列表并把
    光标移到上一行末尾）；块手柄 hover 显示、点击全选与拖拽排序（Esc/拖出取消）；表格工具条各动作、
    表头开关与「表格（无表头）」；附件上传任意类型与未知类型的下载；评论输入框不再随划词自动弹出、
-   点击已评论文字激活、激活评论背景调浅的观感。
+   点击已评论文字激活、激活评论背景调浅的观感；正文栏宽度拖动的手感与两侧对称变化、双击复位、
+   键盘调整与窄屏/嵌入无手柄。
 
 ## 相关文档
 

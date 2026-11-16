@@ -51,7 +51,8 @@ Host 编译面（`tsconfig.host.json`）不包含 `vendor/ui-space`，这是有�
 - **正文只有 AST**：文档正文只有 `alter-doc/1` AST 一种格式，正文写入只经 Document Operations，
   `space.saveNode` 只改标题等元数据。
 - **文档编辑面冻结体验、不冻结实现**：文档页与基线（本目录旧 UI）保持视觉与交互 parity——壳层、CSS
-  （含冻结的 `Editor.module.css`）与各面板视觉不改。编辑器内核唯一为 AST 原生 Tiptap
+  （含冻结的 `Editor.module.css`）与各面板视觉不改（正文内容区排版与正文栏宽度等已批准增量见
+  [编辑器还原验收](../docs/acceptance/editor-experience-p0-p6.md)）。编辑器内核唯一为 AST 原生 Tiptap
   （`src/document/editors/tiptap`），旧 contentEditable 内核已退役；客户端经
   `@alter-space/document-runtime` → Document Operations 写入。组件目录在 `vendor/protocol`（Host 校验），
   旧 UI 暂把 callout/mindmap/component 显示为对象占位卡。

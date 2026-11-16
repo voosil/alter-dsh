@@ -183,8 +183,13 @@
   width: 100%;
 }
 .paper {
+  position: relative;
   width: 100%;
+  /* 正文栏居中：默认 760px（--alter-doc-width）。可用宽度不足时给两侧各留 12px，
+     保证右缘拖动柄（DOC_EDGE_GUTTER）落在栏右侧余量内、不被裁剪；窄布局由下方
+     @media/@container 改为全宽。上一行保留纯 token 值作为不支持 min() 的浏览器的回退。 */
   max-width: var(--alter-doc-width);
+  max-width: min(var(--alter-doc-width), calc(100% - 24px));
   margin: 60px auto 120px;
   padding: 0;
 }
